@@ -470,7 +470,7 @@ pub fn show(ctx: &Context, app: &mut NfcApp) {
         // egui 的 `.open(&mut open)` 只管标题栏的 ✕，两者都要认。
         let mut keep = true;
         let [w, h] = p.default_size();
-        let screen = ctx.screen_rect();
+        let screen = ctx.content_rect();
         let pos = screen.center() - egui::vec2(w, h) * 0.5;
         let mut win = egui::Window::new(t(p.title()))
             .resizable(p.resizable())
@@ -478,7 +478,7 @@ pub fn show(ctx: &Context, app: &mut NfcApp) {
             .default_size([w, h])
             .min_width(320.0)
             .min_height(160.0)
-            .constrain_to(ctx.screen_rect().shrink(16.0))
+            .constrain_to(ctx.content_rect().shrink(16.0))
             .default_pos(egui::pos2(
                 pos.x.max(screen.min.x + 16.0),
                 pos.y.max(screen.min.y + 16.0),
@@ -608,9 +608,11 @@ fn settings(ui: &mut Ui, app: &mut NfcApp) -> bool {
     }
 
     ui.add_space(8.0);
-    let close = ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        ui.button(t("html_close")).clicked()
-    });
+    let close = ui
+        .with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.button(t("html_close")).clicked()
+        })
+        .inner;
     if close {
         return false;
     }
@@ -941,9 +943,11 @@ fn phone_wristband(ui: &mut Ui, app: &mut NfcApp) -> bool {
     ui.add_space(8.0);
     ui.separator();
     ui.add_space(4.0);
-    let close = ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        ui.button(t("html_close")).clicked()
-    });
+    let close = ui
+        .with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.button(t("html_close")).clicked()
+        })
+        .inner;
     if close {
         return false;
     }

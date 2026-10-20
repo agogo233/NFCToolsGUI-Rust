@@ -1259,9 +1259,9 @@ impl NfcApp {
         };
         let inner = ui.horizontal(|ui| {
             ui.colored_label(dot, RichText::new("●").size(10.0));
-            ui.label(RichText::new(text).size(12.0));
+            ui.label(RichText::new(&text).size(12.0));
         });
-        inner.response.on_hover_text(text);
+        inner.response.on_hover_text(&text);
     }
 
     /// S15：冷启动引导。未连接设备时展示一次「请先选择设备并连接」+

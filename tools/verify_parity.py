@@ -877,7 +877,7 @@ def s4_model() -> None:
         check(f"const {const}: [f32; 2] = [{float(w)}, {float(h)}]" in pa,
               f"S9 {const} 尺寸对标 windows.js {w}x{h}")
     check("default_size([w, h])" in pa, "S9 面板保留 windows.js 的默认尺寸")
-    check(".constrain_to(ctx.screen_rect().shrink(16.0))" in pa, "S16 面板受视口约束，不再溢出窗口")
+    check(".constrain_to(ctx.content_rect().shrink(16.0))" in pa, "S16 面板受视口约束，不再溢出窗口")
     # body() 的返回值必须被 show() 认（回归：早期版本丢弃了，点取消不关面板）
     check("keep = body(p, ui, app)" in pa and "if !open || !keep" in pa,
           "S9 show() 认 body() 的关闭请求（点取消/确定能关面板）")

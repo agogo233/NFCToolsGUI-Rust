@@ -72,7 +72,7 @@ pub fn apply_style(ctx: &Context) {
         style.spacing.item_spacing = Vec2::new(SPACING[1], SPACING[0]);
         style.spacing.button_padding = Vec2::new(SPACING[2], SPACING[1]);
         style.spacing.interact_size = Vec2::new(40.0, 24.0);
-        style.spacing.window_margin = Margin::symmetric(SPACING[2], SPACING[1]);
+        style.spacing.window_margin = Margin::symmetric(SPACING[2] as i8, SPACING[1] as i8);
     });
 }
 
