@@ -1048,8 +1048,8 @@ fn dump_comparator(ui: &mut Ui, app: &mut NfcApp) -> bool {
             ui.columns(2, |cols| {
                 for (ci, side) in [da, db].into_iter().enumerate() {
                     let ui = &mut cols[ci];
-                    for r in 0..dump::BLOCKS_PER_SECTOR {
-                        render_diff_row(ui, &side[r], mark, mark_fg);
+                    for segs in side.iter() {
+                        render_diff_row(ui, segs, mark, mark_fg);
                     }
                 }
             });
