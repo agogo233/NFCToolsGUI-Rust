@@ -155,7 +155,11 @@ jobs:
         uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
+          # MINGW64 已被官方标记 deprecated（建议 UCRT64），但 compile.sh 的
+          # 产物路径（/mingw64/bin/*.dll 等）绑定 MINGW64 布局，暂不切换。
+          suppress-deprecation-warnings: msystem-mingw64
           install: >-
+            make
             mingw-w64-x86_64-crt-git
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-make
@@ -168,8 +172,10 @@ jobs:
             mingw-w64-x86_64-headers-git
 
       - name: 编译 C 工具 (compile.sh)
+        # 必须跑在 setup-msys2 提供的 msys2 shell 里：默认 bash 是 git-bash，
+        # 其 PATH 没有 MSYS2 的 gcc/cmake/make/pacman，会连环 command not found。
         run: bash compile.sh
-        shell: bash
+        shell: msys2 {0}
 
       - name: 发布构建
         run: cargo build --release --locked -p nfc-app

@@ -20,19 +20,23 @@ case $(uname -s) in
         ;;
 esac
 
-# install msys2 dependency
+# install msys2 dependency（依赖已由 setup-msys2 预装时 pacman 装包为空操作；环境无 pacman 则跳过）
 if [ "$os" = "MINGW64" ]; then
     echo "============================== install msys dependency =============================="
-    pacman -S --noconfirm mingw-w64-x86_64-crt-git
-    pacman -S --noconfirm mingw-w64-x86_64-gcc
-    pacman -S --noconfirm mingw-w64-x86_64-make
-    pacman -S --noconfirm mingw-w64-x86_64-pkgconf
-    pacman -S --noconfirm mingw-w64-x86_64-zlib
-    pacman -S --noconfirm mingw-w64-x86_64-autotools
-    pacman -S --noconfirm mingw-w64-x86_64-cmake
-    pacman -S --noconfirm mingw-w64-x86_64-xz
-    pacman -S --noconfirm mingw-w64-x86_64-readline
-    pacman -S --noconfirm mingw-w64-x86_64-headers-git
+    if command -v pacman >/dev/null 2>&1; then
+        pacman -S --noconfirm mingw-w64-x86_64-crt-git
+        pacman -S --noconfirm mingw-w64-x86_64-gcc
+        pacman -S --noconfirm mingw-w64-x86_64-make
+        pacman -S --noconfirm mingw-w64-x86_64-pkgconf
+        pacman -S --noconfirm mingw-w64-x86_64-zlib
+        pacman -S --noconfirm mingw-w64-x86_64-autotools
+        pacman -S --noconfirm mingw-w64-x86_64-cmake
+        pacman -S --noconfirm mingw-w64-x86_64-xz
+        pacman -S --noconfirm mingw-w64-x86_64-readline
+        pacman -S --noconfirm mingw-w64-x86_64-headers-git
+    else
+        echo "pacman not found, assuming deps are pre-installed; skipping"
+    fi
 fi
 
 workdir=$(pwd)
@@ -44,9 +48,9 @@ for f in framework/vendor/libusb-0.1.12.zip framework/vendor/craptev1-v1.1.tar.x
         exit 1
     fi
 done
-rm -rf "$prefix"
-mkdir "$prefix"
-mkdir "$prefix"/bin
+# source/ 与 vendor/ 是入库资源（vendoring），整目录删会让后面 cd "$source" 失败，只清构建产物
+rm -rf "$prefix"/bin "$prefix"/lib "$prefix"/include "$prefix"/share
+mkdir -p "$prefix"/bin
 
 # libusb
 cd "$source"
@@ -70,7 +74,7 @@ elif [ "$os" = "Darwin" ]; then
     tar -xvf libusb-legacy-0.1.12_4.darwin_22.x86_64.tbz2
     mv ./opt/local/* "$prefix"/
 else
-    unzip -o "$workdir/vendor/libusb-0.1.12.zip"
+    unzip -o "$workdir/framework/vendor/libusb-0.1.12.zip"
     cd ./libusb-0.1.12
     ./configure prefix="$prefix"
     make && make install
@@ -202,9 +206,9 @@ echo
 echo
 echo "============================== libnfc_collect =============================="
 cd "$source"/libnfc_collect
-tar -xf "$workdir/vendor/craptev1-v1.1.tar.xz"
+tar -xf "$workdir/framework/vendor/craptev1-v1.1.tar.xz"
 mkdir -p crapto1-v3.3
-tar -xf "$workdir/vendor/crapto1-v3.3.tar.xz" -C crapto1-v3.3
+tar -xf "$workdir/framework/vendor/crapto1-v3.3.tar.xz" -C crapto1-v3.3
 autoreconf -vis
 if [ "$os" = "Darwin" ]; then
     ./configure LDFLAGS=-L"$prefix"/lib prefix="$prefix" CPPFLAGS=-I"$prefix"/include CFLAGS='-std=gnu99 -O3'
