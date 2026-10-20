@@ -72,13 +72,30 @@ fn main() -> eframe::Result {
     }
     let _ = std::fs::create_dir_all(paths.dumpfiles_dir());
 
+    // 窗口 / 任务栏图标：解码内嵌 32×32 PNG（IconData 宽高须为 4 的倍数）。
+    // 资源损坏时退回默认图标，不让程序直接 panic。
+    let window_icon = include_bytes!("../../../assets/icons/app_icon.png");
+    let window_icon = image::load_from_memory(window_icon)
+        .ok()
+        .map(|img| img.to_rgba8())
+        .map(|img| {
+            let (w, h) = img.dimensions();
+            egui::IconData {
+                rgba: img.into_raw(),
+                width: w,
+                height: h,
+            }
+        })
+        .unwrap_or_default();
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([WIN_W, WIN_H])
             .with_min_inner_size([WIN_W, WIN_H])
             .with_resizable(false)
             .with_decorations(false) // R2：自绘标题栏
-            .with_title("NFCToolsGUI"),
+            .with_title("NFCToolsGUI")
+            .with_icon(window_icon),
         ..Default::default()
     };
 
@@ -106,10 +123,22 @@ fn main() -> eframe::Result {
                 paths.base().to_path_buf(),
             );
 
-            let app = NfcApp::new(AppState::new()).with_real_engine(engine, bin_dir);
+            let app = NfcApp::new(AppState::new())
+                .with_logo(load_title_logo(&cc.egui_ctx))
+                .with_real_engine(engine, bin_dir);
             Ok(Box::new(app))
         }),
     )
+}
+
+/// 加载自绘标题栏左上角的 logo 纹理。失败时返回 `None`
+/// （只是少了左上角标识，不影响任何功能）。
+fn load_title_logo(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+    let bytes = include_bytes!("../../../assets/icons/title_icon.png");
+    let img = image::load_from_memory(bytes).ok()?.to_rgba8();
+    let size = [img.width() as usize, img.height() as usize];
+    let color = egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw());
+    Some(ctx.load_texture("app_title_logo", color, egui::TextureOptions::LINEAR))
 }
 
 fn setup_fonts(ctx: &egui::Context) {

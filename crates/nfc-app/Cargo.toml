@@ -9,10 +9,17 @@ build = "build.rs"
 nfc-core = { path = "../nfc-core" }
 eframe = "0.36"
 egui = "0.36"
+# 解码内嵌图标 PNG（app_icon 做窗口图标、title_icon 做标题栏 logo）。
+# 只开 png 特性，不拉全套图像编解码器。
+image = { version = "0.25", default-features = false, features = ["png"] }
 # S11-2：系统文件对话框。默认特性 = xdg-portal + wayland，**不含** gtk3，
 # 故不引入任何 GTK 系统依赖；Windows / macOS 走各自的原生弹窗。
 rfd = "0.17"
 open = "5.4.4"
+
+[build-dependencies]
+# Windows 下把 icon.ico 嵌入 exe 资源（非 Windows 平台是 no-op）。
+winres = "0.1"
 
 [features]
 # 真串口枚举：默认开（生产 GUI 必须有，否则下拉永远刷不出设备）。

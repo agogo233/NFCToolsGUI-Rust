@@ -139,6 +139,9 @@ pub struct NfcApp {
     /// 存成字段而非每次现算，一是探测有 `stat` 开销，二是 `--selftest` 需要
     /// 能在无头 CI 里把它置真来跑完整的文件流程。
     pub file_dialogs_ok: bool,
+    /// 自绘标题栏左上角的 logo 纹理。生产路径由 `main.rs` 注入，
+    /// 测试 / 无头环境为 `None`（只少个标识，不影响任何功能）。
+    pub logo: Option<egui::TextureHandle>,
 }
 
 impl NfcApp {
@@ -174,8 +177,15 @@ impl NfcApp {
             missing_tools: Vec::new(),
             warned_no_portal: false,
             file_dialogs_ok: dialogs_host::file_dialogs_supported(),
+            logo: None,
         }
         .with_no_portal_warning()
+    }
+
+    /// 设置自绘标题栏左上角的 logo（`main.rs` 注入；`--selftest` 不设）。
+    pub fn with_logo(mut self, logo: Option<egui::TextureHandle>) -> Self {
+        self.logo = logo;
+        self
     }
 
     /// Linux 上没有桌面门户时，启动即给一条明确提示。
@@ -1041,6 +1051,10 @@ impl NfcApp {
             .inner_margin(egui::Margin::symmetric(10, 6))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
+                    // 左上角 logo（20px，见 `main.rs::load_title_logo`）。
+                    if let Some(tex) = &self.logo {
+                        ui.add(egui::Image::new(tex).max_size(egui::vec2(20.0, 20.0)));
+                    }
                     self.device_combo(ui);
                     self.tools_button(ui);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
