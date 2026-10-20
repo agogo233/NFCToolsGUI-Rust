@@ -919,13 +919,13 @@ mod tests {
     #[test]
     fn block_stats_complete_criterion() {
         // 63/64 → 完整（block0 未写）
-        assert_eq!(is_complete(Some((63, 64))), true);
+        assert!(is_complete(Some((63, 64))));
         // 60/64 → 不完整
-        assert_eq!(is_complete(Some((60, 64))), false);
+        assert!(!is_complete(Some((60, 64))));
         // 工具中途失败（无完成行）→ 不完整
-        assert_eq!(is_complete(None), false);
+        assert!(!is_complete(None));
         // 退化情况 total == 0 不应出现，按不完整处理
-        assert_eq!(is_complete(Some((0, 0))), false);
+        assert!(!is_complete(Some((0, 0))));
     }
 
     fn is_complete(stats: Option<(u32, u32)>) -> bool {
