@@ -89,6 +89,11 @@ pub fn run() -> eframe::Result {
         ("write-ufuid-uid 读 block0 后确认", c_write_uid_flow),
         ("format-card 先备份再格式化", c_format_card_two_stage),
         ("备份失败不执行格式化", c_format_card_backup_guard),
+        // ── S17 写卡安全加固 ──
+        ("格式化未确认不启动", c_format_card_confirm_required),
+        ("phw 写 UID 位需确认", c_phw_write_uid_confirm_flow),
+        ("phw 写数据扇区需确认", c_phw_write_data_confirm_flow),
+        ("phw BCC 不自洽拒绝写入", c_phw_write_uid_bcc_rejected),
         ("删除未确认不动文件", c_delete_needs_confirm),
         ("批准不泄漏到下一个动作", c_approval_does_not_leak),
         ("批准一次性消费", c_approval_is_single_use),
@@ -1889,7 +1894,13 @@ fn c_write_uid_flow() -> Result<(), String> {
 
 fn c_format_card_two_stage() -> Result<(), String> {
     let (_d, mut app) = app_with_temp_dumps("format");
+    // S17：格式化补应用内确认窗，未确认不派发。
     app.exec("format-card", None);
+    let c = app.confirm.take().ok_or("格式化应有确认窗")?;
+    if !matches!(c.kind, ConfirmKind::FormatCard) {
+        return Err(format!("确认类型错: {:?}", c.kind));
+    }
+    app.on_confirm_result(c, true);
     app.consume_pending();
     let (t1, a1, _) = app.engine.runner().started_last().ok_or("第一段未启动")?;
     if t1 != "nfc-mfdetect" || !a1.iter().any(|a| a.starts_with("-O")) {
@@ -1915,6 +1926,8 @@ fn c_format_card_backup_guard() -> Result<(), String> {
     // 备份没生成 → 绝不能执行格式化（command.js:603-607）
     let (_d, mut app) = app_with_temp_dumps("format-guard");
     app.exec("format-card", None);
+    let c = app.confirm.take().ok_or("格式化应有确认窗")?;
+    app.on_confirm_result(c, true);
     app.consume_pending();
     let before = app.engine.runner().started_last().map(|(t, _, _)| t);
     for _ in 0..3 {
@@ -1930,6 +1943,95 @@ fn c_format_card_backup_guard() -> Result<(), String> {
     }
     if !app.state.log_buffer.contains("读卡失败") {
         return Err(format!("未记「读卡失败」: {:?}", app.state.log_buffer));
+    }
+    Ok(())
+}
+
+/// S17：手机/手环两个写动作补应用内确认窗（此前按钮点了没反应）。
+fn c_phw_write_uid_confirm_flow() -> Result<(), String> {
+    let (_d, mut app) = app_with_temp_dumps("phw-uid");
+    app.state.phw.block0 = Some("04A8A68A800400010000000000000000".to_string());
+    app.exec("phw-write-uid", None);
+    let c = app.confirm.take().ok_or("phw-write-uid 应有确认窗")?;
+    if !matches!(c.kind, ConfirmKind::PhwWriteUid { .. }) {
+        return Err(format!("确认类型错: {:?}", c.kind));
+    }
+    if c.message.is_empty() {
+        return Err("确认正文为空".into());
+    }
+    // 未确认 → 不启动任何工具
+    app.on_confirm_result(c, false);
+    app.consume_pending();
+    if app.engine.runner().started_last().is_some() {
+        return Err("未确认却启动了工具".into());
+    }
+    // 确认后才启动 nfc-mfsetuid -q <32hex>
+    app.exec("phw-write-uid", None);
+    let c = app.confirm.take().ok_or("二次应仍有确认窗")?;
+    app.on_confirm_result(c, true);
+    app.consume_pending();
+    let (tool, args, _) = app.engine.runner().started_last().ok_or("未启动 nfc-mfsetuid")?;
+    if tool != "nfc-mfsetuid" || args.len() != 2 || args[0] != "-q" || args[1].len() != 32 {
+        return Err(format!("参数错: {tool} {args:?}"));
+    }
+    // 且绝不追加 -f
+    if args.contains(&"-f".to_string()) {
+        return Err("不应出现 -f: {args:?}".into());
+    }
+    Ok(())
+}
+
+/// S17：phw-write-data 确认窗 + 第一段 nfc-mfdetect -O。
+fn c_phw_write_data_confirm_flow() -> Result<(), String> {
+    let (_d, mut app) = app_with_temp_dumps("phw-data");
+    app.state.phw.block0 = Some("04A8A68A800400010000000000000000".to_string());
+    app.state.phw.sector = 0;
+    app.state.phw.block = 1;
+    app.exec("phw-write-data", None);
+    let c = app.confirm.take().ok_or("phw-write-data 应有确认窗")?;
+    if !matches!(c.kind, ConfirmKind::PhwWriteData { .. }) {
+        return Err(format!("确认类型错: {:?}", c.kind));
+    }
+    app.on_confirm_result(c, true);
+    app.consume_pending();
+    let (tool, args, _) = app.engine.runner().started_last().ok_or("第一段未启动")?;
+    if tool != "nfc-mfdetect" || !args.iter().any(|a| a.starts_with("-O")) {
+        return Err(format!("第一段应是带 -O 的 mfdetect: {tool} {args:?}"));
+    }
+    Ok(())
+}
+
+/// S17：BCC 不自洽时 engine 拒绝写入（不再靠 -f 强写砖卡）。
+fn c_phw_write_uid_bcc_rejected() -> Result<(), String> {
+    let (_d, mut app) = app_with_temp_dumps("phw-bcc");
+    // 第 5 字节改为 00，BCC 不自洽
+    app.state.phw.block0 = Some("04A8A68A000400010000000000000000".to_string());
+    app.exec("phw-write-uid", None);
+    let c = app.confirm.take().ok_or("应有确认窗")?;
+    app.on_confirm_result(c, true);
+    app.consume_pending();
+    if app.engine.runner().started_last().is_some() {
+        return Err("BCC 不自洽却启动了写卡工具".into());
+    }
+    if !app.state.log_buffer.contains("BCC") {
+        return Err(format!("未记 BCC 拒绝日志: {:?}", app.state.log_buffer));
+    }
+    Ok(())
+}
+
+/// S17：格式化未确认时不启动任何工具。
+fn c_format_card_confirm_required() -> Result<(), String> {
+    let (_d, mut app) = app_with_temp_dumps("format-confirm");
+    app.exec("format-card", None);
+    let c = app.confirm.take().ok_or("格式化应有确认窗")?;
+    if !matches!(c.kind, ConfirmKind::FormatCard) {
+        return Err(format!("确认类型错: {:?}", c.kind));
+    }
+    // 取消确认 → 不派发
+    app.on_confirm_result(c, false);
+    app.consume_pending();
+    if app.engine.runner().started_last().is_some() {
+        return Err("取消确认却启动了工具".into());
     }
     Ok(())
 }
@@ -2207,9 +2309,13 @@ fn case_phone_wristband() -> Result<(), String> {
     if off != 16 {
         return Err(format!("扇0块1 偏移应为 16，实得 {off}"));
     }
-    // BCC 自洽 → 不加 -f；不自洽 → 加 -f
+    // S17：BCC 自洽才允许写入；不自洽由 engine 直接拒绝（不再追加 -f 强写，
+    // 否则会把坏 BCC 的 block0 写进卡里直接砖卡）。
     if !block0_bcc_ok("04A8A68A800400010000000000000000") {
         return Err("自洽 block0 未通过 BCC".into());
+    }
+    if block0_bcc_ok("04A8A68A000400010000000000000000") {
+        return Err("不自洽 block0 被误判为自洽".into());
     }
     Ok(())
 }

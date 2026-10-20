@@ -235,6 +235,22 @@ pub fn prepare_lock(dialog: &mut dyn DialogProvider) -> PrepareOutcome {
     }
 }
 
+/// `format-card` 的准备流程：只有危险确认（S17 新增，原版无确认框）。
+///
+/// 对标 `command.js:144-149`。确认后返回 `ReadyNoFile`（无需选文件）。
+pub fn prepare_format(dialog: &mut dyn DialogProvider) -> PrepareOutcome {
+    if dialog.confirm_danger(&format_confirm()) {
+        PrepareOutcome::ReadyNoFile
+    } else {
+        PrepareOutcome::Cancelled
+    }
+}
+
+/// `format-card` 的危险确认框（S17 新增，原版无）。
+pub fn format_confirm() -> crate::dialogs::ConfirmRequest {
+    danger_request("dialog_msg_confirm_format_card")
+}
+
 /// 写卡后的结果文案，对标 `command.js:121`（`code === 0` 判成败）。
 pub fn report_write_result(state: &mut AppState, code: Option<i32>) {
     let key = if code == Some(0) {

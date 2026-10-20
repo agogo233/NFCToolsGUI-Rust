@@ -349,20 +349,39 @@ main(int argc, char *argv[])
   iso14443a_crc_append(abtHalt, 2);
   transmit_bytes(abtHalt, 4);
 
+  // S17：每一步发送都要收到卡片回应，任一步失败即判失败并退出非 0。
+  // 原版无条件 exit(EXIT_SUCCESS)：解锁失败（非 UFUID 卡、已封卡）或
+  // 配置写入无回应时也显示「完成」，用户误以为锁卡成功。
   if (!transmit_bits(abtUnlock1, 7)) {
-    printf("Warning: Unlock command [1/2]: failed / not acknowledged.\n");
-  } else if (transmit_bytes(abtUnlock2, 1)) {
-    printf("Card unlocked\n");
-  } else {
-    printf("Warning: Unlock command [2/2]: failed / not acknowledged.\n");
+    printf("Error: Unlock command [1/2]: failed / not acknowledged.\n");
+    nfc_close(pnd);
+    nfc_exit(context);
+    exit(EXIT_FAILURE);
+  }
+  if (!transmit_bytes(abtUnlock2, 1)) {
+    printf("Error: Unlock command [2/2]: failed / not acknowledged.\n");
+    nfc_close(pnd);
+    nfc_exit(context);
+    exit(EXIT_FAILURE);
   }
 
   iso14443a_crc_append(abtWrite, 2);
-  transmit_bytes(abtWrite, 4);
+  if (!transmit_bytes(abtWrite, 4)) {
+    printf("Error: Write configuration command: failed / not acknowledged.\n");
+    nfc_close(pnd);
+    nfc_exit(context);
+    exit(EXIT_FAILURE);
+  }
 
   iso14443a_crc_append(abtData, 16);
-  transmit_bytes(abtData, 18);
+  if (!transmit_bytes(abtData, 18)) {
+    printf("Error: Write configuration data: failed / not acknowledged.\n");
+    nfc_close(pnd);
+    nfc_exit(context);
+    exit(EXIT_FAILURE);
+  }
 
+  printf("Card locked successfully\n");
   nfc_close(pnd);
   nfc_exit(context);
   exit(EXIT_SUCCESS);

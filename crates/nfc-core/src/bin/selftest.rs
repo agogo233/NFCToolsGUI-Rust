@@ -115,7 +115,7 @@ fn case_connect_detect() {
          Sector 01 - Unknown Key A               Unknown Key B\n",
     )]);
     runner
-        .start("nfc-mfdetect", &detect_args(&e.paths, false), &gate())
+        .start("nfc-mfdetect", &detect_args(&e.paths, false, false), &gate())
         .unwrap();
     let mut parser = KeyInfoParser::new();
     let mut out = Vec::new();

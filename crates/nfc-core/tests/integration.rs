@@ -748,8 +748,8 @@ fn s5_detect_no_guidance_when_all_keys_known() {
 #[test]
 fn s5_detect_args_shape_differs_by_mode() {
     let (paths, _guard) = tmp_guarded();
-    let with = detect_args(&paths, true);
-    let without = detect_args(&paths, false);
+    let with = detect_args(&paths, true, false);
+    let without = detect_args(&paths, false, false);
     assert!(with[0].starts_with("-O"));
     assert_eq!(without[0], "-N");
     assert_eq!(with[1], without[1], "两种模式的 -f 应相同");

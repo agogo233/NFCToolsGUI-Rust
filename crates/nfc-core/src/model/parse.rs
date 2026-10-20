@@ -426,6 +426,73 @@ impl SingleKeyParser {
     }
 }
 
+// ---------------------------------------------------------------- 写卡完成行
+
+/// `nfc-mfclassic` 的完成行解析：`Done, X of Y blocks written.` / `read.`。
+///
+/// 用于判定写卡/读卡是否**全部**成功。关键细节：`w`/`f` 不写 block0，
+/// 而工具打印的 `Y = uiBlocks + 1` 把 block0 也算进去了，故「全部成功」的
+/// 判据是 `written == total - 1`（`total >= 1` 时）。工具中途失败（tag 被
+/// 移走、auth 失败）会提前退出、**不**打印该行，此时返回 `None`。
+///
+/// 偏离：原版 `command.js` 只按退出码判成败（`code === 0`），而 `nfc-mfclassic`
+/// 大写 `A` 容忍失败仍退出 0，会把「部分块写入」误报成成功。此处解析完成行，
+/// 把真实写入块数暴露给调用方（见 docs/02 §6.26）。
+#[derive(Debug, Default)]
+pub struct BlockStatsParser {
+    buf: LineBuffer,
+    /// 最近一次抓到的 `(written, total)`。
+    stats: Option<(u32, u32)>,
+}
+
+impl BlockStatsParser {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push(&mut self, chunk: &str) {
+        let lines = self.buf.push(chunk);
+        self.scan(&lines);
+    }
+
+    /// 工具退出时结算末行。
+    pub fn flush(&mut self) {
+        let lines = self.buf.flush();
+        self.scan(&lines);
+    }
+
+    /// 最近一次抓到的 `(written, total)`；从未抓到过返回 `None`。
+    ///
+    /// 与 `SingleKeyParser::take` 不同：这里**不**清空——写卡只跑一次、
+    /// 该行只出现一次，保留最后一次快照更便于收尾时取值。
+    pub fn take(&self) -> Option<(u32, u32)> {
+        self.stats
+    }
+
+    fn scan(&mut self, lines: &[String]) {
+        for line in lines {
+            if let Some(s) = parse_done_line(line) {
+                self.stats = Some(s);
+            }
+        }
+    }
+}
+
+fn done_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"Done,\s*(\d+)\s*of\s*(\d+)\s*blocks\s+(written|read)\.")
+            .expect("静态正则")
+    })
+}
+
+fn parse_done_line(line: &str) -> Option<(u32, u32)> {
+    let caps = done_re().captures(line.trim())?;
+    let written = caps.get(1)?.as_str().parse().ok()?;
+    let total = caps.get(2)?.as_str().parse().ok()?;
+    Some((written, total))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -806,5 +873,66 @@ mod tests {
     fn take_window_after_does_not_panic_on_multibyte_after_marker() {
         // 偏移落在多字节字符中间时 get() 返回 None
         assert_eq!(take_window_after("中中中", "中", 1, 2), None);
+    }
+
+    // -------------------------------------------------- BlockStatsParser
+
+    #[test]
+    fn block_stats_captures_written_and_total() {
+        let mut p = BlockStatsParser::new();
+        p.push("Writing 64 blocks |\n");
+        p.push(".x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.\n");
+        p.push("Done, 63 of 64 blocks written.\n");
+        assert_eq!(p.take(), Some((63, 64)));
+    }
+
+    #[test]
+    fn block_stats_partial_write_is_not_complete() {
+        let mut p = BlockStatsParser::new();
+        p.push("Done, 60 of 64 blocks written.\n");
+        assert_eq!(p.take(), Some((60, 64)));
+    }
+
+    #[test]
+    fn block_stats_handles_read_line_too() {
+        let mut p = BlockStatsParser::new();
+        p.push("Done, 64 of 64 blocks read.\n");
+        assert_eq!(p.take(), Some((64, 64)));
+    }
+
+    #[test]
+    fn block_stats_none_when_tool_exits_early() {
+        let mut p = BlockStatsParser::new();
+        p.push("!\nError: tag was removed\n");
+        p.flush();
+        assert_eq!(p.take(), None);
+    }
+
+    #[test]
+    fn block_stats_split_across_chunks() {
+        let mut p = BlockStatsParser::new();
+        p.push("Done, 63 of 64 blocks wri");
+        p.push("ten.\n");
+        assert_eq!(p.take(), Some((63, 64)));
+    }
+
+    /// 完整判据：`w`/`f` 不写 block0，Y 含 block0，故全部成功 = written == total - 1。
+    #[test]
+    fn block_stats_complete_criterion() {
+        // 63/64 → 完整（block0 未写）
+        assert_eq!(is_complete(Some((63, 64))), true);
+        // 60/64 → 不完整
+        assert_eq!(is_complete(Some((60, 64))), false);
+        // 工具中途失败（无完成行）→ 不完整
+        assert_eq!(is_complete(None), false);
+        // 退化情况 total == 0 不应出现，按不完整处理
+        assert_eq!(is_complete(Some((0, 0))), false);
+    }
+
+    fn is_complete(stats: Option<(u32, u32)>) -> bool {
+        match stats {
+            Some((w, t)) if t >= 1 => w == t - 1,
+            _ => false,
+        }
     }
 }

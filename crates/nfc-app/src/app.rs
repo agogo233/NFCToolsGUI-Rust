@@ -464,6 +464,18 @@ impl NfcApp {
                 self.push_approved(Action::DeleteDumps(names));
                 false
             }
+            dialogs_ui::ConfirmKind::PhwWriteUid { .. } => {
+                self.push_approved(Action::Plain("phw-write-uid"));
+                false
+            }
+            dialogs_ui::ConfirmKind::PhwWriteData { .. } => {
+                self.push_approved(Action::Plain("phw-write-data"));
+                false
+            }
+            dialogs_ui::ConfirmKind::FormatCard => {
+                self.push_approved(Action::Plain("format-card"));
+                false
+            }
         }
     }
 
@@ -903,10 +915,54 @@ impl NfcApp {
                     t("dialog_msg_card_will_be_locked"),
                 ));
             }
-            "read-IC" | "detect-card-type" | "format-card" => match arg {
+            // S17：手机/手环两个写动作此前**没有**应用内确认窗，engine 侧
+            // `confirm_danger` 拿不到预置值一律返回 false，等于按钮点了没反应。
+            // 此处补上确认窗（正文含缓存的卡号 / 目标扇区块），确认后才派发。
+            "phw-write-uid" => {
+                let Some(block0) = self.state.phw.block0.clone() else {
+                    self.pending.push(Action::Plain(name));
+                    return;
+                };
+                self.confirm = Some(dialogs_ui::ConfirmModal::new(
+                    dialogs_ui::ConfirmKind::PhwWriteUid { block0: block0.clone() },
+                    &dialogs_ui::danger_title(),
+                    nfc_core::tasks::phw::write_uid_confirm(&block0).message,
+                ));
+            }
+            "phw-write-data" => {
+                let Some(block0) = self.state.phw.block0.clone() else {
+                    self.pending.push(Action::Plain(name));
+                    return;
+                };
+                let sector = self.state.phw.sector;
+                let block = self.state.phw.block;
+                self.confirm = Some(dialogs_ui::ConfirmModal::new(
+                    dialogs_ui::ConfirmKind::PhwWriteData {
+                        block0: block0.clone(),
+                        sector,
+                        block,
+                    },
+                    &dialogs_ui::danger_title(),
+                    nfc_core::tasks::phw::write_data_confirm(
+                        &block0,
+                        nfc_core::tasks::phw::SectorBlock { sector, block },
+                    )
+                    .message,
+                ));
+            }
+            "read-IC" | "detect-card-type" => match arg {
                 Some(a) => self.pending.push(Action::WithArg(name, a)),
                 None => self.pending.push(Action::Plain(name)),
             },
+            // S17：格式化卡片补应用内确认窗（原版 `command.js:144-149` 直接开跑，
+            // 误点即清空卡片）。确认后 engine 侧 `prepare_format` 再过一道闸。
+            "format-card" => {
+                self.confirm = Some(dialogs_ui::ConfirmModal::new(
+                    dialogs_ui::ConfirmKind::FormatCard,
+                    &dialogs_ui::danger_title(),
+                    t("dialog_msg_confirm_format_card"),
+                ));
+            }
             // command.js:538-556。默认文件名是**裸名**（原版无 path.join），
             // 过滤器 txt。日志内容先快照存住——弹窗是异步的，
             // 等它回来时缓冲区可能已被追加。

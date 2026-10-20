@@ -18,7 +18,7 @@ use std::path::PathBuf;
 
 use crate::dialogs::DialogProvider;
 use crate::model::keys::DEFAULT_KEYS;
-use crate::model::parse::KeyInfoParser;
+use crate::model::parse::{BlockStatsParser, KeyInfoParser};
 use crate::paths::Paths;
 use crate::runner::{self, Chunk, GateState, ToolError, ToolRunner};
 use crate::serial::{self, ConnectFlow, PortScanner, SerialTrait};
@@ -124,6 +124,9 @@ struct Running {
     remove_temp: bool,
     /// 第二段收尾时是否落成败文案（`command.js:120-122`）。
     report: bool,
+    /// 写卡/格式化第二段（`nfc-mfclassic`）的完成行解析器，用于判定
+    /// 是否**全部**块写入成功（`Done, X of Y blocks written.`）。
+    block_stats: Option<BlockStatsParser>,
     /// 是否从输出里抓 `UID (NFCID1):`（`nfc-mfclassic` 需要，用于 dump 文件名）。
     scan_mfoc_uid: bool,
     /// 抓到的 UID，最终传给 `mfoc::dump_save` 当默认文件名前缀。
@@ -504,7 +507,7 @@ impl Engine {
                 }
             }
             "detect-card-type" => {
-                let args = tasks::detect::detect_args(paths, false);
+                let args = tasks::detect::detect_args(paths, false, false);
                 self.launch(
                     "nfc-mfdetect",
                     &args,
@@ -553,7 +556,13 @@ impl Engine {
                 )
             }
             "format-card" => {
-                // 原版没有确认框（`command.js:144-149` 直接 readICThenExec）
+                // S17：补应用内确认窗 + engine 侧 confirm_danger 第二道闸
+                // （原版 `command.js:144-149` 直接开跑，误点即清空卡片）。
+                if tasks::card_write::prepare_format(dialog)
+                    != tasks::card_write::PrepareOutcome::ReadyNoFile
+                {
+                    return Ok(());
+                }
                 self.read_then_exec(
                     name,
                     state,
@@ -562,7 +571,9 @@ impl Engine {
                         tool: "nfc-mfclassic",
                         args: tasks::card_write::mfclassic_format_args(&paths.temp_mfd()),
                         remove_temp: true,
-                        report: false,
+                        // S17：格式化也纳入完成行完整性判定（原版 report:false，
+                        // 格式化成败对用户不可见）。成功才删备份并报成功。
+                        report: true,
                         status_key: "indicator_formatting_ic_card",
                     },
                 )
@@ -670,7 +681,8 @@ impl Engine {
     /// `phw-read-uid`：`nfc-mfdetect -O<temp> -f<keys>` 读当前卡，成功后取
     /// temp 的 block0 缓存进 `state.phw.block0`。对标 `commands.rs:1114`。
     fn phw_read_uid(&mut self, state: &mut AppState, paths: &Paths) -> Result<(), ToolError> {
-        let args = tasks::detect::detect_args(paths, true);
+        // phw-read-uid 只需卡号，备份完整性不强制（宽松模式，不加 -S）
+        let args = tasks::detect::detect_args(paths, true, false);
         self.launch(
             "nfc-mfdetect",
             &args,
@@ -707,12 +719,22 @@ impl Engine {
             )));
             return Ok(());
         };
+        // 安全闸：BCC 不自洽的 block0 写入会直接砖卡。`nfc-mfsetuid` 侧默认
+        // 拒绝（不加 `-f`），此处提前拦下并落明确日志，避免用户在不知道
+        // 卡号校验位有问题的情况下授权写入。
+        if !tasks::phw::block0_bcc_ok(&block0) {
+            state.apply(Event::Log(format!(
+                "\n{}\n",
+                crate::i18n::t("log_msg_block0_bcc_invalid")
+            )));
+            return Ok(());
+        }
         if !dialog.confirm_danger(&tasks::phw::write_uid_confirm(&block0)) {
             return Ok(());
         }
         self.launch(
             "nfc-mfsetuid",
-            &tasks::phw::mfsetuid_args(&block0),
+            &tasks::card_write::mfsetuid_args(&block0),
             state,
             "indicator_writing_ufuid_uid",
             Running {
@@ -758,9 +780,10 @@ impl Engine {
             return Ok(());
         }
         // 第一段读回当前卡（mfdetect -O），完成后先改块、再整卡写回。
+        // S17：此备份要当整卡写回来源，故开严格模式（-S），缺块就不落盘。
         self.launch(
             "nfc-mfdetect",
-            &tasks::detect::detect_args(paths, true),
+            &tasks::detect::detect_args(paths, true, true),
             state,
             "log_msg_phw_read_back",
             Running {
@@ -906,7 +929,7 @@ impl Engine {
                 Ok(())
             }
             Step::Detect => {
-                let args = tasks::detect::detect_args(paths, false);
+                let args = tasks::detect::detect_args(paths, false, false);
                 self.launch(
                     "nfc-mfdetect",
                     &args,
@@ -1039,7 +1062,8 @@ impl Engine {
         paths: &Paths,
         next: NextStage,
     ) -> Result<(), ToolError> {
-        let args = tasks::detect::detect_args(paths, true);
+        // S17：写卡/格式化的备份段开严格模式（-S），缺块不落盘。
+        let args = tasks::detect::detect_args(paths, true, true);
         self.launch(
             "nfc-mfdetect",
             &args,
@@ -1090,6 +1114,8 @@ impl Engine {
                 name: next.tool,
                 remove_temp: next.remove_temp,
                 report: next.report,
+                // S17：写卡/格式化第二段挂完成行解析器，收尾时据此判完整性。
+                block_stats: Some(BlockStatsParser::new()),
                 ..Running::default()
             },
         )
@@ -1161,6 +1187,10 @@ impl Engine {
             if let Some(uid) = tasks::mfoc::take_uid(text) {
                 run.uid = Some(uid);
             }
+        }
+        // 写卡/格式化第二段：抓 `Done, X of Y blocks written.` 判定完整性。
+        if let Some(p) = run.block_stats.as_mut() {
+            p.push(text);
         }
         // HardNested 的两个工具各自解析自己的标记
         if let Some(c) = run.collect.as_mut() {
@@ -1410,13 +1440,45 @@ impl Engine {
                     }
                     return;
                 }
-                // 第二段收尾：删临时备份（`command.js:610-613`）
-                if run.remove_temp {
-                    let _ = std::fs::remove_file(paths.temp_mfd());
-                }
-                // `code === 0` → 写卡 / 格式化成败文案（`command.js:120-122`）
+                // 第二段收尾：写卡 / 格式化成败文案 + 备份去留。
+                //
+                // S17：不再无条件删 temp。解析 `Done, X of Y blocks written.`
+                // 判定是否**全部**块写入成功——成功才删备份并报「写卡成功」；
+                // 部分写入 / 工具中途失败则保留备份以便恢复，并报失败。
                 if run.report {
-                    tasks::card_write::report_write_result(state, exit.code);
+                    let stats = run.block_stats.as_ref().and_then(|p| p.take());
+                    let complete = match stats {
+                        Some((w, t)) if t >= 1 => w == t - 1,
+                        _ => exit.code == Some(0),
+                    };
+                    if complete {
+                        tasks::card_write::report_write_result(state, exit.code);
+                        if run.remove_temp {
+                            let _ = std::fs::remove_file(paths.temp_mfd());
+                        }
+                    } else {
+                        state.apply(Event::Log(format!(
+                            "\n{}\n",
+                            crate::i18n::t("log_msg_write_failed")
+                        )));
+                        if let Some((w, t)) = stats {
+                            state.apply(Event::Log(format!(
+                                "\n{}（{w}/{t} 块）\n",
+                                crate::i18n::t("log_msg_write_incomplete")
+                            )));
+                        }
+                        if run.remove_temp {
+                            let kept = paths.temp_mfd().display().to_string();
+                            state.apply(Event::Log(format!(
+                                "\n{}{}\n",
+                                crate::i18n::t("log_msg_backup_kept"),
+                                kept
+                            )));
+                        }
+                    }
+                } else if run.remove_temp {
+                    // 非报告类第二段（当前无此路径）仍按原行为删 temp。
+                    let _ = std::fs::remove_file(paths.temp_mfd());
                 }
                 // 读卡成功后把 temp.mfd 移进 `dumpfiles/`，并发引导
                 // （`command.js:648-681`）。这是「读卡 → 写这张卡」这条
@@ -1457,10 +1519,28 @@ impl Engine {
             Err(e) => {
                 // 第一段失败时不删 temp.mfd——原版的 stage-1 `finishHandler`
                 // 只存密钥、不 unlink（`command.js:595-599`），残件由下一次
-                // `read_then_exec` 覆写。此处对第二段则要删（其 finishHandler
-                // 在 close 时无条件 unlink）。
+                // `read_then_exec` 覆写。
+                //
+                // S17：第二段（写卡/格式化）失败时**保留** temp.mfd 以便恢复。
+                // 原版 finishHandler 在 close 时无条件 unlink，写卡一旦部分成功
+                // 又报错，用户就失去了原卡备份。此处改为保留并落日志路径。
+                //
+                // 注意 `run.remove_temp` 是「写卡/格式化第二段」的专属标记
+                // （第一段、读卡、检测、锁卡都为 false），故下面两句只在**写卡
+                // / 格式化失败**时落「写卡失败」+「备份已保留」，不会污染
+                // 读卡/检测/连接等其他工具的失败日志（它们维持原行为：只置
+                // error + 由 TaskDone 走 exit_log）。
                 if run.remove_temp {
-                    let _ = std::fs::remove_file(paths.temp_mfd());
+                    state.apply(Event::Log(format!(
+                        "\n{}\n",
+                        crate::i18n::t("log_msg_write_failed")
+                    )));
+                    let kept = paths.temp_mfd().display().to_string();
+                    state.apply(Event::Log(format!(
+                        "\n{}{}\n",
+                        crate::i18n::t("log_msg_backup_kept"),
+                        kept
+                    )));
                 }
                 state.apply(Event::Status {
                     text: crate::i18n::t("indicator_error"),
@@ -2574,18 +2654,115 @@ mod tests {
         assert_eq!(tool, "nfc-mfdetect", "空备份却启动了写卡");
     }
 
-    /// `format-card` 不需要确认框（原版 `command.js:144-149` 直接开跑）。
+    // ── S17：逐块核对 + 备份去留 ──────────────────────────────────
+
+    /// S17：写卡**全部**成功（63/64，block0 未写）→ 删 temp + 报「写卡成功」。
     #[test]
-    fn format_card_needs_no_confirm() {
+    fn write_ic_complete_deletes_temp_and_reports_success() {
+        let (_d, p) = paths("write-complete");
+        std::fs::write(p.dumpfiles_dir().join("a.mfd"), vec![0x5a; 32]).unwrap();
+        let mut e = Engine::new(Box::new(
+            MockToolRunner::new(vec![])
+                .with_scripts(vec![
+                    vec![],
+                    vec![Chunk::stdout("Writing 64 blocks |\nDone, 63 of 64 blocks written.\n")],
+                ])
+                .with_exits(vec![Some(0), Some(0)]),
+        ));
+        let mut st = connected();
+        let mut dlg = MockDialog::new().with_confirm(true);
+        e.dispatch(Action::WithArg("write-IC", "a.mfd".into()), &mut st, &p, &mut dlg)
+            .unwrap();
+        // 造出备份，让第二段能接上
+        std::fs::write(p.temp_mfd(), vec![0x5a; 64]).unwrap();
+        run_to_end(&mut e, &mut st, &p, 6);
+        assert!(st.log_buffer.contains("写卡成功"), "实际: {}", st.log_buffer);
+        assert!(!p.temp_mfd().exists(), "成功后应删除 temp 备份");
+    }
+
+    /// S17：写卡**部分**成功（60/64）→ 保留 temp + 报「写卡失败」+「写入不完整」。
+    #[test]
+    fn write_ic_partial_write_keeps_temp_and_reports_failure() {
+        let (_d, p) = paths("write-partial");
+        std::fs::write(p.dumpfiles_dir().join("a.mfd"), vec![0x5a; 32]).unwrap();
+        let mut e = Engine::new(Box::new(
+            MockToolRunner::new(vec![])
+                .with_scripts(vec![
+                    vec![],
+                    vec![Chunk::stdout("Done, 60 of 64 blocks written.\n")],
+                ])
+                .with_exits(vec![Some(0), Some(0)]),
+        ));
+        let mut st = connected();
+        let mut dlg = MockDialog::new().with_confirm(true);
+        e.dispatch(Action::WithArg("write-IC", "a.mfd".into()), &mut st, &p, &mut dlg)
+            .unwrap();
+        std::fs::write(p.temp_mfd(), vec![0x5a; 64]).unwrap();
+        run_to_end(&mut e, &mut st, &p, 6);
+        assert!(st.log_buffer.contains("写卡失败"), "实际: {}", st.log_buffer);
+        assert!(
+            st.log_buffer.contains("写入不完整"),
+            "实际: {}",
+            st.log_buffer
+        );
+        assert!(p.temp_mfd().exists(), "部分写入应保留备份");
+        assert!(
+            st.log_buffer.contains("原卡备份已保留"),
+            "实际: {}",
+            st.log_buffer
+        );
+    }
+
+    /// S17：写卡工具非 0 退出（无完成行）→ 保留 temp + 报失败。
+    #[test]
+    fn write_ic_tool_failure_keeps_temp() {
+        let (_d, p) = paths("write-fail");
+        std::fs::write(p.dumpfiles_dir().join("a.mfd"), vec![0x5a; 32]).unwrap();
+        let mut e = Engine::new(Box::new(
+            MockToolRunner::new(vec![])
+                .with_scripts(vec![
+                    vec![],
+                    vec![Chunk::stdout("Error: tag was removed\n")],
+                ])
+                .with_exits(vec![Some(0), Some(1)]),
+        ));
+        let mut st = connected();
+        let mut dlg = MockDialog::new().with_confirm(true);
+        e.dispatch(Action::WithArg("write-IC", "a.mfd".into()), &mut st, &p, &mut dlg)
+            .unwrap();
+        std::fs::write(p.temp_mfd(), vec![0x5a; 64]).unwrap();
+        run_to_end(&mut e, &mut st, &p, 6);
+        assert!(st.log_buffer.contains("写卡失败"), "实际: {}", st.log_buffer);
+        assert!(p.temp_mfd().exists(), "工具失败应保留备份");
+    }
+
+    /// `format-card` S17：补确认框（原版 `command.js:144-149` 直接开跑，误点即清空）。
+    /// 未确认不启动，确认后才跑备份段。
+    #[test]
+    fn format_card_needs_confirm() {
         let (_d, p) = paths("format");
         let mut e = Engine::new(Box::new(MockToolRunner::new(vec![])));
         let mut st = connected();
-        let mut dlg = MockDialog::new(); // 空队列
+        let mut dlg = MockDialog::new(); // 空队列 → 拒绝
         e.dispatch(Action::Plain("format-card"), &mut st, &p, &mut dlg)
             .unwrap();
-        assert_eq!(dlg.confirm_calls(), 0, "原版 format-card 无确认框");
-        let (tool, _, _) = e.runner().started_last().unwrap();
+        assert_eq!(dlg.confirm_calls(), 1, "format-card 应过 confirm_danger");
+        assert!(!e.is_running(), "未确认不应启动备份段");
+        assert!(!st.is_running_task);
+    }
+
+    /// `format-card` 确认后启动备份段（`nfc-mfdetect -O`）。
+    #[test]
+    fn format_card_confirmed_starts_backup_stage() {
+        let (_d, p) = paths("format-ok");
+        let mut e = Engine::new(Box::new(MockToolRunner::new(vec![])));
+        let mut st = connected();
+        let mut dlg = MockDialog::new().with_confirm(true);
+        e.dispatch(Action::Plain("format-card"), &mut st, &p, &mut dlg)
+            .unwrap();
+        let (tool, args, _) = e.runner().started_last().unwrap();
         assert_eq!(tool, "nfc-mfdetect");
+        assert!(args.contains(&format!("-O{}", p.temp_mfd().display())));
     }
 
     /// `lock-ufuid` 只过确认框，确认后 `nfc-mflock -q`。

@@ -2,8 +2,10 @@
 //!
 //! 对齐原版 `src-tauri/src/commands.rs` 的 `phw_read_uid` / `phw_write_uid` /
 //! `phw_write_data`：块 0 是只读 UID 块、块 3 是扇区尾块（密钥/ACL），二者
-//! 都不能覆盖，故写数据扇区只允许块 1-2；写 UID 位时按 block0 的 BCC 是否
-//! 自洽决定是否给 `nfc-mfsetuid` 追加 `-f` 强制写入。
+//! 都不能覆盖，故写数据扇区只允许块 1-2；写 UID 位只用
+//! `nfc-mfsetuid -q <block0>`，**不**追加 `-f`——工具侧默认拒绝写入 BCC
+//! 不自洽的 block0（写坏卡风险），拒绝动作由 engine 在调用前判
+//! `block0_bcc_ok` 并落明确日志（见 `phw_write_uid`）。
 
 /// 扇区号上限（合法范围 0-15）。
 pub const SECTOR_MAX: u32 = 15;
@@ -37,17 +39,6 @@ fn byte(block0: &str, i: usize) -> u8 {
         .get(start..start + 2)
         .and_then(|s| u8::from_str_radix(s, 16).ok())
         .unwrap_or(0)
-}
-
-/// `nfc-mfsetuid -q <block0>` 的参数；BCC 不自洽时追加 `-f`。
-///
-/// 对标 `commands.rs:1056-1059` / `1069-1071`。
-pub fn mfsetuid_args(block0: &str) -> Vec<String> {
-    let mut args = vec!["-q".to_string(), block0.to_string()];
-    if !block0_bcc_ok(block0) {
-        args.push("-f".to_string());
-    }
-    args
 }
 
 /// 写数据扇区的目标块定位。
@@ -166,14 +157,21 @@ mod tests {
         assert!(!block0_bcc_ok("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"));
     }
 
+    /// 回归：`phw::mfsetuid_args` 已删除，写 UID 位改走
+    /// `card_write::mfsetuid_args`，永远不追加 `-f`（原版曾在此自动追加，
+    /// 会把 BCC 不自洽的 block0 强行写入、直接砖卡）。此处断言公共函数
+    /// 的行为，避免有人把 `-f` 加回去。
     #[test]
-    fn mfsetuid_args_is_quiet_when_bcc_holds() {
-        assert_eq!(mfsetuid_args(VALID_BCC), vec!["-q", VALID_BCC]);
-    }
-
-    #[test]
-    fn mfsetuid_args_forces_when_bcc_is_broken() {
-        assert_eq!(mfsetuid_args(BROKEN_BCC), vec!["-q", BROKEN_BCC, "-f"]);
+    fn card_write_mfsetuid_args_never_forces() {
+        use crate::tasks::card_write;
+        assert_eq!(
+            card_write::mfsetuid_args(BROKEN_BCC),
+            vec!["-q", BROKEN_BCC]
+        );
+        assert_eq!(
+            card_write::mfsetuid_args(VALID_BCC),
+            vec!["-q", VALID_BCC]
+        );
     }
 
     #[test]

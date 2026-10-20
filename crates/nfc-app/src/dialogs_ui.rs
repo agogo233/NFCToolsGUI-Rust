@@ -40,6 +40,12 @@ pub enum ConfirmKind {
     DeleteDumps(Vec<String>),
     /// R1：运行中关窗二次确认。
     CloseWhileRunning,
+    /// `phw-write-uid`：手机/手环「写 UID 位」。block0 由「读卡号」缓存。
+    PhwWriteUid { block0: String },
+    /// `phw-write-data`：手机/手环「写数据扇区」。block0 + 目标扇区/块。
+    PhwWriteData { block0: String, sector: u32, block: u32 },
+    /// `format-card`：格式化卡片。S17 安全加固新增（原版无确认框）。
+    FormatCard,
 }
 
 /// 待确认的模态窗内容。

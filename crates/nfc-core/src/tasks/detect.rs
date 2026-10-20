@@ -24,8 +24,13 @@ use crate::state::{AppState, Event};
 ///
 /// `is_save_dump_file` 为真 → `["-O<temp.mfd>", "-f<keys>"]`（读出 dump）
 /// 为假 → `["-N", "-f<keys>"]`（只探测不落盘）
-pub fn detect_args(paths: &Paths, is_save_dump_file: bool) -> Vec<String> {
-    if is_save_dump_file {
+///
+/// `strict` 只在落盘时生效（`-S`）：要求**每一个**块都读取成功，
+/// 否则不写 dump、非 0 退出。用于写卡/格式化/手机写数据的备份段，
+/// 避免把「缺块」的备份当写卡来源（写回时会把不可读的块覆盖成 0）。
+/// `phw-read-uid`（只需卡号）与 `detect-card-type`（不落盘）不加。
+pub fn detect_args(paths: &Paths, is_save_dump_file: bool, strict: bool) -> Vec<String> {
+    let mut args = if is_save_dump_file {
         vec![
             format!("-O{}", paths.temp_mfd().display()),
             format!("-f{}", paths.keys_file().display()),
@@ -35,7 +40,11 @@ pub fn detect_args(paths: &Paths, is_save_dump_file: bool) -> Vec<String> {
             "-N".to_string(),
             format!("-f{}", paths.keys_file().display()),
         ]
+    };
+    if strict && is_save_dump_file {
+        args.push("-S".to_string());
     }
+    args
 }
 
 /// unknown 密钥的引导文案，对标 `command.js:175-177`。
@@ -253,7 +262,7 @@ mod tests {
     fn detect_args_with_dump_uses_output_flag() {
         let dir = tempdir("args-dump");
         let paths = Paths::new(&dir);
-        let a = detect_args(&paths, true);
+        let a = detect_args(&paths, true, false);
         assert_eq!(a.len(), 2);
         assert!(a[0].starts_with("-O"), "实际: {}", a[0]);
         assert!(a[0].contains("temp.mfd"));
@@ -264,13 +273,28 @@ mod tests {
     fn detect_args_without_dump_uses_dash_n() {
         let dir = tempdir("args-n");
         let paths = Paths::new(&dir);
-        let a = detect_args(&paths, false);
+        let a = detect_args(&paths, false, false);
         assert_eq!(a[0], "-N");
         assert!(a[1].starts_with("-f"), "实际: {}", a[1]);
         assert!(
             !a.iter().any(|x| x.contains("temp.mfd")),
             "不带 dump 时不应出现 -O"
         );
+    }
+
+    /// S17：严格模式只在落盘时追加 `-S`，且不落盘时不加。
+    #[test]
+    fn detect_args_strict_adds_s_flag_only_when_saving() {
+        let dir = tempdir("args-strict");
+        let paths = Paths::new(&dir);
+        let loose = detect_args(&paths, true, false);
+        assert!(!loose.contains(&"-S".to_string()), "宽松模式不应有 -S");
+        let strict = detect_args(&paths, true, true);
+        assert!(strict.contains(&"-S".to_string()), "严格落盘应有 -S");
+        // 不落盘时即使 strict 也不加 -S（无 dump 可言）
+        let nodump = detect_args(&paths, false, true);
+        assert!(!nodump.contains(&"-S".to_string()), "不落盘不应有 -S");
+        assert_eq!(nodump[0], "-N");
     }
 
     // ---------------------------------------------------------- guidance

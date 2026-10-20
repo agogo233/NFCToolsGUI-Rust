@@ -78,6 +78,10 @@ int main(int argc, char *const argv[])
   int key, block;
   int succeed = 1;
   bool isSaveDumpFile = true;
+  // S17：严格备份模式（`-S`）。落盘前要求**每一个**块都读取成功；
+  // 任一块读失败就不写 dump、非 0 退出——避免把「缺块」的备份当写卡来源，
+  // 否则写回时会把不可读的块覆盖成 0（见 docs/02 §6.26）。
+  bool strict = false;
 
   // Exploit sector
   int e_sector;
@@ -140,10 +144,14 @@ int main(int argc, char *const argv[])
   struct slre_cap caps[2];  
 
   // Parse command line arguments
-  while ((ch = getopt(argc, argv, "hD:s:BP:T:S:O:k:t:f:N")) != -1) {
+  while ((ch = getopt(argc, argv, "hD:s:BP:T:SO:k:t:f:N")) != -1) {
     switch (ch) {
       case 'N':
         isSaveDumpFile = false;
+        break;
+      case 'S':
+        // S17：严格备份。落盘前要求每个块都读取成功，否则不写 dump。
+        strict = true;
         break;
       case 'P':
         // Number of probes
@@ -664,6 +672,8 @@ int main(int argc, char *const argv[])
     i = t.num_sectors; // Sector counter
     fprintf(stdout, "Auth with all sectors succeeded, dumping keys to a file!\n");
     // Read all blocks
+    // S17：严格模式下，只要有一个块没读成功就不落盘（见 `case 'S'`）。
+    bool dump_complete = true;
     for (block = t.num_blocks; block >= 0; block--) {
       trailer_block(block) ? i-- : i;
       failure = true;
@@ -727,6 +737,14 @@ int main(int argc, char *const argv[])
         if (!failure) memcpy(mtDump.amb[block].mbt.abtAccessBits, mp.mpd.abtData + 6, 4);
       } else if (!failure) memcpy(mtDump.amb[block].mbd.abtData, mp.mpd.abtData, 16);
       memcpy(mp.mpa.abtAuthUid, t.nt.nti.nai.abtUid + t.nt.nti.nai.szUidLen - 4, sizeof(mp.mpa.abtAuthUid));
+      if (failure) dump_complete = false;
+    }
+
+    // S17：严格模式下，缺块的 dump 不落盘、非 0 退出——否则写回时会把
+    // 不可读的块覆盖成 0（见 docs/02 §6.26）。
+    if (strict && !dump_complete) {
+      fprintf(stdout, "Error: some blocks could not be read, refusing to write an incomplete dump\n");
+      goto error;
     }
 
     // Finally save all keys + data to file

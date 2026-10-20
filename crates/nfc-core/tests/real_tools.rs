@@ -218,7 +218,7 @@ fn mfdetect_accepts_detect_arguments() {
     let bin = bin_or_skip!();
     let dir = tmp_dir("mfdetect");
     let paths = Paths::new(dir.clone());
-    let args = nfc_core::tasks::detect::detect_args(&paths, false);
+    let args = nfc_core::tasks::detect::detect_args(&paths, false, false);
     let (out, code) = run(&bin, "nfc-mfdetect", &args);
     assert_ne!(code, 0, "无读卡器时该非零退出");
     assert!(

@@ -182,7 +182,7 @@ fn original_mfoc_binary_accepts_read_ic_flags() {
 fn detect_flags_are_accepted_by_the_real_binary() {
     let bin = bin_or_skip!();
     let (paths, dir) = tmp_paths("detect");
-    let args = nfc_core::tasks::detect::detect_args(&paths, false);
+    let args = nfc_core::tasks::detect::detect_args(&paths, false, false);
     let out = run(&bin, "nfc-mfdetect", &args);
     assert!(
         !looks_like_argv_rejection(&out),

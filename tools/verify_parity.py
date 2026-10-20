@@ -71,6 +71,13 @@ S16_EXTRA = {
     "html_data_dir",
     "html_tool_dir",
 }
+# S17 写卡安全加固本地补的 4 个 key（docs/02 §6.26）。
+S17_EXTRA = {
+    "log_msg_backup_kept",
+    "log_msg_block0_bcc_invalid",
+    "log_msg_write_incomplete",
+    "dialog_msg_confirm_format_card",
+}
 # 两个 scratch 目录：每次运行重建（a_rustfmt rmtree 后重拷，b_resolve mkdir）。
 # 用系统临时目录而非写死 /tmp/opencode——后者是本机产物，CI 的 Linux/Windows
 # runner 上未必存在或可写。
@@ -256,8 +263,9 @@ def d_align() -> None:
 def h_i18n() -> None:
     keys = json.loads(rd(REPO / "assets/locales/zh-CN.json"))
     check(
-        len(keys) == 193 + len(S16_EXTRA),
-        f"H zh-CN.json {193 + len(S16_EXTRA)} key（基础 193 + S16 补 {len(S16_EXTRA)}）",
+        len(keys) == 193 + len(S16_EXTRA) + len(S17_EXTRA),
+        f"H zh-CN.json {193 + len(S16_EXTRA) + len(S17_EXTRA)} key"
+        f"（基础 193 + S16 补 {len(S16_EXTRA)} + S17 补 {len(S17_EXTRA)}）",
         f"实际 {len(keys)}",
     )
     # S8 新增的 3 个 settings 按钮文案（原版 settings.html 硬编码英文，无 i18n key，
@@ -266,6 +274,8 @@ def h_i18n() -> None:
         check(k in keys, f"H zh-CN 含 {k}")
     for k in S16_EXTRA:
         check(k in keys, f"H zh-CN 含 S16 {k}")
+    for k in S17_EXTRA:
+        check(k in keys, f"H zh-CN 含 S17 {k}")
     check(not (REPO / "assets/locales/en.json").exists(), "H 无 en.json（仅中文决策）")
     body = rd(CORE / "src/serial.rs")
     used = set()
@@ -980,7 +990,7 @@ def s4_model() -> None:
     check("pub enum Action" in eng and "pub enum Action" not in ap,
           "S11 Action 住在 core::engine（S0-S10 时在 app）")
     # 参数构造对拍原版
-    check("detect_args(paths, false)" in eng, "S11 detect-card-type 用 -N 分支（command.js:169-171）")
+    check("detect_args(paths, false, false)" in eng, "S11 detect-card-type 用 -N 分支（command.js:169-171）")
     check("mfoc_args(paths, &extra)" in eng, "S11 read-IC 用 mfoc_args（command.js:608-611）")
     check("dict_args(cfg, &state.dict_path)" in eng, "S11 dict-test 用 dict_args（command.js:395-397）")
     check('format!("-k{key}")' in eng, "S11 done-input-keys 转 -k 参数（command.js:154-156）")
