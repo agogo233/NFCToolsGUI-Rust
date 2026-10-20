@@ -71,12 +71,12 @@ S16_EXTRA = {
     "html_data_dir",
     "html_tool_dir",
 }
-# S17 写卡安全加固本地补的 4 个 key（docs/02 §6.26）。
+# S17 写卡安全加固本地补的 3 个 key（docs/02 §6.26）。
+# 注：`dialog_msg_confirm_format_card` 原版已有，不计入本地新增。
 S17_EXTRA = {
     "log_msg_backup_kept",
     "log_msg_block0_bcc_invalid",
     "log_msg_write_incomplete",
-    "dialog_msg_confirm_format_card",
 }
 # 两个 scratch 目录：每次运行重建（a_rustfmt rmtree 后重拷，b_resolve mkdir）。
 # 用系统临时目录而非写死 /tmp/opencode——后者是本机产物，CI 的 Linux/Windows
@@ -263,9 +263,9 @@ def d_align() -> None:
 def h_i18n() -> None:
     keys = json.loads(rd(REPO / "assets/locales/zh-CN.json"))
     check(
-        len(keys) == 193 + len(S16_EXTRA) + len(S17_EXTRA),
-        f"H zh-CN.json {193 + len(S16_EXTRA) + len(S17_EXTRA)} key"
-        f"（基础 193 + S16 补 {len(S16_EXTRA)} + S17 补 {len(S17_EXTRA)}）",
+        len(keys) == 194 + len(S16_EXTRA) + len(S17_EXTRA),
+        f"H zh-CN.json {194 + len(S16_EXTRA) + len(S17_EXTRA)} key"
+        f"（基础 194 + S16 补 {len(S16_EXTRA)} + S17 补 {len(S17_EXTRA)}）",
         f"实际 {len(keys)}",
     )
     # S8 新增的 3 个 settings 按钮文案（原版 settings.html 硬编码英文，无 i18n key，
@@ -718,7 +718,7 @@ def s4_model() -> None:
     # S5 单测数量
     s5_units = sum(rd(CORE / f"src/{f}").count("#[test]")
                    for f in ["data.rs", "dialogs.rs", "tasks/mfoc.rs", "tasks/detect.rs"])
-    check(s5_units == 79, "S5 单测累计 79（含 S6/S11-2 新增）", f"实际 {s5_units}")
+    check(s5_units == 80, "S5 单测累计 80（含 S6/S11-2/S17 新增）", f"实际 {s5_units}")
     ints = rd(CORE / "tests/integration.rs")
     check(ints.count("#[test]") == 58, "S5+S6/S7 集成测试累计 58", f"实际 {ints.count('#[test]')}")
     check(ints.count("fn s5_") == 14, "S5 新增 14 个集成测试", f"实际 {ints.count('fn s5_')}")
@@ -870,16 +870,20 @@ def s4_model() -> None:
           "S9 settings 入口在原版存在（616b5b5 起已取消注释）")
     check("open-settings-window" in ap and "Panel::Settings" in ap,
           "S9 我们也实现了 settings 入口与面板")
-    # about 开源清单 10 项与原版逐条一致
-    orig_lic = re.findall(r"\((MIT|GPL-2\.0|GPL-3\.0|LGPL-3\.0|BSD-2-Clause)\)", ab)
-    ours = re.findall(r'"(MIT|GPL-2\.0|GPL-3\.0|LGPL-3\.0|BSD-2-Clause)"', pa)
+    # about 开源清单与原版一致（b0bd8d2 重新整理后为 18 项，含 11 个 Rust crate）
+    orig_lic = re.findall(r"\((MIT|GPL-2\.0|GPL-3\.0|LGPL-3.0|BSD-2-Clause)\)", ab)
+    # Rust crate 的 "MIT OR Apache-2.0" 需映射为 MIT（原版只有 MIT）
+    ours = re.findall(r'"(MIT|GPL-2\.0|GPL-3\.0|LGPL-3.0|BSD-2-Clause|MIT OR Apache-2.0)"', pa)
+    ours = ["MIT" if x == "MIT OR Apache-2.0" else x for x in ours]
     check_orig(len(orig_lic) == 10, "S9 原版 about 开源清单 10 项", f"实际 {len(orig_lic)}")
-    check_orig(orig_lic == ours, "S9 about 开源许可证顺序与原版逐条一致", f"{ours}")
-    # 12 = 10 个开源项目 + LICENSE + 仓库首页（about.html:29 与 :33 各一）
+    check_orig(set(orig_lic) <= set(ours),
+               "S9 about 开源许可证覆盖原版全部",
+               f"仅本项目 {set(ours)-set(orig_lic)} / 缺 {set(orig_lic)-set(ours)}")
+    # 18 = 7 个 C 工具 + 11 个 Rust crate（b0bd8d2 重新整理后）
     n_gh = pa.count("https://github.com")
-    check(n_gh == 12, "S9 about 含 10 个开源链接 + LICENSE + 仓库首页", f"实际 {n_gh}")
-    check(pa.count("const OPEN_SOURCE: [(&str, &str, &str); 10]") == 1,
-          "S9 about 开源清单恰好 10 项")
+    check(n_gh == 20, "S9 about 含开源链接 + LICENSE + 仓库首页", f"实际 {n_gh}")
+    check(pa.count("const OPEN_SOURCE: [(&str, &str, &str); 18]") == 1,
+          "S9 about 开源清单恰好 18 项")
     # 窗口尺寸对标 windows.js（取非 win32 分支）
     for const, w, h in [("SIZE_SETTINGS", 400, 510), ("SIZE_INPUT_KEYS", 400, 200),
                         ("SIZE_HARD_NESTED", 500, 610), ("SIZE_DICT_TEST", 450, 390),
@@ -897,7 +901,7 @@ def s4_model() -> None:
     # 数 `("` 会漏。每项都以 `c_xxx,` 结尾。
     _vec = stf9[stf9.index("vec![") : stf9.index("];", stf9.index("vec!["))]
     n_cases = len(re.findall(r'\bc_[a-z0-9_]+\b', _vec))
-    check(n_cases == 75, "S9-S13 UI selftest 75 项（S8 13 + S9 15 + S10 14 + S11-1 5 + S11-2 19 + S11-7 3 + S13 4 + S15 2）", f"实际 {n_cases}")
+    check(n_cases == 79, "S9-S13 UI selftest 79 项（S8 13 + S9 15 + S10 14 + S11-1 5 + S11-2 19 + S11-7 3 + S13 4 + S15 2 + S17 4）", f"实际 {n_cases}")
 
     # ── S10 dump 三面板 ──────────────────────────────────────────
     de = rd(ORIG / "src/renderer/html/dumpEditor.html")
@@ -1016,7 +1020,7 @@ def s4_model() -> None:
     # selftest
     _vec2 = stf9[stf9.index("vec![") : stf9.index("];", stf9.index("vec!["))]
     n11 = len(re.findall(r"\bc_[a-z0-9_]+\b", _vec2))
-    check(n11 == 75, "S11-S13 UI selftest 75 项（含 S11-7 的 3 项、S13 的 4 项与 S15 的 2 项）", f"实际 {n11}")
+    check(n11 == 79, "S11-S13 UI selftest 79 项（含 S11-7 的 3 项、S13 的 4 项、S15 的 2 项与 S17 的 4 项）", f"实际 {n11}")
 
     # ── S11-2 系统文件对话框 + 写卡接线 ───────────────────────────
     dh = rd(APP / "src/dialogs_host.rs")
@@ -1453,7 +1457,7 @@ def s4_model() -> None:
     }
     # S16 补的 13 个：控制台、事件折叠、工作流分组、检测结果、设置目录/外观、
     # 自动执行提示与文件框等待文案（docs/02 §6.25 续 / S16 偏离登记）。
-    LOCAL_EXTRA = S8_EXTRA | S11_EXTRA | S12_EXTRA | S15_EXTRA | S16_EXTRA
+    LOCAL_EXTRA = S8_EXTRA | S11_EXTRA | S12_EXTRA | S15_EXTRA | S16_EXTRA | S17_EXTRA
     # 原版对拍基线（ORIG_REF）漂移时上游会新增 key，对应本重写**没有**的功能/结构。
     # 搬运这些文案没有意义（没有代码会 t() 它们），故显式登记为「上游有、我们不做」。
     # 若将来真要做对应功能，把 key 从这里挪进 LOCAL_EXTRA 即可。
@@ -1516,7 +1520,6 @@ def s4_model() -> None:
         "html_auto_select_device",
         "html_silent_save_dump",
         "html_data_not_classic_layout",
-        "dialog_msg_confirm_format_card",
         "dialog_msg_dict_test_large_sector",
         "dialog_msg_invalid_file_name",
         "dialog_msg_write_bad_size",
@@ -1545,7 +1548,8 @@ def s4_model() -> None:
           "R i18n key 名不得以标点结尾（疑似误建的新 key）",
           f"{[k for k in i18n_asset if k[-1:] in {':', '.', ',', ' ', '-', '_'}]}")
     # 本地补的 key 数量原本写死在 Rust 测试与此处两处，已漂移过一次。双向钉死。
-    check(len(LOCAL_EXTRA) == 14 + len(S16_EXTRA), "R 本地补的 i18n key 恰为 27 个", f"实际 {len(LOCAL_EXTRA)}")
+    check(len(LOCAL_EXTRA) == 14 + len(S16_EXTRA) + len(S17_EXTRA),
+          "R 本地补的 i18n key 恰为 30 个", f"实际 {len(LOCAL_EXTRA)}")
     cd = rd(CORE / "src/command.rs")
     # rustfmt 会把字段拆成多行，故用 DOTALL 匹配整个结构体字面量
     specs = re.findall(

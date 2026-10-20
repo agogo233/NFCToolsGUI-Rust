@@ -168,10 +168,7 @@ mod tests {
             card_write::mfsetuid_args(BROKEN_BCC),
             vec!["-q", BROKEN_BCC]
         );
-        assert_eq!(
-            card_write::mfsetuid_args(VALID_BCC),
-            vec!["-q", VALID_BCC]
-        );
+        assert_eq!(card_write::mfsetuid_args(VALID_BCC), vec!["-q", VALID_BCC]);
     }
 
     #[test]

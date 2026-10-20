@@ -837,9 +837,21 @@ const OPEN_SOURCE: [(&str, &str, &str); 18] = [
     ),
     // ── Rust 依赖 crate（MIT OR Apache-2.0）──
     ("egui", "https://github.com/emilk/egui", "MIT OR Apache-2.0"),
-    ("eframe", "https://github.com/emilk/egui", "MIT OR Apache-2.0"),
-    ("serde", "https://github.com/serde-rs/serde", "MIT OR Apache-2.0"),
-    ("serde_json", "https://github.com/serde-rs/json", "MIT OR Apache-2.0"),
+    (
+        "eframe",
+        "https://github.com/emilk/egui",
+        "MIT OR Apache-2.0",
+    ),
+    (
+        "serde",
+        "https://github.com/serde-rs/serde",
+        "MIT OR Apache-2.0",
+    ),
+    (
+        "serde_json",
+        "https://github.com/serde-rs/json",
+        "MIT OR Apache-2.0",
+    ),
     (
         "directories",
         "https://github.com/dirs-rs/directories",
@@ -850,13 +862,21 @@ const OPEN_SOURCE: [(&str, &str, &str); 18] = [
         "https://github.com/dtolnay/thiserror",
         "MIT OR Apache-2.0",
     ),
-    ("regex", "https://github.com/rust-lang/regex", "MIT OR Apache-2.0"),
+    (
+        "regex",
+        "https://github.com/rust-lang/regex",
+        "MIT OR Apache-2.0",
+    ),
     (
         "serialport",
         "https://github.com/joseph-lacaba/serialport",
         "MIT OR Apache-2.0",
     ),
-    ("image", "https://github.com/image-rs/image", "MIT OR Apache-2.0"),
+    (
+        "image",
+        "https://github.com/image-rs/image",
+        "MIT OR Apache-2.0",
+    ),
     ("rfd", "https://github.com/boltex/rfd", "MIT OR Apache-2.0"),
     ("open", "https://github.com/open/open", "MIT OR Apache-2.0"),
 ];

@@ -43,7 +43,11 @@ pub enum ConfirmKind {
     /// `phw-write-uid`：手机/手环「写 UID 位」。block0 由「读卡号」缓存。
     PhwWriteUid { block0: String },
     /// `phw-write-data`：手机/手环「写数据扇区」。block0 + 目标扇区/块。
-    PhwWriteData { block0: String, sector: u32, block: u32 },
+    PhwWriteData {
+        block0: String,
+        sector: u32,
+        block: u32,
+    },
     /// `format-card`：格式化卡片。S17 安全加固新增（原版无确认框）。
     FormatCard,
 }

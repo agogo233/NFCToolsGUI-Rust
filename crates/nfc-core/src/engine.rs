@@ -2665,18 +2665,29 @@ mod tests {
             MockToolRunner::new(vec![])
                 .with_scripts(vec![
                     vec![],
-                    vec![Chunk::stdout("Writing 64 blocks |\nDone, 63 of 64 blocks written.\n")],
+                    vec![Chunk::stdout(
+                        "Writing 64 blocks |\nDone, 63 of 64 blocks written.\n",
+                    )],
                 ])
                 .with_exits(vec![Some(0), Some(0)]),
         ));
         let mut st = connected();
         let mut dlg = MockDialog::new().with_confirm(true);
-        e.dispatch(Action::WithArg("write-IC", "a.mfd".into()), &mut st, &p, &mut dlg)
-            .unwrap();
+        e.dispatch(
+            Action::WithArg("write-IC", "a.mfd".into()),
+            &mut st,
+            &p,
+            &mut dlg,
+        )
+        .unwrap();
         // 造出备份，让第二段能接上
         std::fs::write(p.temp_mfd(), vec![0x5a; 64]).unwrap();
         run_to_end(&mut e, &mut st, &p, 6);
-        assert!(st.log_buffer.contains("写卡成功"), "实际: {}", st.log_buffer);
+        assert!(
+            st.log_buffer.contains("写卡成功"),
+            "实际: {}",
+            st.log_buffer
+        );
         assert!(!p.temp_mfd().exists(), "成功后应删除 temp 备份");
     }
 
@@ -2695,11 +2706,20 @@ mod tests {
         ));
         let mut st = connected();
         let mut dlg = MockDialog::new().with_confirm(true);
-        e.dispatch(Action::WithArg("write-IC", "a.mfd".into()), &mut st, &p, &mut dlg)
-            .unwrap();
+        e.dispatch(
+            Action::WithArg("write-IC", "a.mfd".into()),
+            &mut st,
+            &p,
+            &mut dlg,
+        )
+        .unwrap();
         std::fs::write(p.temp_mfd(), vec![0x5a; 64]).unwrap();
         run_to_end(&mut e, &mut st, &p, 6);
-        assert!(st.log_buffer.contains("写卡失败"), "实际: {}", st.log_buffer);
+        assert!(
+            st.log_buffer.contains("写卡失败"),
+            "实际: {}",
+            st.log_buffer
+        );
         assert!(
             st.log_buffer.contains("写入不完整"),
             "实际: {}",
@@ -2728,11 +2748,20 @@ mod tests {
         ));
         let mut st = connected();
         let mut dlg = MockDialog::new().with_confirm(true);
-        e.dispatch(Action::WithArg("write-IC", "a.mfd".into()), &mut st, &p, &mut dlg)
-            .unwrap();
+        e.dispatch(
+            Action::WithArg("write-IC", "a.mfd".into()),
+            &mut st,
+            &p,
+            &mut dlg,
+        )
+        .unwrap();
         std::fs::write(p.temp_mfd(), vec![0x5a; 64]).unwrap();
         run_to_end(&mut e, &mut st, &p, 6);
-        assert!(st.log_buffer.contains("写卡失败"), "实际: {}", st.log_buffer);
+        assert!(
+            st.log_buffer.contains("写卡失败"),
+            "实际: {}",
+            st.log_buffer
+        );
         assert!(p.temp_mfd().exists(), "工具失败应保留备份");
     }
 

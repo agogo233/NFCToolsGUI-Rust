@@ -481,8 +481,7 @@ impl BlockStatsParser {
 fn done_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"Done,\s*(\d+)\s*of\s*(\d+)\s*blocks\s+(written|read)\.")
-            .expect("静态正则")
+        Regex::new(r"Done,\s*(\d+)\s*of\s*(\d+)\s*blocks\s+(written|read)\.").expect("静态正则")
     })
 }
 

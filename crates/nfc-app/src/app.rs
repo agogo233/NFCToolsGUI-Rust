@@ -924,7 +924,9 @@ impl NfcApp {
                     return;
                 };
                 self.confirm = Some(dialogs_ui::ConfirmModal::new(
-                    dialogs_ui::ConfirmKind::PhwWriteUid { block0: block0.clone() },
+                    dialogs_ui::ConfirmKind::PhwWriteUid {
+                        block0: block0.clone(),
+                    },
                     &dialogs_ui::danger_title(),
                     nfc_core::tasks::phw::write_uid_confirm(&block0).message,
                 ));

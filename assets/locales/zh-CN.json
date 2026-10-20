@@ -10,7 +10,7 @@
     "dialog_msg_choose_dictionary_file": "请选择字典文件",
     "dialog_msg_choose_dump_file": "请选择转储文件",
     "dialog_msg_choose_save_path": "请选择保存路径",
-    "dialog_msg_confirm_format_card": "确定要格式化当前卡片吗？卡片数据将被清空，此操作不可逆。",
+    "dialog_msg_confirm_format_card": "该操作将先读卡，再用读到的内容重写整张卡，每个扇区的访问控制位会被重置为默认值。\n你确定要继续吗？",
     "dialog_msg_confirm_write_dump": "确定要将此转储文件写入卡片吗？",
     "dialog_msg_confirm_write_uid": "该操作将会改写UFUID卡片的0块（UID）！！！\n改错0块后卡片可能变砖！\n即将写入的0块：\n",
     "dialog_msg_not_connected_device": "请先连接设备",

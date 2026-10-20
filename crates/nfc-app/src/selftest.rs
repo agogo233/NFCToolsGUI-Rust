@@ -1970,7 +1970,11 @@ fn c_phw_write_uid_confirm_flow() -> Result<(), String> {
     let c = app.confirm.take().ok_or("二次应仍有确认窗")?;
     app.on_confirm_result(c, true);
     app.consume_pending();
-    let (tool, args, _) = app.engine.runner().started_last().ok_or("未启动 nfc-mfsetuid")?;
+    let (tool, args, _) = app
+        .engine
+        .runner()
+        .started_last()
+        .ok_or("未启动 nfc-mfsetuid")?;
     if tool != "nfc-mfsetuid" || args.len() != 2 || args[0] != "-q" || args[1].len() != 32 {
         return Err(format!("参数错: {tool} {args:?}"));
     }
