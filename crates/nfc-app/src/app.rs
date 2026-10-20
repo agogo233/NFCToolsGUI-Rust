@@ -1014,6 +1014,45 @@ pub fn format_duration(total: u32) -> String {
     format!("{h:02}:{m:02}:{s:02}")
 }
 
+/// 标题栏的可拖拽空白区间：`bar` 去掉 `blockers` 覆盖的横向范围。
+///
+/// 拖拽区必须避开所有可点击控件：egui 命中测试会把压在最上层的纯拖拽
+/// 控件当成按下目标，按钮因此收不到点击；只有点在按钮外
+/// `interact_radius`（默认 5px）内，才会回退命中最近的按钮——这正是
+/// 「只有贴着边框点才有效」的成因。故按控件矩形把标题栏切成空白段。
+fn title_bar_drag_spans(bar: egui::Rect, blockers: &[egui::Rect]) -> Vec<egui::Rect> {
+    let mut cuts: Vec<(f32, f32)> = blockers
+        .iter()
+        .map(|r| {
+            (
+                r.left().clamp(bar.left(), bar.right()),
+                r.right().clamp(bar.left(), bar.right()),
+            )
+        })
+        .filter(|(l, r)| r > l)
+        .collect();
+    cuts.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+    let mut spans = Vec::new();
+    let mut x = bar.left();
+    for (left, right) in cuts {
+        if left > x {
+            spans.push(egui::Rect::from_min_max(
+                egui::pos2(x, bar.top()),
+                egui::pos2(left, bar.bottom()),
+            ));
+        }
+        x = x.max(right);
+    }
+    if x < bar.right() {
+        spans.push(egui::Rect::from_min_max(
+            egui::pos2(x, bar.top()),
+            egui::pos2(bar.right(), bar.bottom()),
+        ));
+    }
+    spans
+}
+
 // ───────────────────────────── 布局 ─────────────────────────────
 
 impl NfcApp {
@@ -1054,16 +1093,18 @@ impl NfcApp {
             });
     }
 
-    /// 自绘标题栏：左 logo + 设备下拉 + 工具菜单，右侧为应用名 / 设置 /
-    /// 主题切换 / 最小化 / 关闭（R2 无边框自绘）。
+    /// 自绘标题栏：左 logo + 应用名 + 设备下拉/状态胶囊 + 工具菜单，
+    /// 右侧为主题切换 / 设置 / 最小化 / 关闭（R2 无边框自绘）。
     ///
-    /// 无边框窗口原生不可拖动，故在此区域叠加一个拖拽交互：
-    /// `Sense::drag()` 只响应「按下并移动」的手势、不拦截点击，
-    /// 标题栏里的按钮 / 下拉仍能正常点击。
+    /// 无边框窗口原生不可拖动，故把「可点击控件之外」的空白区间做成拖拽区。
+    /// 拖拽区**绝不能覆盖按钮**：egui 命中测试会把最上层的纯拖拽控件当成
+    /// 按下目标，按钮会收不到点击（详见 `title_bar_drag_spans`）。
     fn title_bar(&mut self, ui: &mut Ui) {
         let paint = self.paint();
-        let title_bar_rect = ui.available_rect_before_wrap();
-        Frame::NONE
+        // 可点击控件的位置：拖拽区只在这些矩形之外生成。
+        // 新增标题栏控件时必须登记，否则会被拖拽区盖住、点不动。
+        let mut blockers: Vec<egui::Rect> = Vec::new();
+        let bar = Frame::NONE
             .fill(paint.color(paint.toolbar))
             .inner_margin(egui::Margin::symmetric(10, 6))
             .show(ui, |ui| {
@@ -1079,55 +1120,61 @@ impl NfcApp {
                             env!("APP_VERSION"),
                             env!("BUILDER")
                         ));
-                    self.device_combo(ui);
+                    blockers.push(self.device_combo(ui).interact_rect);
                     self.device_status_chip(ui);
-                    self.tools_button(ui);
+                    blockers.push(self.tools_button(ui).interact_rect);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui
+                        let close = ui
                             .add_sized(
                                 [32.0, 24.0],
                                 egui::Button::new(RichText::new("×").size(14.0)),
                             )
-                            .on_hover_text(t("html_close"))
-                            .clicked()
-                        {
+                            .on_hover_text(t("html_close"));
+                        blockers.push(close.interact_rect);
+                        if close.clicked() {
                             self.close_requested = true;
                         }
-                        if ui
+                        let minimize = ui
                             .add_sized(
                                 [32.0, 24.0],
                                 egui::Button::new(RichText::new("–").size(14.0)),
                             )
-                            .on_hover_text(t("html_minimize"))
-                            .clicked()
-                        {
+                            .on_hover_text(t("html_minimize"));
+                        blockers.push(minimize.interact_rect);
+                        if minimize.clicked() {
                             ui.ctx()
                                 .send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                         }
-                        self.theme_toggle_button(ui);
+                        blockers.push(self.theme_toggle_button(ui).interact_rect);
                         // S16：设置只保留标题栏一个入口，工具菜单不再重复挂。
-                        if ui.button(RichText::new(t("html_settings"))).clicked() {
+                        let settings = ui.button(RichText::new(t("html_settings")));
+                        blockers.push(settings.interact_rect);
+                        if settings.clicked() {
                             self.exec("open-settings-window", None);
                         }
                     });
                 });
-            });
-        // 叠加拖拽交互：按下左键并移动即可拖动窗口。
-        let drag = ui.interact(
-            title_bar_rect,
-            egui::Id::new("title_bar_drag"),
-            Sense::drag(),
-        );
-        if drag.drag_started() {
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            })
+            .response
+            .rect;
+        // `CLICK | DRAG` 不带 `FOCUSABLE`，不会给空白标题栏制造键盘焦点。
+        for (i, span) in title_bar_drag_spans(bar, &blockers).into_iter().enumerate() {
+            let drag = ui.interact(
+                span,
+                ui.id().with(("title_bar_drag", i)),
+                Sense::CLICK | Sense::DRAG,
+            );
+            if drag.drag_started_by(egui::PointerButton::Primary) {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
         }
     }
 
     /// 标题栏主题切换钮：自绘小圆点，深 = 实心、浅 = 空心、系统 = 半实心。
     ///
     /// 用 `Painter` 画而非 `Button`：三种态里一种是「半个圆」，表情域字符
-    /// （如 ☾/◐）跨平台渲染不稳定，自绘最稳。
-    fn theme_toggle_button(&mut self, ui: &mut Ui) {
+    /// （如 ☾/◐）跨平台渲染不稳定，自绘最稳。返回响应供标题栏登记可点击区。
+    fn theme_toggle_button(&mut self, ui: &mut Ui) -> egui::Response {
         let paint = self.paint();
         let mode = self.theme_mode;
         // 悬停文案带上当前模式名，点之前就知道会切到哪
@@ -1158,9 +1205,11 @@ impl NfcApp {
                 painter.circle_stroke(c, 7.0, egui::Stroke::new(1.5, fg));
             }
         }
-        if resp.on_hover_text(tip).clicked() {
+        let resp = resp.on_hover_text(tip);
+        if resp.clicked() {
             self.cycle_theme();
         }
+        resp
     }
 
     /// 主题三态循环：深 → 浅 → 系统 → 深（标题栏小圆钮用）。
@@ -1172,46 +1221,49 @@ impl NfcApp {
         };
     }
 
-    /// 设备下拉。R5 连接中禁用。
-    fn device_combo(&mut self, ui: &mut Ui) {
+    /// 设备下拉。R5 连接中禁用。返回按钮响应，供标题栏登记可点击区。
+    fn device_combo(&mut self, ui: &mut Ui) -> egui::Response {
         // ComboBox 的闭包借用 `self` 时，`self.state` 已被不可变借用，
         // 故先把要用的数据取到局部变量。
         let devices = self.state.device_list.clone();
         let current = self.state.current_device.clone();
         let mut picked: Option<String> = None;
         // R5：连接中禁用整个下拉（不只是清空列表）。
-        // 用 `add_enabled_ui` 而非 `add_enabled`：前者的闭包返回 `()`，
-        // 后者要求闭包本身是一个 `Widget`——`ComboBox::show_ui` 返回的是
-        // `InnerResponse`，两者不兼容。
-        ui.add_enabled_ui(!self.connecting_now(), |ui| {
-            egui::ComboBox::from_id_salt("usb-port")
-                .width(220.0)
-                .selected_text(
-                    current
-                        .as_deref()
-                        .map(|d| d.replace(DEVICE_PREFIX, ""))
-                        .filter(|s| !s.is_empty() && s != DEVICE_NONE)
-                        .unwrap_or_else(|| t("html_choose_device")),
-                )
-                .show_ui(ui, |ui| {
-                    for dev in &devices {
-                        // 对标 index.js:79 的
-                        // `v.replace(mainProcess.devicePrefix, "")`
-                        // ——是**子串**替换而非前缀剥离。
-                        let label = dev.replace(DEVICE_PREFIX, "");
-                        if ui
-                            .selectable_label(current.as_deref() == Some(dev.as_str()), label)
-                            .clicked()
-                        {
-                            picked = Some(dev.clone());
+        // 用 `add_enabled_ui` 而非 `add_enabled`：后者要求闭包本身是一个
+        // `Widget`——`ComboBox::show_ui` 返回的是 `InnerResponse`，两者不兼容。
+        let resp = ui
+            .add_enabled_ui(!self.connecting_now(), |ui| {
+                egui::ComboBox::from_id_salt("usb-port")
+                    .width(220.0)
+                    .selected_text(
+                        current
+                            .as_deref()
+                            .map(|d| d.replace(DEVICE_PREFIX, ""))
+                            .filter(|s| !s.is_empty() && s != DEVICE_NONE)
+                            .unwrap_or_else(|| t("html_choose_device")),
+                    )
+                    .show_ui(ui, |ui| {
+                        for dev in &devices {
+                            // 对标 index.js:79 的
+                            // `v.replace(mainProcess.devicePrefix, "")`
+                            // ——是**子串**替换而非前缀剥离。
+                            let label = dev.replace(DEVICE_PREFIX, "");
+                            if ui
+                                .selectable_label(current.as_deref() == Some(dev.as_str()), label)
+                                .clicked()
+                            {
+                                picked = Some(dev.clone());
+                            }
                         }
-                    }
-                });
-        });
+                    })
+                    .response
+            })
+            .inner;
         // 闭包结束后借用释放，才可再可变借用 self。
         if let Some(dev) = picked {
             self.exec("conn-usb-devices", Some(dev));
         }
+        resp
     }
 
     /// 工具按钮 + 下拉菜单（`index.html:25-36` 的 `.tools-list`）。
@@ -1225,7 +1277,9 @@ impl NfcApp {
     ///
     /// 用 `ComboBox` 承载而非自绘：它自带「点外面自动收起」，与原版
     /// `dropdown-menu` 的行为一致，省掉手写开关逻辑。
-    fn tools_button(&mut self, ui: &mut Ui) {
+    ///
+    /// 返回按钮响应，供标题栏登记可点击区。
+    fn tools_button(&mut self, ui: &mut Ui) -> egui::Response {
         /// 菜单项（action, i18n key）。S16：恢复原版 5 项；设置入口改由标题栏承担。
         const ITEMS: [(&str, &str); 5] = [
             ("open-history-keys", "html_edit_history_key"),
@@ -1244,7 +1298,8 @@ impl NfcApp {
                         self.exec(action, None);
                     }
                 }
-            });
+            })
+            .response
     }
 
     /// S16：设备状态胶囊。合并原来独立的设备状态条，避免“下拉 + 状态条”两处重复。
@@ -1737,5 +1792,38 @@ impl eframe::App for NfcApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.draw(ui);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rect(left: f32, right: f32) -> egui::Rect {
+        egui::Rect::from_min_max(egui::pos2(left, 0.0), egui::pos2(right, 30.0))
+    }
+
+    #[test]
+    fn drag_spans_without_blockers() {
+        let spans = title_bar_drag_spans(rect(0.0, 100.0), &[]);
+        assert_eq!(spans, vec![rect(0.0, 100.0)]);
+    }
+
+    #[test]
+    fn drag_spans_split_around_controls() {
+        let spans = title_bar_drag_spans(rect(0.0, 100.0), &[rect(10.0, 20.0), rect(30.0, 40.0)]);
+        assert_eq!(
+            spans,
+            vec![rect(0.0, 10.0), rect(20.0, 30.0), rect(40.0, 100.0)]
+        );
+    }
+
+    #[test]
+    fn drag_spans_merge_overlaps_and_clamp() {
+        let spans = title_bar_drag_spans(
+            rect(0.0, 100.0),
+            &[rect(-10.0, 20.0), rect(15.0, 35.0), rect(110.0, 130.0)],
+        );
+        assert_eq!(spans, vec![rect(35.0, 100.0)]);
     }
 }
