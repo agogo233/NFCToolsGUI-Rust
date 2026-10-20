@@ -153,6 +153,10 @@ impl PortScanner {
 
 /// 写 `libnfc.conf`。内容见 `Paths::libnfc_conf`，波特率恒 115200。
 pub fn write_nfc_config(paths: &Paths, device: &str) -> Result<(), DeviceError> {
+    if let Some(parent) = paths.nfc_config().parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| DeviceError::WriteConfig(e.to_string()))?;
+    }
     fs::write(paths.nfc_config(), Paths::libnfc_conf(device, DEVICE_SPEED))
         .map_err(|e| DeviceError::WriteConfig(e.to_string()))
 }
