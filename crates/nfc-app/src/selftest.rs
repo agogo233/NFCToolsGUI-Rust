@@ -54,7 +54,7 @@ pub fn run() -> eframe::Result {
         ("dictTest 预填首个未知扇区", c_dict_test_prefill),
         ("dictTest 无检测结果 → 禁用", c_dict_test_no_config),
         ("dictTest 确定 → 派发配置", c_dict_test_emit),
-        ("about 开源清单 10 项", c_about_open_source),
+        ("about 开源清单 18 项", c_about_open_source),
         ("面板开关互不干扰", c_panels_independent),
         ("面板取消后关闭", c_panel_closes_on_cancel),
         // ── S10 dump 三面板 ──
