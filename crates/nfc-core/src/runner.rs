@@ -323,6 +323,16 @@ impl NfcToolRunner {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
+        // Windows：release 主程序是 GUI 子系统，自身没有控制台；framework/bin 下的
+        // 工具是控制台程序。不指定该标志时，Windows 会为每个子进程新分配一个控制台
+        // 窗口，表现为点按钮时闪黑框。stdout/stderr 已重定向到管道，输出不受影响。
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+
         let child = cmd
             .spawn()
             .map_err(|e| ToolError::SpawnFailed(e.to_string()))?;
