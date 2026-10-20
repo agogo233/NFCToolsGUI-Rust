@@ -147,8 +147,43 @@ jobs:
           NFC_ORIG_DIR: ${{ github.workspace }}\${{ env.ORIG_CHECKOUT }}
         run: python tools\verify_parity.py
 
+      # ── 编译 C 工具（framework/bin） ─────────────────────────────────────
+      # compile.sh 支持 MINGW64，所需源码与 vendor 文件均在仓库内，
+      # 在 Windows runner 上装 MSYS2 即可产出 Windows PE 格式的 C 工具，
+      # 不需要用户本机跑 compile.sh。
+      - name: 安装 MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: >-
+            mingw-w64-x86_64-crt-git
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-make
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-zlib
+            mingw-w64-x86_64-autotools
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-xz
+            mingw-w64-x86_64-readline
+            mingw-w64-x86_64-headers-git
+
+      - name: 编译 C 工具 (compile.sh)
+        run: bash compile.sh
+        shell: bash
+
       - name: 发布构建
         run: cargo build --release --locked -p nfc-app
+
+      # 把 C 工具与字典拷进发布目录，随 exe 一起打包。
+      # app 定位工具的规则见 `runner::framework_bin`：exe 旁的 framework/bin。
+      - name: 复制工具到发布目录
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force target/release/framework/bin | Out-Null
+          Copy-Item -Recurse -Force framework/bin/* target/release/framework/bin/
+          Copy-Item -Force dict.dic target/release/dict.dic
+          Write-Host "工具目录内容:"
+          Get-ChildItem target/release/framework/bin | Select-Object Name, Length | Format-Table
 
       - name: 校验 PE 子系统是 GUI（不该闪黑框）
         shell: pwsh
@@ -159,7 +194,7 @@ jobs:
           $pe = [BitConverter]::ToInt32($b, 0x3C)
           $sub = [BitConverter]::ToUInt16($b, $pe + 0x5C)
           # 2 = IMAGE_SUBSYSTEM_WINDOWS_GUI；3 = CONSOLE（会双击闪黑框）
-          if ($sub -ne 2) { throw "Subsystem=$sub，应为 2(GUI)" }
+          if ($sub -ne 2) { throw "Subsystem=$sub，应为 2(gui)" }
           Write-Host "ok PE Subsystem=$sub (GUI)"
 
       - name: 产出 exe 体积
@@ -169,16 +204,22 @@ jobs:
           Write-Host "nfc-app.exe = $mb MB"
 
       - name: 确认产物
+        shell: pwsh
         run: |
           $exe = "target\release\nfc-app.exe"
           if (-not (Test-Path $exe)) { throw "未找到 $exe" }
           "{0:N1} MB" -f ((Get-Item $exe).Length / 1MB) | Write-Host
-          # framework/bin 不在本仓库（gitignore），由用户的 compile.sh 生成。
-          # 程序启动时会有红色引导条说明这件事，不会静默失败。
+          $tools = Get-ChildItem target/release/framework/bin
+          if ($tools.Count -eq 0) { throw "framework/bin 为空，compile.sh 未产出工具" }
+          Write-Host "C 工具 ($($tools.Count) 个):"
+          $tools | ForEach-Object { Write-Host "  $($_.Name)" }
 
       - name: 上传可执行文件
         uses: actions/upload-artifact@v4
         with:
           name: nfctoolsgui-win-x64
-          path: target/release/nfc-app.exe
+          path: |
+            target/release/nfc-app.exe
+            target/release/framework/bin/*
+            target/release/dict.dic
           retention-days: 30

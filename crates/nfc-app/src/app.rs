@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use egui::{Align, Frame, Layout, RichText, ScrollArea, Ui};
+use egui::{Align, Frame, Layout, RichText, ScrollArea, Sense, Ui};
 
 use nfc_core::engine::{Action, Engine};
 use nfc_core::i18n::t;
@@ -1029,8 +1029,13 @@ impl NfcApp {
     }
 
     /// 自绘标题栏：左设备下拉、中工具菜单、右最小化/关闭（R2 无边框自绘）。
+    ///
+    /// 无边框窗口原生不可拖动，故在此区域叠加一个拖拽交互：
+    /// `Sense::drag()` 只响应「按下并移动」的手势、不拦截点击，
+    /// 标题栏里的按钮 / 下拉仍能正常点击。
     fn title_bar(&mut self, ui: &mut Ui) {
         let paint = self.paint();
+        let title_bar_rect = ui.available_rect_before_wrap();
         Frame::NONE
             .fill(paint.color(paint.toolbar))
             .inner_margin(egui::Margin::symmetric(10, 6))
@@ -1057,6 +1062,15 @@ impl NfcApp {
                     });
                 });
             });
+        // 叠加拖拽交互：按下左键并移动即可拖动窗口。
+        let drag = ui.interact(
+            title_bar_rect,
+            egui::Id::new("title_bar_drag"),
+            Sense::drag(),
+        );
+        if drag.drag_started() {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        }
     }
 
     /// 设备下拉。R5 连接中禁用。

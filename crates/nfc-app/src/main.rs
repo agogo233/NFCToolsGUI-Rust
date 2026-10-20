@@ -137,7 +137,14 @@ fn setup_fonts(ctx: &egui::Context) {
             .families
             .entry(egui::FontFamily::Proportional)
             .or_default()
-            .insert(0, name);
+            .insert(0, name.clone());
+        // 日志区强制 Monospace（SourceCodePro 不含 CJK 字形），
+        // 必须把 CJK 字体也追加到 Monospace 家族，否则中文回落时仍显方块。
+        fonts
+            .families
+            .entry(egui::FontFamily::Monospace)
+            .or_default()
+            .push(name);
     }
 
     ctx.set_fonts(fonts);
