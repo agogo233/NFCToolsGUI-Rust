@@ -4,10 +4,11 @@
 //! (prefers-color-scheme: dark)` 对应 `dark()`）；圆角/字号/间距来自
 //! `--radius-*` / `--fs-*` / `--space-*`。
 //!
-//! 范围：tokens.css 有 38 个 `--color-*`，本模块建模其中 33 个。
-//! 未建模 8 类：原生滚动条（`--color-scrollbar*` ×4）、焦点环
-//! （`--color-focus-ring`）、投影（`--shadow-*` ×3）——eframe/egui 不暴露
-//! 原生滚动条样式。缺口登记见 docs/02 §6.3。
+//! 范围：tokens.css 有 39 个 `--color-*`，本模块建模其中 34 个。
+//! 未建模 5 个：原生滚动条（`--color-scrollbar*` ×4）、焦点环
+//! （`--color-focus-ring`）——eframe/egui 不暴露原生滚动条样式。
+//! 另有投影 `--shadow-*`（3 个，非 `--color-*`）亦未建模，egui 用 `Shadow` 表达。
+//! 缺口登记见 docs/02 §6.3。
 //! 设备状态色来自原版 JS 状态条（见 docs/01 §7.3），不在 tokens.css 内。
 
 /// RGB 颜色，不透明。
@@ -85,6 +86,8 @@ pub struct Theme {
     pub console_bg: Rgb,
     pub console_fg: Rgb,
     pub danger: Rgb,
+    /// 危险按钮填充色（`--color-danger-strong`，明暗同值）。
+    pub danger_strong: Rgb,
     pub tooltip_bg: Rgb,
     pub tooltip_border: Rgb,
     pub tooltip_fg: Rgb,
@@ -123,6 +126,7 @@ pub fn light() -> Theme {
         console_bg: Rgb::new(0x15, 0x17, 0x28),
         console_fg: Rgb::new(0x54, 0xad, 0x6c),
         danger: Rgb::new(0xeb, 0x71, 0x71),
+        danger_strong: Rgb::new(0xc0, 0x39, 0x2b),
         tooltip_bg: Rgb::new(0x27, 0x28, 0x2d),
         tooltip_border: Rgb::new(0xff, 0xff, 0xff),
         tooltip_fg: Rgb::new(0xff, 0xff, 0xff),
@@ -162,6 +166,7 @@ pub fn dark() -> Theme {
         console_bg: Rgb::new(0x15, 0x17, 0x28),
         console_fg: Rgb::new(0x54, 0xad, 0x6c),
         danger: Rgb::new(0xeb, 0x71, 0x71),
+        danger_strong: Rgb::new(0xc0, 0x39, 0x2b),
         tooltip_bg: Rgb::new(0x29, 0x3b, 0x40),
         tooltip_border: Rgb::new(0x1e, 0x1f, 0x22),
         tooltip_fg: Rgb::new(0xcb, 0xcd, 0xce),
@@ -226,6 +231,7 @@ mod tests {
         assert_eq!(t.console_bg.to_hex(), "#151728");
         assert_eq!(t.console_fg.to_hex(), "#54ad6c");
         assert_eq!(t.danger.to_hex(), "#eb7171");
+        assert_eq!(t.danger_strong.to_hex(), "#c0392b");
         assert_eq!(t.tooltip_bg.to_hex(), "#27282d");
         assert_eq!(t.tooltip_border.to_hex(), "#ffffff");
         assert_eq!(t.tooltip_fg.to_hex(), "#ffffff");
@@ -264,6 +270,7 @@ mod tests {
         assert_eq!(t.console_bg.to_hex(), "#151728");
         assert_eq!(t.console_fg.to_hex(), "#54ad6c");
         assert_eq!(t.danger.to_hex(), "#eb7171");
+        assert_eq!(t.danger_strong.to_hex(), "#c0392b");
         assert_eq!(t.tooltip_bg.to_hex(), "#293b40");
         assert_eq!(t.tooltip_border.to_hex(), "#1e1f22");
         assert_eq!(t.tooltip_fg.to_hex(), "#cbcdce");
@@ -277,7 +284,7 @@ mod tests {
 
     #[test]
     fn tokens_identical_across_themes() {
-        // tokens.css 中明暗两态取同一值的 6 个 token
+        // tokens.css 中明暗两态取同一值的 7 个 token
         let (l, d) = (light(), dark());
         assert_eq!(l.primary_hover, d.primary_hover);
         assert_eq!(l.text_inverse, d.text_inverse);
@@ -285,6 +292,7 @@ mod tests {
         assert_eq!(l.console_bg, d.console_bg);
         assert_eq!(l.console_fg, d.console_fg);
         assert_eq!(l.danger, d.danger);
+        assert_eq!(l.danger_strong, d.danger_strong);
     }
 
     #[test]

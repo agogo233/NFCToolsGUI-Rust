@@ -1,4 +1,4 @@
-//! 把 `nfc_core::theme::Theme`（38 个 CSS token 里的 33 个）桥接成 egui `Visuals`。
+//! 把 `nfc_core::theme::Theme`（39 个 `--color-*` token 里的 34 个）桥接成 egui `Visuals`。
 //!
 //! 原版用 CSS 变量驱动，egui 没有等价物，故手工映射。刻意不调
 //! `Visuals::dark()`/`light()` 的全量覆盖，只改能被 CSS 变量直接对应的项，

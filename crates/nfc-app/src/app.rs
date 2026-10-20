@@ -80,6 +80,8 @@ pub struct NfcApp {
     pub state: AppState,
     /// 引导条（`(文案, [(action, 按钮文案)])`），`None` 为隐藏。
     pub guidance: Option<(String, Vec<(&'static str, String)>)>,
+    /// S15：冷启动引导已展示过（一次性，避免每帧刷屏 / 连接后反复弹）。
+    pub cold_guided: bool,
     /// 锁滚动（`index.js:3` `isLockScroll`）。
     pub lock_scroll: bool,
     /// 任务计时器已启动（`index.js:4` `isTimerRunning`）。
@@ -153,6 +155,7 @@ impl NfcApp {
         Self {
             state,
             guidance: None,
+            cold_guided: false,
             lock_scroll: false,
             timer_running: false,
             timer_second: 0,
@@ -546,6 +549,9 @@ impl NfcApp {
         // 主题三态每帧解析一次：S9 settings 面板可切，且 System 模式要跟
         // 随系统主题变化（用户在系统设置里改深浅色时立即生效）。
         self.sync_theme(ctx);
+
+        // S15：冷启动引导（未连接设备时出现一次「先选设备」）
+        self.maybe_cold_start_guidance();
 
         // 面板在主窗口之后画，保证模态浮在最上层
         panels::show(ctx, self);
@@ -1038,7 +1044,8 @@ impl NfcApp {
             });
     }
 
-    /// 自绘标题栏：左设备下拉、中工具菜单、右最小化/关闭（R2 无边框自绘）。
+    /// 自绘标题栏：左 logo + 设备下拉 + 工具菜单，右侧为应用名 / 设置 /
+    /// 主题切换 / 最小化 / 关闭（R2 无边框自绘）。
     ///
     /// 无边框窗口原生不可拖动，故在此区域叠加一个拖拽交互：
     /// `Sense::drag()` 只响应「按下并移动」的手势、不拦截点击，
@@ -1059,20 +1066,32 @@ impl NfcApp {
                     self.tools_button(ui);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui
-                            .button(RichText::new("✕").size(14.0))
+                            .button(RichText::new("×").size(14.0))
                             .on_hover_text(t("html_close"))
                             .clicked()
                         {
                             self.close_requested = true;
                         }
                         if ui
-                            .button(RichText::new("─").size(14.0))
+                            .button(RichText::new("–").size(14.0))
                             .on_hover_text(t("html_minimize"))
                             .clicked()
                         {
                             ui.ctx()
                                 .send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                         }
+                        self.theme_toggle_button(ui);
+                        // 设置入口：对标原版 index.html:38-40 标题栏齿轮按钮——
+                        // 原版该入口存在，曾被收进工具菜单，此处恢复到标题栏。
+                        if ui
+                            .button(RichText::new(t("html_settings")))
+                            .on_hover_text(t("html_settings"))
+                            .clicked()
+                        {
+                            self.exec("open-settings-window", None);
+                        }
+                        // 应用名（对标原版 #title 的粗体大字）
+                        ui.label(RichText::new(t("app_name")).strong().size(15.0));
                     });
                 });
             });
@@ -1085,6 +1104,55 @@ impl NfcApp {
         if drag.drag_started() {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
         }
+    }
+
+    /// 标题栏主题切换钮：自绘小圆点，深 = 实心、浅 = 空心、系统 = 半实心。
+    ///
+    /// 用 `Painter` 画而非 `Button`：三种态里一种是「半个圆」，表情域字符
+    /// （如 ☾/◐）跨平台渲染不稳定，自绘最稳。
+    fn theme_toggle_button(&mut self, ui: &mut Ui) {
+        let paint = self.paint();
+        let mode = self.theme_mode;
+        // 悬停文案带上当前模式名，点之前就知道会切到哪
+        let mode_key = match mode {
+            ThemeMode::Dark => "html_toggle_dark_mode",
+            ThemeMode::Light => "html_toggle_light_mode",
+            ThemeMode::System => "html_follow_system_mode",
+        };
+        let tip = format!("{}（{}）", t("html_switch_theme"), t(mode_key));
+        let (rect, resp) = ui.allocate_exact_size(egui::vec2(24.0, 20.0), egui::Sense::click());
+        let c = rect.center();
+        let fg = paint.color(paint.text);
+        let painter = ui.painter();
+        match mode {
+            ThemeMode::Dark => {
+                painter.circle_filled(c, 7.0, fg);
+            }
+            ThemeMode::Light => {
+                painter.circle_stroke(c, 7.0, egui::Stroke::new(1.5, fg));
+            }
+            ThemeMode::System => {
+                // 左半实心 + 全圈描边，示意「跟随」
+                let left = egui::Rect::from_min_size(
+                    rect.min,
+                    egui::vec2(rect.width() / 2.0, rect.height()),
+                );
+                painter.with_clip_rect(left).circle_filled(c, 7.0, fg);
+                painter.circle_stroke(c, 7.0, egui::Stroke::new(1.5, fg));
+            }
+        }
+        if resp.on_hover_text(tip).clicked() {
+            self.cycle_theme();
+        }
+    }
+
+    /// 主题三态循环：深 → 浅 → 系统 → 深（标题栏小圆钮用）。
+    pub fn cycle_theme(&mut self) {
+        self.theme_mode = match self.theme_mode {
+            ThemeMode::Dark => ThemeMode::Light,
+            ThemeMode::Light => ThemeMode::System,
+            ThemeMode::System => ThemeMode::Dark,
+        };
     }
 
     /// 设备下拉。R5 连接中禁用。
@@ -1153,8 +1221,9 @@ impl NfcApp {
             ("open-settings-window", "html_settings"),
         ];
 
+        // S15：文字 + ComboBox 自带箭头，替掉表情符号 🛠（跨平台渲染漂移）
         egui::ComboBox::from_id_salt("tools-menu")
-            .selected_text(RichText::new("🛠").size(15.0))
+            .selected_text(RichText::new(t("html_tools")))
             .show_ui(ui, |ui| {
                 for (action, key) in ITEMS {
                     if ui.selectable_label(false, t(key)).clicked() {
@@ -1179,9 +1248,33 @@ impl NfcApp {
             DeviceState::Failed => t("html_device_failed"),
         };
         ui.horizontal(|ui| {
-            ui.colored_label(dot, "●");
+            // 状态点压到 10px：原版 CSS 为 8×8，egui 只能随字号缩放
+            ui.colored_label(dot, RichText::new("●").size(10.0));
             ui.label(text);
         });
+    }
+
+    /// S15：冷启动引导。未连接设备时展示一次「请先选择设备并连接」+
+    /// 「刷新设备列表」按钮；点掉按钮或设备连上后即收起，且不会重复弹出。
+    pub fn maybe_cold_start_guidance(&mut self) {
+        let none = matches!(self.state.device_state, DeviceState::None);
+        // 冷启动引导的唯一标记：按钮动作是 `scan-usb-devices`
+        let is_cold_hint = self
+            .guidance
+            .as_ref()
+            .is_some_and(|(_, btns)| btns.iter().any(|(a, _)| *a == "scan-usb-devices"));
+        if is_cold_hint && !none {
+            self.guidance = None;
+            self.cold_guided = true;
+            return;
+        }
+        if none && !self.cold_guided {
+            self.cold_guided = true;
+            self.guidance = Some((
+                t("html_guidance_connect_first"),
+                vec![("scan-usb-devices", t("html_refresh_device_list"))],
+            ));
+        }
     }
 
     /// 引导条（`index.js:52-63`）。点击按钮后隐藏。
@@ -1208,60 +1301,165 @@ impl NfcApp {
 
     /// 三列按钮区（`index.html:73-95`）：读卡 / 破解 / 写卡。
     ///
-    /// 每项是 (action 名, 文案, 是否主/危按钮)。文案走 i18n，故为 `String`。
+    /// 每项是 (action 名, 文案, 样式, 悬停说明 key)。文案走 i18n，故为 `String`。
+    /// 样式与尺寸逐字对标 `index.css` 的 `.main-button` / `.primary` / `.danger`：
+    /// 普通 30px 高 13 号字浅灰底；主操作 40px 高 15 号字主色底白字加粗；
+    /// 危险操作深红底白字。写卡列按原版插入 `UFUID` 分组小标题。
     fn button_area(&mut self, ui: &mut Ui) {
-        type Item<'a> = (&'a str, String, bool);
+        /// 列内元素：按钮或分组小标题（`index.css` 的 `.group-divider`）。
+        enum Item<'a> {
+            Btn(&'a str, String, BtnStyle, &'a str),
+            Group(&'a str),
+        }
+        /// 按钮样式档位（对标原版三档）。
+        #[derive(Clone, Copy, PartialEq)]
+        enum BtnStyle {
+            Normal,
+            Primary,
+            Danger,
+        }
+
         let cols: [(String, Vec<Item<'_>>); 3] = [
             (
                 t("html_read_area"),
                 vec![
-                    ("read-IC", t("html_read_card"), true),
-                    (
+                    Item::Btn(
+                        "read-IC",
+                        t("html_read_card"),
+                        BtnStyle::Primary,
+                        "html_tip_read_ic",
+                    ),
+                    Item::Btn(
                         "input-keys-read-IC",
                         t("html_read_card_with_known_key"),
-                        false,
+                        BtnStyle::Normal,
+                        "html_tip_read_known_key",
                     ),
-                    ("detect-card-type", t("html_detect_card"), false),
+                    Item::Btn(
+                        "detect-card-type",
+                        t("html_detect_card"),
+                        BtnStyle::Normal,
+                        "html_tip_detect_card",
+                    ),
                 ],
             ),
             (
                 t("html_crack_area"),
                 vec![
-                    ("hard-nested", t("html_hard_nested"), false),
-                    ("dict-test", t("html_test_dictionary"), false),
+                    Item::Btn(
+                        "hard-nested",
+                        t("html_hard_nested"),
+                        BtnStyle::Normal,
+                        "html_tip_hard_nested",
+                    ),
+                    Item::Btn(
+                        "dict-test",
+                        t("html_test_dictionary"),
+                        BtnStyle::Normal,
+                        "html_tip_dict_test",
+                    ),
                 ],
             ),
             (
                 t("html_write_area"),
                 vec![
-                    // 写卡列：入口按钮对齐上游 index.html（open-phw 插在写 UFUID 与
-                    // 锁定之间）；只有 lock-ufuid 带 danger，其余都是普通按钮。
-                    ("write-IC", t("html_write_card"), false),
-                    ("format-card", t("html_format_card"), false),
-                    ("write-ufuid-uid", t("html_write_ufuid_uid"), false),
-                    ("open-phw-window", t("html_phw_open"), false),
-                    ("lock-ufuid", t("html_lock_ufuid"), true),
+                    Item::Btn(
+                        "write-IC",
+                        t("html_write_card"),
+                        BtnStyle::Normal,
+                        "html_tip_write_ic",
+                    ),
+                    Item::Btn(
+                        "format-card",
+                        t("html_format_card"),
+                        BtnStyle::Normal,
+                        "html_tip_format_card",
+                    ),
+                    Item::Group("html_ufuid_group"),
+                    Item::Btn(
+                        "write-ufuid-uid",
+                        t("html_write_ufuid_uid"),
+                        BtnStyle::Normal,
+                        "html_tip_write_ufuid_uid",
+                    ),
+                    Item::Btn(
+                        "open-phw-window",
+                        t("html_phw_open"),
+                        BtnStyle::Normal,
+                        "html_tip_phw",
+                    ),
+                    Item::Btn(
+                        "lock-ufuid",
+                        t("html_lock_ufuid"),
+                        BtnStyle::Danger,
+                        "html_tip_lock_ufuid",
+                    ),
                 ],
             ),
         ];
         let paint = self.paint();
-        let danger = paint.color(paint.danger);
+        let primary = paint.color(paint.primary);
+        let danger_fill = paint.color(paint.danger_strong);
+        let text_inverse = paint.color(paint.text_inverse);
+        let surface2 = paint.color(paint.surface2);
+        let text = paint.color(paint.text);
+        let text_secondary = paint.color(paint.text_secondary);
+        let divider = paint.color(paint.divider);
         ui.columns(cols.len(), |cols_ui| {
-            for (i, (title, btns)) in cols.iter().enumerate() {
-                cols_ui[i].label(RichText::new(title).strong());
-                for (action, label, is_danger) in btns {
-                    let text = if *is_danger {
-                        RichText::new(label).color(danger)
-                    } else {
-                        RichText::new(label)
-                    };
-                    let w = cols_ui[i].available_width();
-                    let r = cols_ui[i].add_sized([w, 28.0], egui::Button::new(text));
-                    if r.clicked() {
-                        self.exec(action, None);
+            for (i, (title, items)) in cols.iter().enumerate() {
+                let ui = &mut cols_ui[i];
+                ui.label(RichText::new(title).color(text_secondary).size(12.0));
+                ui.add_space(2.0);
+                for item in items {
+                    match item {
+                        Item::Btn(action, label, style, tip) => {
+                            let (fill, fg, h, fs, strong) = match style {
+                                BtnStyle::Primary => (primary, text_inverse, 40.0, 15.0, true),
+                                BtnStyle::Danger => (danger_fill, text_inverse, 30.0, 13.0, false),
+                                BtnStyle::Normal => (surface2, text, 30.0, 13.0, false),
+                            };
+                            // hover 底色由主题的 widgets.hovered 统一驱动
+                            let w = ui.available_width();
+                            // egui 的 `strong()` 无参（加粗是开关不是取值），故分档
+                            let mut label = RichText::new(label).color(fg).size(fs);
+                            if strong {
+                                label = label.strong();
+                            }
+                            let btn = egui::Button::new(label).fill(fill);
+                            let r = ui.add_sized([w, h], btn).on_hover_text(t(tip));
+                            if r.clicked() {
+                                self.exec(action, None);
+                            }
+                        }
+                        Item::Group(label) => {
+                            // 组名两侧各一条细线，对齐原版 .group-divider
+                            ui.add_space(6.0);
+                            let full = ui.max_rect();
+                            let r = ui
+                                .vertical_centered(|ui| {
+                                    ui.label(
+                                        RichText::new(t(label)).color(text_secondary).size(12.0),
+                                    );
+                                })
+                                .response
+                                .rect;
+                            let y = r.center().y;
+                            let stroke = egui::Stroke::new(1.0, divider);
+                            ui.painter().hline(
+                                egui::Rangef::new(full.left(), r.left() - 8.0),
+                                y,
+                                stroke,
+                            );
+                            ui.painter().hline(
+                                egui::Rangef::new(r.right() + 8.0, full.right()),
+                                y,
+                                stroke,
+                            );
+                            ui.add_space(2.0);
+                        }
                     }
+                    ui.add_space(4.0);
                 }
-                cols_ui[i].add_space(4.0);
             }
         });
     }
@@ -1285,33 +1483,69 @@ impl NfcApp {
                 for e in &self.state.events {
                     // 时间戳对每条事件重算即可：条数上限 30，代价可忽略。
                     let color = event_color(self.theme, e.kind);
-                    ui.label(RichText::new(format!("{} {}", event_stamp(), e.text)).color(color))
-                        .on_hover_text(&e.text);
+                    // S15：类型徽标随行显示（颜色之外多一层信号）
+                    let tag = match e.kind {
+                        EventKind::Key => t("html_event_key"),
+                        EventKind::Success => t("html_event_success"),
+                        EventKind::Error => t("html_event_error"),
+                    };
+                    ui.label(
+                        RichText::new(format!("[{tag}] {} {}", event_stamp(), e.text)).color(color),
+                    )
+                    .on_hover_text(&e.text);
                 }
             });
     }
 
     /// 左工具条 + 日志 + 进度条（`index.html:92-143`）。
+    ///
+    /// S15：窗口可缩放后，日志区高度改为吃掉剩余空间，不再写死 160。
+    /// 剩余空间在 `event_bar` 之后取——`event_bar` 自身有 30 行上限，
+    /// 高度不随日志量变化，故先画它再扣剩下的固定段（工具条 / 进度条 / 底栏）。
     fn log_area(&mut self, ui: &mut Ui) {
         let paint = self.paint();
         self.event_bar(ui);
+        // 工具条 ~30、进度条 ~24、底栏 ~32、段间间距 ~2；下限 80 保证可读。
+        let log_h = (ui.available_height() - 30.0 - 24.0 - 32.0 - 2.0).max(80.0);
         ui.horizontal(|ui| {
-            // 左工具条
+            // 左工具条：S15 起用文字按钮替掉 🔒/■/💾/🗑——
+            // 这四个字符是表情域符号，Windows 上渲染成彩色表情或方块，
+            // 与明暗主题都割裂；文字 + 悬停说明跨平台稳定。
             if ui
-                .button(if self.lock_scroll { "🔒" } else { "🔓" })
-                .on_hover_text(t("html_lock_scroll"))
+                .button(if self.lock_scroll {
+                    t("html_lock_scroll")
+                } else {
+                    t("html_unlock_scroll")
+                })
+                .on_hover_text(if self.lock_scroll {
+                    t("html_unlock_scroll")
+                } else {
+                    t("html_lock_scroll")
+                })
                 .clicked()
             {
                 self.lock_scroll = !self.lock_scroll;
             }
-            if ui.button("■").on_hover_text(t("html_stop_task")).clicked() {
+            if ui
+                .button(t("html_stop_task"))
+                .on_hover_text(t("html_stop_task"))
+                .clicked()
+            {
                 self.exec("cancel-task", None);
             }
-            if ui.button("💾").on_hover_text(t("html_save_log")).clicked() {
+            if ui
+                .button(t("html_save_log"))
+                .on_hover_text(t("html_save_log"))
+                .clicked()
+            {
                 let text = self.state.log_buffer.clone();
                 self.exec("save-log", Some(text));
             }
-            if ui.button("🗑").on_hover_text(t("html_clear_log")).clicked() {
+            if ui
+                .button(t("html_clear_log"))
+                .on_hover_text(t("html_clear_log"))
+                .clicked()
+            {
                 self.state.log_buffer.clear();
             }
         });
@@ -1322,7 +1556,7 @@ impl NfcApp {
         ScrollArea::vertical()
             .id_salt("log")
             .stick_to_bottom(!self.lock_scroll)
-            .max_height(160.0)
+            .max_height(log_h)
             .show(ui, |ui| {
                 ui.add(
                     egui::TextEdit::multiline(&mut editable)
@@ -1335,7 +1569,8 @@ impl NfcApp {
             self.state.log_buffer = editable;
         }
 
-        // 进度条（`index.js:126-133`）
+        // 进度条（`index.js:126-133`）。
+        // S15：常驻占位——`None` 时画 0% 空条也不隐藏，消除日志区高度跳变。
         match self.state.progress {
             Some(percent) => {
                 let frac = percent.clamp(0.0, 100.0) / 100.0;
@@ -1346,7 +1581,7 @@ impl NfcApp {
                 );
             }
             None => {
-                ui.add_space(4.0);
+                ui.add(egui::ProgressBar::new(0.0).fill(paint.color(paint.primary)));
             }
         }
     }
@@ -1370,7 +1605,8 @@ impl NfcApp {
                 dialogs_ui::pending_hint(ui, p.pending_text());
             }
             ui.separator();
-            let timer = self.timer_text().unwrap_or_else(|| t("html_timer"));
+            // S15：修未计时时 `timer_text()` 回退文案导致的「计时器 计时器」
+            let timer = self.timer_text().unwrap_or_else(|| "--:--:--".to_owned());
             ui.label(format!("{} {timer}", t("html_timer")));
             ui.separator();
             ui.label(format!(

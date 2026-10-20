@@ -48,6 +48,9 @@ const CJK_FONT_CANDIDATES: &[&str] = &[
 /// 原版窗口尺寸（`main.js` BrowserWindow）。
 const WIN_W: f32 = 1000.0;
 const WIN_H: f32 = 700.0;
+/// S15：可缩放后的最小尺寸（挡住「挤成一条」的极端尺寸）。
+const WIN_MIN_W: f32 = 820.0;
+const WIN_MIN_H: f32 = 640.0;
 
 fn main() -> eframe::Result {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -91,8 +94,9 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([WIN_W, WIN_H])
-            .with_min_inner_size([WIN_W, WIN_H])
-            .with_resizable(false)
+            // S15：允许缩放，内容随之弹性排布；下限挡住「挤成一条」的极端尺寸
+            .with_min_inner_size([WIN_MIN_W, WIN_MIN_H])
+            .with_resizable(true)
             .with_decorations(false) // R2：自绘标题栏
             .with_title("NFCToolsGUI")
             .with_icon(window_icon),

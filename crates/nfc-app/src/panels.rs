@@ -505,29 +505,33 @@ fn footer(ui: &mut Ui, primary_label: &str, primary_enabled: bool) -> (bool, boo
     (cancel, primary)
 }
 
-/// `settings.html`：三个主题按钮 + 取消。
+/// `settings.html`：三个主题模式单选 + 关闭。
+///
+/// S15：改为单选列表且**点选即生效**——主题切换属即时反馈型操作，
+/// 原版「选完再点取消/确定」反而多一步；关闭按钮也因此不再是「取消」
+/// （没有可取消的待定状态），改用「关闭」文案。
 fn settings(ui: &mut Ui, app: &mut NfcApp) -> bool {
     /// （按钮 i18n key, 模式），顺序即 `settings.html:13-15`。
-    const BTNS: [(&str, ThemeMode); 3] = [
+    const MODES: [(&str, ThemeMode); 3] = [
         ("html_toggle_dark_mode", ThemeMode::Dark),
         ("html_toggle_light_mode", ThemeMode::Light),
         ("html_follow_system_mode", ThemeMode::System),
     ];
 
-    for (key, mode) in BTNS {
+    for (key, mode) in MODES {
         let selected = app.theme_mode == mode;
-        let btn =
-            egui::Button::new(RichText::new(t(key)).strong()).min_size(egui::vec2(360.0, 34.0));
-        if ui.add_enabled(!selected, btn).clicked() {
+        let r = ui.add(egui::RadioButton::new(selected, t(key)));
+        if r.clicked() {
+            // 点选即换肤，不需要再点确定
             app.theme_mode = mode;
         }
+        ui.add_space(4.0);
     }
+
     ui.add_space(8.0);
-    // settings.html 的 final-button 里**只有取消**一项（`:17-19`），
-    // 故此处没有主按钮，只用一个取消收尾。
     ui.separator();
     ui.add_space(4.0);
-    if ui.button(t("dialog_button_cancel")).clicked() {
+    if ui.button(t("html_close")).clicked() {
         return false;
     }
     true
@@ -884,8 +888,36 @@ fn dump_editor(ui: &mut Ui, app: &mut NfcApp) -> bool {
         let mut dirty = false;
         ScrollArea::vertical().show(ui, |ui| {
             for (si, sector) in app.forms.editor.sectors.iter_mut().enumerate() {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(format!("{} {si}", t("html_sector"))).strong());
+                // 校验（`dumpEditor.js:98-118` 的 checkData）
+                let invalid = sector.len() != dump::BLOCKS_PER_SECTOR
+                    || sector
+                        .iter()
+                        .any(|l| l.chars().count() != dump::BLOCK_SIZE * 2);
+                // S15：非法扇区整块红框包裹（原版 styles.invalid 的做法），
+                // 替代行尾「!」——框住比一个感叹号更难看漏
+                let mut frame = egui::Frame::NONE
+                    .inner_margin(egui::Margin::symmetric(6, 4))
+                    .corner_radius(egui::CornerRadius::same(4));
+                if invalid {
+                    frame = frame.stroke(egui::Stroke::new(1.5, danger));
+                }
+                frame.show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        // 扇区号固定窄列，右对齐贴输入框
+                        ui.set_width(56.0);
+                        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                            ui.add_space(6.0);
+                            ui.label(
+                                RichText::new(format!("{}{si}", t("html_sector")))
+                                    .strong()
+                                    .color(if invalid {
+                                        danger
+                                    } else {
+                                        paint.color(paint.text)
+                                    }),
+                            );
+                        });
+                    });
                     // 把 4 行拼成带换行的单串，交给一个 multiline 输入
                     let mut text = sector.join("\n");
                     let resp = ui.add(
@@ -898,16 +930,8 @@ fn dump_editor(ui: &mut Ui, app: &mut NfcApp) -> bool {
                         dirty = true;
                         *sector = text.split('\n').map(str::to_owned).collect();
                     }
-                    // 校验不过就红框（`dumpEditor.js:98-118` 的 styles.invalid）
-                    if sector.len() != dump::BLOCKS_PER_SECTOR
-                        || sector
-                            .iter()
-                            .any(|l| l.chars().count() != dump::BLOCK_SIZE * 2)
-                    {
-                        ui.colored_label(danger, "!");
-                    }
                 });
-                ui.separator();
+                ui.add_space(4.0);
             }
         });
         if dirty {
@@ -998,6 +1022,9 @@ fn dump_comparator(ui: &mut Ui, app: &mut NfcApp) -> bool {
     ui.separator();
 
     // 比对区（`dumpComparator.js:99-113`）：逐扇区，A 行在上 B 行在下
+    //
+    // S15：改为 A/B 并排双列——原版逐块「A 一行 B 一行」上下堆叠，
+    // 每扇区 8 行；并排后每扇区 4 行，左右横着对照，滚动距离减半。
     if !app.forms.comparator.ready() {
         ui.vertical_centered(|ui| {
             ui.add_space(24.0);
@@ -1007,19 +1034,25 @@ fn dump_comparator(ui: &mut Ui, app: &mut NfcApp) -> bool {
     }
     let diffs = app.forms.comparator.diff();
     ScrollArea::vertical().show(ui, |ui| {
+        ui.columns(2, |cols| {
+            for (ci, tag) in ["A", "B"].into_iter().enumerate() {
+                cols[ci].label(
+                    RichText::new(tag)
+                        .strong()
+                        .color(paint.color(paint.primary)),
+                );
+            }
+        });
         for (si, (da, db)) in diffs.iter().enumerate() {
             ui.label(RichText::new(format!("{} {si}", t("html_sector"))).strong());
-            for r in 0..dump::BLOCKS_PER_SECTOR {
-                ui.horizontal(|ui| {
-                    ui.label("A: ");
-                    render_diff_row(ui, &da[r], mark, mark_fg);
-                });
-                ui.horizontal(|ui| {
-                    ui.label("B: ");
-                    render_diff_row(ui, &db[r], mark, mark_fg);
-                });
-                ui.separator();
-            }
+            ui.columns(2, |cols| {
+                for (ci, side) in [da, db].into_iter().enumerate() {
+                    let ui = &mut cols[ci];
+                    for r in 0..dump::BLOCKS_PER_SECTOR {
+                        render_diff_row(ui, &side[r], mark, mark_fg);
+                    }
+                }
+            });
             ui.add_space(4.0);
         }
     });

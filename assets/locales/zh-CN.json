@@ -174,5 +174,22 @@
     "indicator_writing_phw_data": "正在写数据扇区...",
     "log_msg_phw_read_uid": "读取卡号(读回当前卡数据)...",
     "log_msg_phw_read_back": "读回目标卡数据...",
-    "log_msg_phw_write_back": "写回数据扇区..."
+    "log_msg_phw_write_back": "写回数据扇区...",
+    "html_tip_read_ic": "自动尝试内置与已知密钥全量解卡, 结果保存为转储文件",
+    "html_tip_read_known_key": "用输入的已知密钥解卡",
+    "html_tip_detect_card": "检测卡片加密情况, 是 HardNested 与字典测试的前置步骤",
+    "html_tip_hard_nested": "用已知密钥解密目标扇区 (需先执行检测)",
+    "html_tip_dict_test": "用字典测试目标扇区密钥 (需先执行检测)",
+    "html_tip_write_ic": "把所选转储文件内容写入卡片",
+    "html_tip_format_card": "先读卡, 再按卡片自身内容重新格式化",
+    "html_tip_write_ufuid_uid": "从所选转储文件读取 0 块(UID), 写入 UFUID 卡",
+    "html_tip_lock_ufuid": "不可逆操作: 锁定后 0 块无法再修改",
+    "html_tip_phw": "手机/手环卡号复制工作流",
+    "html_ufuid_group": "UFUID",
+    "html_switch_theme": "切换主题",
+    "html_guidance_connect_first": "请先在上方选择设备并连接，然后再使用下方功能",
+    "html_refresh_device_list": "刷新设备列表",
+    "html_event_key": "密钥",
+    "html_event_success": "成功",
+    "html_event_error": "错误"
 }

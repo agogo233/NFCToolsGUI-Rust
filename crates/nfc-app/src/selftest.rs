@@ -30,6 +30,7 @@ pub fn run() -> eframe::Result {
         ("R5 连接中禁下拉", c_disable_dropdown_while_connecting),
         ("R3 空闲 cancel 清计时", c_idle_cancel_resets_timer),
         ("引导条按钮", c_guidance_buttons),
+        ("冷启动引导", c_cold_start_guidance),
         ("热插拔 500ms 轮询", c_hotplug_interval),
         ("dump 已保存 → 引导", c_dump_saved_guidance),
         // ── S11-7 挂起式保存框 ──
@@ -40,6 +41,7 @@ pub fn run() -> eframe::Result {
         ("5 个面板各自渲染一帧", c_panels_render),
         ("settings 三态主题", c_theme_mode_three_states),
         ("settings 主题解析到调色板", c_theme_resolve),
+        ("主题循环切换", c_theme_cycle),
         ("inputKeys 默认值 ffffffff…,", c_input_keys_default),
         ("inputKeys 确定 → -k 参数", c_input_keys_emit_keys),
         ("hardNested 预填检测结果", c_hard_nested_prefill),
@@ -189,7 +191,7 @@ fn c_three_columns() -> Result<(), String> {
     // 对照 renderer/html/index.html:69-87 的 class 属性逐条锁定：
     //   读卡列 3 个，其中 read-IC 带 `primary`
     //   破解列 2 个，无 primary / danger
-    //   写卡列 4 个，其中仅 lock-ufuid 带 `danger`
+    //   写卡列 5 个（含 S14 增量的 open-phw-window），其中仅 lock-ufuid 带 `danger`
     let expect: [(&[&str], &[&str]); 3] = [
         (
             &["read-IC", "input-keys-read-IC", "detect-card-type"],
@@ -197,12 +199,18 @@ fn c_three_columns() -> Result<(), String> {
         ),
         (&["hard-nested", "dict-test"], &[]),
         (
-            &["write-IC", "format-card", "write-ufuid-uid", "lock-ufuid"],
+            &[
+                "write-IC",
+                "format-card",
+                "write-ufuid-uid",
+                "open-phw-window",
+                "lock-ufuid",
+            ],
             &["lock-ufuid"],
         ),
     ];
     for (i, (actions, marked)) in expect.iter().enumerate() {
-        if actions.len() != [3usize, 2, 4][i] {
+        if actions.len() != [3usize, 2, 5][i] {
             return Err(format!("第 {i} 列按钮数 {} 不符", actions.len()));
         }
         for m in *marked {
@@ -437,6 +445,65 @@ fn c_theme_mode_three_states() -> Result<(), String> {
     // 默认跟随系统（Electron `nativeTheme.themeSource` 未设置时为 system）
     if ThemeMode::default() != ThemeMode::System {
         return Err("默认主题不是 System".into());
+    }
+    Ok(())
+}
+
+/// S15：标题栏主题切换钮的三态循环：深 → 浅 → 系统 → 深。
+fn c_theme_cycle() -> Result<(), String> {
+    let mut app = NfcApp::new(nfc_core::state::AppState::new());
+    app.theme_mode = ThemeMode::Dark;
+    for want in [ThemeMode::Light, ThemeMode::System, ThemeMode::Dark] {
+        app.cycle_theme();
+        if app.theme_mode != want {
+            return Err(format!("循环后落到 {:?}，应为 {:?}", app.theme_mode, want));
+        }
+    }
+    Ok(())
+}
+
+/// S15：冷启动引导——未连接设备时出现一次「先选设备」，且有一次性约束。
+fn c_cold_start_guidance() -> Result<(), String> {
+    use nfc_core::state::DeviceState;
+    let mut app = NfcApp::new(nfc_core::state::AppState::new());
+    app.maybe_cold_start_guidance();
+    let Some((text, buttons)) = app.guidance.clone() else {
+        return Err("未连接设备时引导未出现".into());
+    };
+    if !text.contains("设备") {
+        return Err(format!("引导文案异常: {text}"));
+    }
+    if buttons.len() != 1 || buttons[0].0 != "scan-usb-devices" {
+        return Err(format!("引导按钮异常: {buttons:?}"));
+    }
+    // 一次性：用户点掉后不再出现
+    app.guidance = None;
+    app.maybe_cold_start_guidance();
+    if app.guidance.is_some() {
+        return Err("引导重复出现".into());
+    }
+    // 已开始连接 / 已连接时不打扰
+    for st in [
+        DeviceState::Connecting,
+        DeviceState::Connected,
+        DeviceState::Failed,
+    ] {
+        let mut app2 = NfcApp::new(nfc_core::state::AppState::new());
+        app2.state.device_state = st;
+        app2.maybe_cold_start_guidance();
+        if app2.guidance.is_some() {
+            return Err(format!("{st:?} 状态下也弹了引导"));
+        }
+    }
+    // 展示后又连上设备：自动收起，不再挂着过期的「请先连接」
+    {
+        let mut app3 = NfcApp::new(nfc_core::state::AppState::new());
+        app3.maybe_cold_start_guidance();
+        app3.state.device_state = DeviceState::Connected;
+        app3.maybe_cold_start_guidance();
+        if app3.guidance.is_some() {
+            return Err("设备已连接但冷启动引导未收起".into());
+        }
     }
     Ok(())
 }

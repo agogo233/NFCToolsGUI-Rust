@@ -239,7 +239,7 @@ def d_align() -> None:
 # ---------------------------------------------------------------- H i18n
 def h_i18n() -> None:
     keys = json.loads(rd(REPO / "assets/locales/zh-CN.json"))
-    check(len(keys) == 176, "H zh-CN.json 176 key", f"实际 {len(keys)}")
+    check(len(keys) == 193, "H zh-CN.json 193 key", f"实际 {len(keys)}")
     # S8 新增的 3 个 settings 按钮文案（原版 settings.html 硬编码英文，无 i18n key，
     # 此处按 docs/01 §1.6 决策 #6 恢复入口时补齐）
     for k in ("html_toggle_dark_mode", "html_toggle_light_mode", "html_follow_system_mode"):
@@ -864,7 +864,7 @@ def s4_model() -> None:
     # 数 `("` 会漏。每项都以 `c_xxx,` 结尾。
     _vec = stf9[stf9.index("vec![") : stf9.index("];", stf9.index("vec!["))]
     n_cases = len(re.findall(r'\bc_[a-z0-9_]+\b', _vec))
-    check(n_cases == 73, "S9-S13 UI selftest 73 项（S8 13 + S9 15 + S10 14 + S11-1 5 + S11-2 19 + S11-7 3 + S13 4）", f"实际 {n_cases}")
+    check(n_cases == 75, "S9-S13 UI selftest 75 项（S8 13 + S9 15 + S10 14 + S11-1 5 + S11-2 19 + S11-7 3 + S13 4 + S15 2）", f"实际 {n_cases}")
 
     # ── S10 dump 三面板 ──────────────────────────────────────────
     de = rd(ORIG / "src/renderer/html/dumpEditor.html")
@@ -983,7 +983,7 @@ def s4_model() -> None:
     # selftest
     _vec2 = stf9[stf9.index("vec![") : stf9.index("];", stf9.index("vec!["))]
     n11 = len(re.findall(r"\bc_[a-z0-9_]+\b", _vec2))
-    check(n11 == 73, "S11-S13 UI selftest 73 项（含 S11-7 的 3 项与 S13 的 4 项）", f"实际 {n11}")
+    check(n11 == 75, "S11-S13 UI selftest 75 项（含 S11-7 的 3 项、S13 的 4 项与 S15 的 2 项）", f"实际 {n11}")
 
     # ── S11-2 系统文件对话框 + 写卡接线 ───────────────────────────
     dh = rd(APP / "src/dialogs_host.rs")
@@ -1385,8 +1385,11 @@ def s4_model() -> None:
     check("pub mod model;" in rd(CORE / "src/lib.rs"), "M lib.rs 导出 model")
     # S0-S3 回归：本次全量复查后固化
     th = rd(CORE / "src/theme.rs")
-    check("tokens.css 有 38 个 `--color-*`" in th, "R theme.rs 注明建模范围 33/38")
-    check("未建模 8 类" in th, "R theme.rs 列明未建模的 8 类 token")
+    check("tokens.css 有 39 个 `--color-*`" in th, "R theme.rs 注明建模范围 34/39")
+    tok = rd(ORIG / "src/renderer/css/tokens.css")
+    for css, hexval in (("--color-danger", "#eb7171"), ("--color-danger-strong", "#c0392b")):
+        check_orig(css in tok and hexval in tok, f"R theme 危险色对标原版 tokens.css {css}={hexval}")
+    check("未建模 5 个" in th, "R theme.rs 列明未建模的 5 个 token（4 滚动条 + 1 焦点环）")
     check("原生滚动条" in doc2 and "--color-scrollbar" in doc2, "R theme 缺口已登记 docs/02 §6.3")
     i18n_asset = rd_json(REPO / "assets/locales/zh-CN.json")
     orig_zh = rd_json(ORIG / "src/locales/zh-CN.json")
@@ -1405,7 +1408,17 @@ def s4_model() -> None:
     # S12 补的 2 个：framework/bin 缺失引导。原版没有启动自检，缺失只在
     # spawn 时抛 IO 错误（docs/02 §6.13）。
     S12_EXTRA = {"html_framework_bin_missing", "html_framework_bin_missing_short"}
-    LOCAL_EXTRA = S8_EXTRA | S11_EXTRA | S12_EXTRA
+    # S15 补的 6 个：标题栏主题切换钮、冷启动引导、事件条类型徽标。
+    # 原版均无对应 key（docs/02 §6.25）。
+    S15_EXTRA = {
+        "html_switch_theme",
+        "html_guidance_connect_first",
+        "html_refresh_device_list",
+        "html_event_key",
+        "html_event_success",
+        "html_event_error",
+    }
+    LOCAL_EXTRA = S8_EXTRA | S11_EXTRA | S12_EXTRA | S15_EXTRA
     # 原版对拍基线（ORIG_REF）漂移时上游会新增 key，对应本重写**没有**的功能/结构。
     # 搬运这些文案没有意义（没有代码会 t() 它们），故显式登记为「上游有、我们不做」。
     # 若将来真要做对应功能，把 key 从这里挪进 LOCAL_EXTRA 即可。
@@ -1416,23 +1429,13 @@ def s4_model() -> None:
         "html_theme_light",
         "html_theme_dark",
         "html_speed",
-        # ── 主窗按钮悬浮提示与分组标题：原版 6e1386a 起才有的 UI 结构 ──
-        "html_ufuid_group",
+        # ── 主窗按钮悬浮提示与分组标题：S15 搬回了 11 个（我们有的按钮 +
+        # UFUID 分组），其余属我们没有的 UI 结构 ──
         "html_device_group",
         "html_dump_group",
         "html_solving_group",
-        "html_tip_read_ic",
-        "html_tip_read_known_key",
-        "html_tip_detect_card",
-        "html_tip_hard_nested",
-        "html_tip_dict_test",
-        "html_tip_write_ic",
-        "html_tip_format_card",
-        "html_tip_write_ufuid_uid",
-        "html_tip_lock_ufuid",
         "html_tip_write_uid_input",
         "html_tip_dec_full_card",
-        "html_tip_phw",
         # ── 手动输入 UID 写 UFUID（dea7854）：我们只走 dump block0 ──
         "html_write_uid_input",
         "html_uid_input_title",
@@ -1487,17 +1490,18 @@ def s4_model() -> None:
         "log_msg_no_hard_nested_progress",
     }
     check_orig(set(i18n_asset) - LOCAL_EXTRA == set(orig_zh) - UPSTREAM_ONLY == set(orig_en) - UPSTREAM_ONLY,
-                "R i18n key 集除本地补的 8 个与上游独有的 68 个外完全一致",
+                "R i18n key 集除本地补的 14 个与上游独有的 57 个外完全一致",
                f"仅本项目 {set(i18n_asset)-set(orig_zh)-LOCAL_EXTRA} / "
                f"仅原版 {set(orig_zh)-set(i18n_asset)-UPSTREAM_ONLY}")
     check(S8_EXTRA <= set(i18n_asset), "R S8 补的 3 个 settings 按钮文案在表内")
     check(S11_EXTRA <= set(i18n_asset), "R S11 补的无进展兜底文案在表内")
+    check(S15_EXTRA <= set(i18n_asset), "R S15 补的 4 个 UI 文案在表内")
     check_orig(LOCAL_EXTRA.isdisjoint(orig_zh),
-          "R 本地补的 8 个 key 确认原版不存在")
+          "R 本地补的 14 个 key 确认原版不存在")
     check(UPSTREAM_ONLY.isdisjoint(set(i18n_asset)),
-           "R 上游独有的 68 个 key 确认我们没搬（搬了也没有代码 t() 它们）")
+           "R 上游独有的 57 个 key 确认我们没搬（搬了也没有代码 t() 它们）")
     check_orig(all(i18n_asset.get(k) == orig_zh.get(k) for k in set(i18n_asset) - LOCAL_EXTRA),
-          "R i18n 文案与原版逐条一致（除本地新增 8 个）")
+          "R i18n 文案与原版逐条一致（除本地新增 14 个）")
     check([k for k in i18n_asset if k.startswith("lod_")] != [], "R 原版拼写错误 key lod_* 原样保留")
     # 「以为在补东西、其实建了个新 key」：曾出现过 `html_license:`（多了个冒号），
     # 被测试当成「原版拼写错误」而保留下来。key 名以标点结尾一律可疑。
@@ -1505,7 +1509,7 @@ def s4_model() -> None:
           "R i18n key 名不得以标点结尾（疑似误建的新 key）",
           f"{[k for k in i18n_asset if k[-1:] in {':', '.', ',', ' ', '-', '_'}]}")
     # 本地补的 key 数量原本写死在 Rust 测试与此处两处，已漂移过一次。双向钉死。
-    check(len(LOCAL_EXTRA) == 8, "R 本地补的 i18n key 恰为 8 个", f"实际 {len(LOCAL_EXTRA)}")
+    check(len(LOCAL_EXTRA) == 14, "R 本地补的 i18n key 恰为 14 个", f"实际 {len(LOCAL_EXTRA)}")
     cd = rd(CORE / "src/command.rs")
     # rustfmt 会把字段拆成多行，故用 DOTALL 匹配整个结构体字面量
     specs = re.findall(

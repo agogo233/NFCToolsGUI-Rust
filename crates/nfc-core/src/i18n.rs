@@ -36,10 +36,10 @@ mod tests {
 
     /// 不断言绝对数量——那个数字在 Rust 测���与 verify_parity.py 里各写了一份，
     /// 已经漂移过一次（凭空的 `html_license:` 被当成「原版拼写错误」保留）。
-    /// 改为断言**构成**：本地补的 8 个必须都在，且不重名。
+    /// 改为断言**构成**：本地补的 14 个必须都在，且不重名。
     #[test]
-    fn zh_cn_has_the_eight_local_extras_and_no_dupes() {
-        const LOCAL: [&str; 8] = [
+    fn zh_cn_has_the_local_extras_and_no_dupes() {
+        const LOCAL: [&str; 14] = [
             "html_toggle_dark_mode",
             "html_toggle_light_mode",
             "html_follow_system_mode",
@@ -48,6 +48,13 @@ mod tests {
             "log_msg_nonces_empty_not_saved",
             "html_framework_bin_missing",
             "html_framework_bin_missing_short",
+            // S15 UI 体验优化新增（原版均无对应 key）
+            "html_switch_theme",
+            "html_guidance_connect_first",
+            "html_refresh_device_list",
+            "html_event_key",
+            "html_event_success",
+            "html_event_error",
         ];
         let t = table();
         for k in LOCAL {
