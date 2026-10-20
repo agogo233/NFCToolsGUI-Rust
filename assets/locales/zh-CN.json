@@ -191,5 +191,18 @@
     "html_refresh_device_list": "刷新设备列表",
     "html_event_key": "密钥",
     "html_event_success": "成功",
-    "html_event_error": "错误"
+    "html_event_error": "错误",
+    "html_console": "控制台",
+    "html_events": "事件",
+    "html_no_events": "暂无事件",
+    "html_expand": "展开",
+    "html_collapse": "收起",
+    "html_waiting_file": "等待文件选择…",
+    "html_workflow_group": "工作流",
+    "html_detect_summary": "检测结果",
+    "html_not_detected": "尚未检测",
+    "html_auto_run_hint": "勾选“自动执行”后，下方参数将被忽略",
+    "html_appearance": "外观",
+    "html_data_dir": "数据目录",
+    "html_tool_dir": "工具目录"
 }

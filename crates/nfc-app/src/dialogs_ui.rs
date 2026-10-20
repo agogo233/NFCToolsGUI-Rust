@@ -149,5 +149,9 @@ pub fn show(ctx: &Context, m: &ConfirmModal, danger_color: egui::Color32) -> Opt
 ///
 /// 没有它的话，用户点了「写卡」之后界面上毫无变化，容易以为程序卡死。
 pub fn pending_hint(ui: &mut Ui, text: &str) {
-    ui.colored_label(ui.visuals().warn_fg_color, format!("⏳ {text}"));
+    // S16：避免 `⏳` 在 Windows 上渲染成彩色表情，与主题割裂。
+    ui.colored_label(
+        ui.visuals().warn_fg_color,
+        format!("{} {text}", t("html_waiting_file")),
+    );
 }

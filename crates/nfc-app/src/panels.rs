@@ -13,7 +13,7 @@
 //!    面板收到 `config === undefined` → 显示红色提示 + 禁用全部输入
 //!    （`hardNested.html:80-89`、`dictTest.html:60-66`）。
 
-use egui::{Align, Context, Layout, RichText, ScrollArea, Ui};
+use egui::{Align, Context, CornerRadius, Layout, Margin, RichText, ScrollArea, Ui};
 
 use nfc_core::i18n::t;
 use nfc_core::model::dump::{self, Sector};
@@ -40,8 +40,8 @@ const SIZE_ABOUT: [f32; 2] = [600.0, 480.0];
 const SIZE_DUMP_EDITOR: [f32; 2] = [720.0, 640.0];
 const SIZE_DUMP_COMPARATOR: [f32; 2] = [760.0, 620.0];
 const SIZE_DUMP_HISTORY: [f32; 2] = [520.0, 560.0];
-/// 手机/手环面板（`phoneWristband.html` 400×360 档位）。
-const SIZE_PHW: [f32; 2] = [400.0, 360.0];
+/// 手机/手环面板。S16：原版 400×360 在加入滚动/步骤提示后偏小，调到 440×420。
+const SIZE_PHW: [f32; 2] = [440.0, 420.0];
 
 /// 面板标识。顺序即绘制顺序（决定叠放层级）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,6 +105,21 @@ impl Panel {
             Panel::DumpHistory => SIZE_DUMP_HISTORY,
             Panel::PhoneWristband => SIZE_PHW,
         }
+    }
+
+    /// S16：面板骨架是否允许用户拖拽调大小。
+    ///
+    /// 高频面板默认打开；设置 / 输入密钥 / 关于保持固定尺寸，避免误拖。
+    pub fn resizable(self) -> bool {
+        matches!(
+            self,
+            Self::HardNested
+                | Self::DictTest
+                | Self::DumpEditor
+                | Self::DumpComparator
+                | Self::DumpHistory
+                | Self::PhoneWristband
+        )
     }
 
     /// 该面板当前是否打开。
@@ -455,12 +470,25 @@ pub fn show(ctx: &Context, app: &mut NfcApp) {
         // egui 的 `.open(&mut open)` 只管标题栏的 ✕，两者都要认。
         let mut keep = true;
         let [w, h] = p.default_size();
-        egui::Window::new(t(p.title()))
-            .open(&mut open)
-            .resizable(false)
+        let screen = ctx.screen_rect();
+        let pos = screen.center() - egui::vec2(w, h) * 0.5;
+        let mut win = egui::Window::new(t(p.title()))
+            .resizable(p.resizable())
             .collapsible(false)
             .default_size([w, h])
-            .show(ctx, |ui| keep = body(p, ui, app));
+            .min_width(320.0)
+            .min_height(160.0)
+            .constrain_to(ctx.screen_rect().shrink(16.0))
+            .default_pos(egui::pos2(
+                pos.x.max(screen.min.x + 16.0),
+                pos.y.max(screen.min.y + 16.0),
+            ));
+        if p.resizable() {
+            win = win
+                .max_width((screen.width() - 32.0).max(w))
+                .max_height((screen.height() - 32.0).max(h));
+        }
+        win.open(&mut open).show(ctx, |ui| keep = body(p, ui, app));
         if !open || !keep {
             close(&mut app.state.panels, p);
         }
@@ -505,6 +533,16 @@ fn footer(ui: &mut Ui, primary_label: &str, primary_enabled: bool) -> (bool, boo
     (cancel, primary)
 }
 
+/// S16：给高频面板的表单主体加一层滚动，底部按钮仍可钉在面板末尾。
+fn scroll_body<R>(ui: &mut Ui, footer_reserve: f32, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
+    let body_h = (ui.available_height() - footer_reserve).max(120.0);
+    ScrollArea::vertical()
+        .max_height(body_h)
+        .auto_shrink([false, true])
+        .show(ui, add_contents)
+        .inner
+}
+
 /// `settings.html`：三个主题模式单选 + 关闭。
 ///
 /// S15：改为单选列表且**点选即生效**——主题切换属即时反馈型操作，
@@ -518,11 +556,12 @@ fn settings(ui: &mut Ui, app: &mut NfcApp) -> bool {
         ("html_follow_system_mode", ThemeMode::System),
     ];
 
+    // S16：设置面板不再是“只有一个主题选项”的空壳，补上数据目录 / 工具目录 / 版本。
+    ui.label(RichText::new(t("html_appearance")).strong());
     for (key, mode) in MODES {
         let selected = app.theme_mode == mode;
         let r = ui.add(egui::RadioButton::new(selected, t(key)));
         if r.clicked() {
-            // 点选即换肤，不需要再点确定
             app.theme_mode = mode;
         }
         ui.add_space(4.0);
@@ -530,8 +569,49 @@ fn settings(ui: &mut Ui, app: &mut NfcApp) -> bool {
 
     ui.add_space(8.0);
     ui.separator();
-    ui.add_space(4.0);
-    if ui.button(t("html_close")).clicked() {
+
+    let dump_dir = app.paths.dumpfiles_dir();
+    let tool_dir = app.bin_dir.clone();
+    let tool_ok = app.tool_dir_ok;
+    let missing = app.missing_tools.clone();
+    let mut open_dump = false;
+
+    scroll_body(ui, 56.0, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(t("html_data_dir")).strong());
+            ui.add(egui::Label::new(RichText::new(dump_dir.display().to_string())).truncate())
+                .on_hover_text(dump_dir.display().to_string());
+            open_dump = ui.button(t("html_open_dump_folder")).clicked();
+        });
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(t("html_tool_dir")).strong());
+            let path = if tool_dir.as_os_str().is_empty() {
+                "-".to_owned()
+            } else {
+                tool_dir.display().to_string()
+            };
+            ui.add(egui::Label::new(RichText::new(path.clone())).truncate())
+                .on_hover_text(&path);
+            if !tool_ok {
+                ui.colored_label(ui.visuals().error_fg_color, missing.join("、"));
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(t("html_current_version")).strong());
+            ui.label(env!("APP_VERSION"));
+            ui.label(env!("BUILDER"));
+        });
+    });
+
+    if open_dump {
+        app.exec("open-dump-folder", None);
+    }
+
+    ui.add_space(8.0);
+    let close = ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        ui.button(t("html_close")).clicked()
+    });
+    if close {
         return false;
     }
     true
@@ -572,63 +652,65 @@ fn hard_nested(ui: &mut Ui, app: &mut NfcApp) -> bool {
         .changed()
         && f.auto_run
     {
-        // auto_run 勾上时 collect_only 强制 false（`:65`）
         f.collect_only = false;
     }
-    ui.separator();
-
-    // 已知信息（`:17-29`）
-    ui.label(RichText::new(t("html_known_info")).strong());
-    let dis = f.others_disabled() || f.no_config;
-    ui.horizontal(|ui| {
-        ui.label(t("html_known_key"));
-        ui.add_enabled(
-            !dis,
-            egui::TextEdit::singleline(&mut f.known_key).desired_width(200.0),
-        );
-    });
-    ui.horizontal(|ui| {
-        ui.label(t("html_sector"));
-        ui.add_enabled(
-            !dis,
-            egui::TextEdit::singleline(&mut f.known_sector).desired_width(60.0),
-        );
-    });
-    ui.horizontal(|ui| {
-        ui.label(t("html_key_type"));
-        key_type_radio(ui, &mut f.known_key_type, !dis);
-    });
-
-    ui.separator();
-
-    // 目标扇区解密信息（`:35-46`）
-    ui.label(RichText::new(t("html_target_sector_info")).strong());
-    ui.horizontal(|ui| {
-        ui.label(t("html_sector"));
-        ui.add_enabled(
-            !dis,
-            egui::TextEdit::singleline(&mut f.target_sector).desired_width(60.0),
-        );
-    });
-    ui.horizontal(|ui| {
-        ui.label(t("html_key_type"));
-        key_type_radio(ui, &mut f.target_key_type, !dis);
-    });
-
-    ui.add_space(8.0);
-
-    // 只采集不计算（`:50`）——auto_run 勾上时同样被禁用
-    ui.add_enabled(
-        !dis,
-        egui::Checkbox::new(&mut f.collect_only, t("html_collect_only")),
-    );
-
-    // 无检测结果的红色提示（`:55`）
-    if f.no_config {
-        ui.colored_label(danger, t("html_detect_card_first"));
+    if f.auto_run {
+        ui.label(RichText::new(t("html_auto_run_hint")).color(danger));
     }
+    let no_config = f.no_config;
+    let dis = f.others_disabled() || no_config;
 
-    let (cancel, ok) = footer(ui, &t("html_execute"), !f.no_config);
+    ui.separator();
+    scroll_body(ui, 56.0, |ui| {
+        ui.label(RichText::new(t("html_known_info")).strong());
+        egui::Grid::new("hard-nested-known")
+            .num_columns(2)
+            .spacing(egui::vec2(12.0, 8.0))
+            .show(ui, |ui| {
+                ui.label(t("html_known_key"));
+                ui.add_enabled(
+                    !dis,
+                    egui::TextEdit::singleline(&mut f.known_key).desired_width(180.0),
+                );
+                ui.end_row();
+                ui.label(t("html_sector"));
+                ui.add_enabled(
+                    !dis,
+                    egui::TextEdit::singleline(&mut f.known_sector).desired_width(60.0),
+                );
+                ui.end_row();
+                ui.label(t("html_key_type"));
+                key_type_radio(ui, &mut f.known_key_type, !dis);
+            });
+
+        ui.add_space(8.0);
+        ui.label(RichText::new(t("html_target_sector_info")).strong());
+        egui::Grid::new("hard-nested-target")
+            .num_columns(2)
+            .spacing(egui::vec2(12.0, 8.0))
+            .show(ui, |ui| {
+                ui.label(t("html_sector"));
+                ui.add_enabled(
+                    !dis,
+                    egui::TextEdit::singleline(&mut f.target_sector).desired_width(60.0),
+                );
+                ui.end_row();
+                ui.label(t("html_key_type"));
+                key_type_radio(ui, &mut f.target_key_type, !dis);
+            });
+
+        ui.add_space(8.0);
+        ui.add_enabled(
+            !dis,
+            egui::Checkbox::new(&mut f.collect_only, t("html_collect_only")),
+        );
+
+        if no_config {
+            ui.colored_label(danger, t("html_detect_card_first"));
+        }
+    });
+
+    let (cancel, ok) = footer(ui, &t("html_execute"), !no_config);
     if ok {
         app.pending
             .push(Action::HardNestedConfig(Box::new(f.config())));
@@ -676,42 +758,41 @@ fn dict_file_row(ui: &mut Ui, dict_path: &str, app: &mut NfcApp) {
 
 /// `dictTest.html`：字典文件 + 扇区 + 类型 + 起始位置。
 fn dict_test(ui: &mut Ui, app: &mut NfcApp) -> bool {
-    // 同 hard_nested：先取出要用的值，避免与 `forms` 的可变借用冲突。
     let danger = app.paint().color(app.paint().danger);
     let dict_path = app.state.dict_path.to_string_lossy().into_owned();
 
     ui.label(t("html_input_test_info"));
     ui.add_space(4.0);
-
-    // 字典文件行（`:15-19`）必须排在取 `&mut app.forms.dict_test` **之前**：
-    // 点「选择文件」要在闭包外调 `app.exec`，那时可变借用不能还压着。
-    // 必须走 exec：直接 push(Plain) 会被 engine 当纯 UI 收下即止，按钮无反应。
     dict_file_row(ui, &dict_path, app);
 
     let f = &mut app.forms.dict_test;
     let dis = f.no_config;
-    ui.horizontal(|ui| {
-        ui.label(t("html_sector"));
-        ui.add_enabled(
-            !dis,
-            egui::TextEdit::singleline(&mut f.sector).desired_width(60.0),
-        );
-    });
-    ui.horizontal(|ui| {
-        ui.label(t("html_key_type"));
-        key_type_radio(ui, &mut f.key_type, !dis);
-    });
-    ui.horizontal(|ui| {
-        ui.label(t("html_start_position"));
-        ui.add_enabled(
-            !dis,
-            egui::TextEdit::singleline(&mut f.start_position).desired_width(80.0),
-        );
-    });
 
-    if f.no_config {
-        ui.colored_label(danger, t("html_detect_card_first"));
-    }
+    scroll_body(ui, 56.0, |ui| {
+        egui::Grid::new("dict-test")
+            .num_columns(2)
+            .spacing(egui::vec2(12.0, 8.0))
+            .show(ui, |ui| {
+                ui.label(t("html_sector"));
+                ui.add_enabled(
+                    !dis,
+                    egui::TextEdit::singleline(&mut f.sector).desired_width(60.0),
+                );
+                ui.end_row();
+                ui.label(t("html_key_type"));
+                key_type_radio(ui, &mut f.key_type, !dis);
+                ui.end_row();
+                ui.label(t("html_start_position"));
+                ui.add_enabled(
+                    !dis,
+                    egui::TextEdit::singleline(&mut f.start_position).desired_width(80.0),
+                );
+            });
+
+        if f.no_config {
+            ui.colored_label(danger, t("html_detect_card_first"));
+        }
+    });
 
     let (cancel, ok) = footer(ui, &t("dialog_button_ok"), !f.no_config);
     if ok {
@@ -791,50 +872,80 @@ fn about(ui: &mut Ui) -> bool {
 /// 对标 `commands.rs` 的 `phw_read_uid` / `phw_write_uid` / `phw_write_data`。
 /// 卡号（block0）由「读取卡号」缓存进 `state.phw.block0`，两个写按钮据此启用。
 fn phone_wristband(ui: &mut Ui, app: &mut NfcApp) -> bool {
-    // 先取出展示用值（owned），避免与后续 forms/state 的可变借用冲突。
     let card_no = app.state.phw.block0.as_deref().unwrap_or("--").to_owned();
     let has_block0 = app.state.phw.block0.is_some();
+    let paint = app.paint();
+    let primary = paint.color(paint.primary);
+    let text_inverse = paint.color(paint.text_inverse);
+    let danger = paint.color(paint.danger);
 
-    ui.label(t("html_phw_guidance"));
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(t("html_phw_guidance")).size(nfc_core::theme::FONT_SIZE[0]));
+    });
     ui.separator();
 
-    ui.horizontal(|ui| {
-        ui.label(t("html_phw_card_no"));
-        ui.label(RichText::new(&card_no).monospace());
-    });
-    if !has_block0 {
-        ui.label(t("dialog_msg_need_phw_read_uid_first"));
-    }
+    scroll_body(ui, 56.0, |ui| {
+        egui::Frame::NONE
+            .fill(paint.color(paint.surface2))
+            .corner_radius(CornerRadius::same(nfc_core::theme::RADIUS[0] as u8))
+            .inner_margin(Margin::symmetric(8, 6))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(t("html_phw_card_no")).strong());
+                    ui.label(RichText::new(&card_no).monospace());
+                });
+            });
 
-    // 扇区 / 块输入（点按钮时写进 state.phw，供引擎校验越界与拼参数）
-    ui.horizontal(|ui| {
-        ui.label(t("html_phw_sector"));
-        ui.add(egui::TextEdit::singleline(&mut app.forms.phw.sector).desired_width(40.0));
-        ui.label(t("html_phw_block"));
-        ui.add(egui::TextEdit::singleline(&mut app.forms.phw.block).desired_width(40.0));
-    });
-    ui.label(t("html_phw_range"));
+        if !has_block0 {
+            ui.colored_label(danger, t("dialog_msg_need_phw_read_uid_first"));
+        }
 
+        egui::Grid::new("phw-sector-block")
+            .num_columns(2)
+            .spacing(egui::vec2(12.0, 8.0))
+            .show(ui, |ui| {
+                ui.label(t("html_phw_sector"));
+                ui.add(egui::TextEdit::singleline(&mut app.forms.phw.sector).desired_width(56.0));
+                ui.end_row();
+                ui.label(t("html_phw_block"));
+                ui.add(egui::TextEdit::singleline(&mut app.forms.phw.block).desired_width(56.0));
+                ui.end_row();
+                ui.label(t("html_phw_range"));
+            });
+
+        ui.add_space(8.0);
+        let read = egui::Button::new(
+            RichText::new(t("html_phw_read_uid"))
+                .strong()
+                .color(text_inverse),
+        )
+        .fill(primary);
+        let write_uid = egui::Button::new(t("html_phw_write_uid"));
+        let write_data = egui::Button::new(t("html_phw_write_data"));
+
+        ui.horizontal(|ui| {
+            if ui.add(read).clicked() {
+                app.exec("phw-read-uid", None);
+            }
+            if ui.add_enabled(has_block0, write_uid).clicked() {
+                app.exec("phw-write-uid", None);
+            }
+            if ui.add_enabled(has_block0, write_data).clicked() {
+                app.state.phw.sector = parse_u32(&app.forms.phw.sector);
+                app.state.phw.block = parse_u32(&app.forms.phw.block);
+                app.exec("phw-write-data", None);
+            }
+        });
+    });
+
+    ui.add_space(8.0);
+    ui.separator();
     ui.add_space(4.0);
-    // 读取卡号：任何时候可点（走 connected 门禁，读当前卡）
-    if ui.button(t("html_phw_read_uid")).clicked() {
-        app.exec("phw-read-uid", None);
-    }
-    // 两个写按钮都需已缓存 block0
-    if ui
-        .add_enabled(has_block0, egui::Button::new(t("html_phw_write_uid")))
-        .clicked()
-    {
-        app.exec("phw-write-uid", None);
-    }
-    if ui
-        .add_enabled(has_block0, egui::Button::new(t("html_phw_write_data")))
-        .clicked()
-    {
-        // 把扇区/块写进 state（越界由引擎 `SectorBlock::is_valid` 拦下）
-        app.state.phw.sector = parse_u32(&app.forms.phw.sector);
-        app.state.phw.block = parse_u32(&app.forms.phw.block);
-        app.exec("phw-write-data", None);
+    let close = ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        ui.button(t("html_close")).clicked()
+    });
+    if close {
+        return false;
     }
     true
 }
@@ -1161,43 +1272,47 @@ fn dump_history(ui: &mut Ui, app: &mut NfcApp) -> bool {
     let (can_edit, can_compare, can_write) = history_button_states(n);
 
     ui.horizontal(|ui| {
-        if ui
-            .add_enabled(can_compare, egui::Button::new(t("html_compute_dump")))
-            .clicked()
-        {
-            if let [a, b] = app.forms.history_selected.as_slice() {
-                // 载荷用 \u{1} 分隔两个文件名（原版是 `{A, B}` 对象，
-                // 此处走字符串通道，见 NfcApp::exec 的 "open-dump-comparator"）。
-                app.exec("open-dump-comparator", Some(format!("{a}\u{1}{b}")));
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(can_compare, egui::Button::new(t("html_compute_dump")))
+                .clicked()
+            {
+                if let [a, b] = app.forms.history_selected.as_slice() {
+                    // 载荷用 \u{1} 分隔两个文件名（原版是 `{A, B}` 对象，
+                    // 此处走字符串通道，见 NfcApp::exec 的 "open-dump-comparator"）。
+                    app.exec("open-dump-comparator", Some(format!("{a}\u{1}{b}")));
+                }
             }
-        }
-        if ui
-            .add_enabled(can_edit, egui::Button::new(t("html_edit_dump")))
-            .clicked()
-        {
-            if let Some(f) = app.forms.history_selected.first() {
-                app.exec("open-dump-editor", Some(f.clone()));
+            if ui
+                .add_enabled(can_edit, egui::Button::new(t("html_edit_dump")))
+                .clicked()
+            {
+                if let Some(f) = app.forms.history_selected.first() {
+                    app.exec("open-dump-editor", Some(f.clone()));
+                }
             }
-        }
-        if ui
-            .add_enabled(can_write, egui::Button::new(t("html_write_this_dump")))
-            .clicked()
-        {
-            if let Some(f) = app.forms.history_selected.first() {
-                // 走 exec 而不是直接 push：write-IC 必须先过危险确认窗。
-                app.exec("write-IC", Some(f.clone()));
+            if ui
+                .add_enabled(can_write, egui::Button::new(t("html_write_this_dump")))
+                .clicked()
+            {
+                if let Some(f) = app.forms.history_selected.first() {
+                    // 走 exec 而不是直接 push：write-IC 必须先过危险确认窗。
+                    app.exec("write-IC", Some(f.clone()));
+                }
             }
-        }
-        // 删除始终可用（`dumpHistory.html:18` 无 disabled 属性）
-        if ui.button(t("html_delete_checked")).clicked() {
-            let sel = app.forms.history_selected.clone();
-            if !sel.is_empty() {
-                // S11-2：删除不可逆，先弹应用内确认窗（原版 `command.js:507`
-                // 的 `showMessageBoxSync`）。engine 侧还有一道
-                // `confirm_danger` 闸，未获批时拒绝执行。
-                app.confirm = Some(crate::dialogs_ui::delete_dumps_modal(&sel));
+        });
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            // 删除始终可用（`dumpHistory.html:18` 无 disabled 属性）
+            if ui.button(t("html_delete_checked")).clicked() {
+                let sel = app.forms.history_selected.clone();
+                if !sel.is_empty() {
+                    // S11-2：删除不可逆，先弹应用内确认窗（原版 `command.js:507`
+                    // 的 `showMessageBoxSync`）。engine 侧还有一道
+                    // `confirm_danger` 闸，未获批时拒绝执行。
+                    app.confirm = Some(crate::dialogs_ui::delete_dumps_modal(&sel));
+                }
             }
-        }
+        });
     });
     true
 }

@@ -6,9 +6,11 @@
 //!
 //! 未建模的 5 个 token（scrollbar 4 个 + focus-ring 1 个）登记在 docs/02 §6。
 
-use egui::{Color32, CornerRadius, Stroke, Visuals};
+use egui::{
+    Color32, Context, CornerRadius, FontFamily, FontId, Margin, Stroke, TextStyle, Vec2, Visuals,
+};
 
-use nfc_core::theme::{Rgb, Theme};
+use nfc_core::theme::{Rgb, Theme, FONT_SIZE, RADIUS, SPACING};
 
 /// `Theme` / `Rgb` 属 `nfc-core`，`Color32` 属 `egui`，两侧都是外部 crate——
 /// 不能直接 `impl From<Rgb> for Color32`（违反孤儿规则）。故用本 crate 的
@@ -38,6 +40,40 @@ impl Paint {
     pub fn color(self, r: Rgb) -> Color32 {
         Color32::from_rgb(r.r(), r.g(), r.b())
     }
+}
+
+/// S16：把 `nfc_core::theme` 的字号/间距 token 同步到 egui 全局 style。
+///
+/// 颜色由 [`Paint::to_visuals`] 管，这里只动排版节奏；同时写 dark/light
+/// 两套 style，避免 `ThemeMode::System` 切换时留出一套旧 style。
+pub fn apply_style(ctx: &Context) {
+    ctx.all_styles_mut(|style| {
+        style.text_styles.insert(
+            TextStyle::Small,
+            FontId::new(FONT_SIZE[0], FontFamily::Proportional),
+        );
+        style.text_styles.insert(
+            TextStyle::Body,
+            FontId::new(FONT_SIZE[2], FontFamily::Proportional),
+        );
+        style.text_styles.insert(
+            TextStyle::Button,
+            FontId::new(FONT_SIZE[1], FontFamily::Proportional),
+        );
+        style.text_styles.insert(
+            TextStyle::Monospace,
+            FontId::new(FONT_SIZE[0], FontFamily::Monospace),
+        );
+        style.text_styles.insert(
+            TextStyle::Heading,
+            FontId::new(FONT_SIZE[5], FontFamily::Proportional),
+        );
+
+        style.spacing.item_spacing = Vec2::new(SPACING[1], SPACING[0]);
+        style.spacing.button_padding = Vec2::new(SPACING[2], SPACING[1]);
+        style.spacing.interact_size = Vec2::new(40.0, 24.0);
+        style.spacing.window_margin = Margin::symmetric(SPACING[2], SPACING[1]);
+    });
 }
 
 impl Paint {
@@ -76,7 +112,7 @@ impl Paint {
         v.window_stroke = Stroke::new(1.0, self.color(self.border));
         // 每个状态桶各自带 bg_stroke / corner_radius / expansion（`Widgets`
         // 本身只存 5 个状态，不存这些字段）。
-        let radius = CornerRadius::same(4);
+        let radius = CornerRadius::same(RADIUS[0] as u8);
         for w in [
             &mut v.widgets.noninteractive,
             &mut v.widgets.inactive,

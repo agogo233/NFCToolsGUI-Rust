@@ -138,6 +138,8 @@ pub fn run() -> eframe::Result {
 /// 建一个跑过一帧的测试宿主。
 fn harness(app: &mut NfcApp) -> Context {
     let ctx = Context::default();
+    // S16：让自检上下文也吃到全局排版 token，行为与 `main.rs` 保持一致。
+    crate::theme_ui::apply_style(&ctx);
     // `run_ui` 的闭包直接拿根 `Ui`，无需自建面板。
     // 必须取走纹理增量再丢 `FullOutput`，否则 egui panic
     // （"Dropped TexturesDelta with N unapplied deltas"）：
@@ -178,6 +180,19 @@ fn c_widgets_exist() -> Result<(), String> {
         "html_timer",
         "html_current_version",
         "indicator_free",
+        "html_console",
+        "html_events",
+        "html_no_events",
+        "html_expand",
+        "html_collapse",
+        "html_waiting_file",
+        "html_workflow_group",
+        "html_detect_summary",
+        "html_not_detected",
+        "html_auto_run_hint",
+        "html_appearance",
+        "html_data_dir",
+        "html_tool_dir",
     ] {
         let v = nfc_core::i18n::t(key);
         if v == key {
@@ -234,10 +249,13 @@ fn c_log_scrollable() -> Result<(), String> {
 }
 
 fn c_bottom_bar() -> Result<(), String> {
-    let _ = crate::app::DEVICE_BAR_HEIGHT;
-    // 底栏固定高度，assert 常量有效
-    if crate::app::EVENT_AREA_HEIGHT <= 0.0 {
-        return Err("事件区高度非正".into());
+    // S16：事件条 / 控制台 / 任务条常量必须为正；设备状态条已并入标题栏。
+    if crate::app::EVENT_LIST_MAX_H <= 0.0
+        || crate::app::CONSOLE_HEADER_H <= 0.0
+        || crate::app::TASK_BAR_H <= 0.0
+        || crate::app::LOG_MIN_H <= 0.0
+    {
+        return Err("S16 控制台高度常量非正".into());
     }
     Ok(())
 }
@@ -387,6 +405,7 @@ fn c_dump_saved_guidance() -> Result<(), String> {
 fn panel_harness(app: &mut NfcApp, p: Panel) -> Result<Context, String> {
     panels::open(&mut app.state.panels, p);
     let ctx = Context::default();
+    crate::theme_ui::apply_style(&ctx);
     let mut out = ctx.run_ui(Default::default(), |ui| {
         panels::show(ui.ctx(), app);
     });
@@ -419,6 +438,7 @@ fn c_panels_render() -> Result<(), String> {
         Panel::DumpComparator,
         Panel::DumpHistory,
         Panel::About,
+        Panel::PhoneWristband,
     ] {
         let mut app = NfcApp::new(detected_state());
         let _ = panel_harness(&mut app, p)?;

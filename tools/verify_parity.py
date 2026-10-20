@@ -55,6 +55,22 @@ else:
 #   上面已经 sys.exit(3)，不会落到这里。）
 ORIG_MISSING = not ORIG.is_dir()
 ZH = REPO / "assets/locales/zh-CN.json"
+# S16 UI 体验优化本地补的 13 个 key（docs/02 §6.25 续 / S16 偏离登记）。
+S16_EXTRA = {
+    "html_console",
+    "html_events",
+    "html_no_events",
+    "html_expand",
+    "html_collapse",
+    "html_waiting_file",
+    "html_workflow_group",
+    "html_detect_summary",
+    "html_not_detected",
+    "html_auto_run_hint",
+    "html_appearance",
+    "html_data_dir",
+    "html_tool_dir",
+}
 # 两个 scratch 目录：每次运行重建（a_rustfmt rmtree 后重拷，b_resolve mkdir）。
 # 用系统临时目录而非写死 /tmp/opencode——后者是本机产物，CI 的 Linux/Windows
 # runner 上未必存在或可写。
@@ -239,11 +255,17 @@ def d_align() -> None:
 # ---------------------------------------------------------------- H i18n
 def h_i18n() -> None:
     keys = json.loads(rd(REPO / "assets/locales/zh-CN.json"))
-    check(len(keys) == 193, "H zh-CN.json 193 key", f"实际 {len(keys)}")
+    check(
+        len(keys) == 193 + len(S16_EXTRA),
+        f"H zh-CN.json {193 + len(S16_EXTRA)} key（基础 193 + S16 补 {len(S16_EXTRA)}）",
+        f"实际 {len(keys)}",
+    )
     # S8 新增的 3 个 settings 按钮文案（原版 settings.html 硬编码英文，无 i18n key，
     # 此处按 docs/01 §1.6 决策 #6 恢复入口时补齐）
     for k in ("html_toggle_dark_mode", "html_toggle_light_mode", "html_follow_system_mode"):
         check(k in keys, f"H zh-CN 含 {k}")
+    for k in S16_EXTRA:
+        check(k in keys, f"H zh-CN 含 S16 {k}")
     check(not (REPO / "assets/locales/en.json").exists(), "H 无 en.json（仅中文决策）")
     body = rd(CORE / "src/serial.rs")
     used = set()
@@ -854,7 +876,8 @@ def s4_model() -> None:
                         ("SIZE_ABOUT", 600, 480)]:
         check(f"const {const}: [f32; 2] = [{float(w)}, {float(h)}]" in pa,
               f"S9 {const} 尺寸对标 windows.js {w}x{h}")
-    check("default_size([w, h])" in pa, "S9 面板用 default_size 而非 resizable")
+    check("default_size([w, h])" in pa, "S9 面板保留 windows.js 的默认尺寸")
+    check(".constrain_to(ctx.screen_rect().shrink(16.0))" in pa, "S16 面板受视口约束，不再溢出窗口")
     # body() 的返回值必须被 show() 认（回归：早期版本丢弃了，点取消不关面板）
     check("keep = body(p, ui, app)" in pa and "if !open || !keep" in pa,
           "S9 show() 认 body() 的关闭请求（点取消/确定能关面板）")
@@ -1418,7 +1441,9 @@ def s4_model() -> None:
         "html_event_success",
         "html_event_error",
     }
-    LOCAL_EXTRA = S8_EXTRA | S11_EXTRA | S12_EXTRA | S15_EXTRA
+    # S16 补的 13 个：控制台、事件折叠、工作流分组、检测结果、设置目录/外观、
+    # 自动执行提示与文件框等待文案（docs/02 §6.25 续 / S16 偏离登记）。
+    LOCAL_EXTRA = S8_EXTRA | S11_EXTRA | S12_EXTRA | S15_EXTRA | S16_EXTRA
     # 原版对拍基线（ORIG_REF）漂移时上游会新增 key，对应本重写**没有**的功能/结构。
     # 搬运这些文案没有意义（没有代码会 t() 它们），故显式登记为「上游有、我们不做」。
     # 若将来真要做对应功能，把 key 从这里挪进 LOCAL_EXTRA 即可。
@@ -1490,18 +1515,19 @@ def s4_model() -> None:
         "log_msg_no_hard_nested_progress",
     }
     check_orig(set(i18n_asset) - LOCAL_EXTRA == set(orig_zh) - UPSTREAM_ONLY == set(orig_en) - UPSTREAM_ONLY,
-                "R i18n key 集除本地补的 14 个与上游独有的 57 个外完全一致",
+                f"R i18n key 集除本地补的 {len(LOCAL_EXTRA)} 个与上游独有的 {len(UPSTREAM_ONLY)} 个外完全一致",
                f"仅本项目 {set(i18n_asset)-set(orig_zh)-LOCAL_EXTRA} / "
                f"仅原版 {set(orig_zh)-set(i18n_asset)-UPSTREAM_ONLY}")
     check(S8_EXTRA <= set(i18n_asset), "R S8 补的 3 个 settings 按钮文案在表内")
     check(S11_EXTRA <= set(i18n_asset), "R S11 补的无进展兜底文案在表内")
-    check(S15_EXTRA <= set(i18n_asset), "R S15 补的 4 个 UI 文案在表内")
+    check(S15_EXTRA <= set(i18n_asset), "R S15 补的 6 个 UI 文案在表内")
+    check(S16_EXTRA <= set(i18n_asset), "R S16 补的 13 个 UI 文案在表内")
     check_orig(LOCAL_EXTRA.isdisjoint(orig_zh),
-          "R 本地补的 14 个 key 确认原版不存在")
+          f"R 本地补的 {len(LOCAL_EXTRA)} 个 key 确认原版不存在")
     check(UPSTREAM_ONLY.isdisjoint(set(i18n_asset)),
-           "R 上游独有的 57 个 key 确认我们没搬（搬了也没有代码 t() 它们）")
+           f"R 上游独有的 {len(UPSTREAM_ONLY)} 个 key 确认我们没搬（搬了也没有代码 t() 它们）")
     check_orig(all(i18n_asset.get(k) == orig_zh.get(k) for k in set(i18n_asset) - LOCAL_EXTRA),
-          "R i18n 文案与原版逐条一致（除本地新增 14 个）")
+          f"R i18n 文案与原版逐条一致（除本地新增 {len(LOCAL_EXTRA)} 个）")
     check([k for k in i18n_asset if k.startswith("lod_")] != [], "R 原版拼写错误 key lod_* 原样保留")
     # 「以为在补东西、其实建了个新 key」：曾出现过 `html_license:`（多了个冒号），
     # 被测试当成「原版拼写错误」而保留下来。key 名以标点结尾一律可疑。
@@ -1509,7 +1535,7 @@ def s4_model() -> None:
           "R i18n key 名不得以标点结尾（疑似误建的新 key）",
           f"{[k for k in i18n_asset if k[-1:] in {':', '.', ',', ' ', '-', '_'}]}")
     # 本地补的 key 数量原本写死在 Rust 测试与此处两处，已漂移过一次。双向钉死。
-    check(len(LOCAL_EXTRA) == 14, "R 本地补的 i18n key 恰为 14 个", f"实际 {len(LOCAL_EXTRA)}")
+    check(len(LOCAL_EXTRA) == 14 + len(S16_EXTRA), "R 本地补的 i18n key 恰为 27 个", f"实际 {len(LOCAL_EXTRA)}")
     cd = rd(CORE / "src/command.rs")
     # rustfmt 会把字段拆成多行，故用 DOTALL 匹配整个结构体字面量
     specs = re.findall(
