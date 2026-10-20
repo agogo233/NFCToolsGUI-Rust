@@ -116,7 +116,7 @@ def rd_json(p: Path) -> dict:
 
 
 def sh(cmd: list[str], cwd: Path | None = None, timeout: int = 300) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", timeout=timeout)
 
 
 # ---------------------------------------------------------------- A rustfmt
@@ -1346,7 +1346,7 @@ def s4_model() -> None:
     fx_readme = fx_dir / "README.md"
     check(fx_readme.exists(), "S12-9 fixture 有出处登记表（README.md）")
     if fx_readme.exists():
-        reg = fx_readme.read_text()
+        reg = fx_readme.read_text(encoding="utf-8")
         for f in sorted(p.name for p in fx_dir.glob("*.txt")):
             check(f in reg, f"S12-9 fixture {f} 在 README 里登记了出处")
         check("nfc-mfdetect.c" in reg and "Sector %02d" in reg,
@@ -1354,7 +1354,7 @@ def s4_model() -> None:
         check("libnfc-collect" in reg, "S12-9 登记了 collect 的真实输出格式")
         check("nfc-list.c" in reg, "S12-9 登记了 nfc-list 的真实输出格式")
     # 已知的编造串不得再出现
-    all_fx = "\n".join(p.read_text() for p in fx_dir.glob("*.txt"))
+    all_fx = "\n".join(p.read_text(encoding="utf-8") for p in fx_dir.glob("*.txt"))
     for bogus, why in [
         ("Reader #", "nfc-list 不打这一行（S12-9 已删）"),
         ("Trying 0", "cropto1_bs 不打 Trying（S12-9 已删）"),
@@ -1578,7 +1578,7 @@ def s4_model() -> None:
     # S12-5 起 fixture 照抄 nfc-mfdetect.c:448-470 的真实输出：
     # 每扇区一行、以 `Sector NN - ` 开头、A/B 印在同一行。
     # 原先检查的是「每行有前导空格」，那同样是把编造格式当正确。
-    mfd = (FIX / "mfdetect-keys.txt").read_text().splitlines()
+    mfd = (FIX / "mfdetect-keys.txt").read_text(encoding="utf-8").splitlines()
     keylines = [l for l in mfd if re.search(r"(Found|Unknown)\s+Key\s+[AB]", l)]
     badlines = [l for l in keylines if not l.startswith("Sector ")]
     check(keylines, "M fixture 里有密钥行")
