@@ -1,0 +1,1 @@
+Unable to open NFC device: pn532_uart:/dev/ttyACM0:115200

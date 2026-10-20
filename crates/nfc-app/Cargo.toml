@@ -1,0 +1,22 @@
+[package]
+name = "nfc-app"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.95"
+build = "build.rs"
+
+[dependencies]
+nfc-core = { path = "../nfc-core" }
+eframe = "0.36"
+egui = "0.36"
+# S11-2：系统文件对话框。默认特性 = xdg-portal + wayland，**不含** gtk3，
+# 故不引入任何 GTK 系统依赖；Windows / macOS 走各自的原生弹窗。
+rfd = "0.17"
+open = "5.4.4"
+
+[features]
+# 真串口枚举：默认开（生产 GUI 必须有，否则下拉永远刷不出设备）。
+# `--no-default-features` 可脱离 serialport（进而脱离 libudev）编译——
+# 无头 CI / 纯语法检查的快速路径，此时枚举器退回空列表。
+default = ["real-serial"]
+real-serial = ["nfc-core/real-serial"]

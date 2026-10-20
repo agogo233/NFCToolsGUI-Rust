@@ -1,0 +1,6 @@
+Using AVX2 SIMD core.
+Reading nonces from file..
+Read 12 nonces from file. cuid=00000000
+Target Block=7, Keytype=A
+(1. guess: Sum(a8) = 0)
+Key found: 8fd0a4f256e9

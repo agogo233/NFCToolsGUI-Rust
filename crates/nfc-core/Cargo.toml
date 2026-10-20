@@ -1,0 +1,18 @@
+[package]
+name = "nfc-core"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.95"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+directories = "6"
+thiserror = "2"
+regex = "1"                # S4 起解析工具输出
+serialport = { version = "4", optional = true }   # SerialTrait 生产实现，默认关闭
+
+[features]
+# core 默认不编译 serialport，保证单测零系统库；nfc-app 侧启用
+real-serial = ["dep:serialport"]
+

@@ -1,0 +1,17 @@
+MIFARE Classic 1K detected
+Sector 00 - Found   Key A: ffffffffffff Found   Key B: ffffffffffff
+Sector 01 - Found   Key A: ffffffffffff Found   Key B: ffffffffffff
+Sector 02 - Found   Key A: ffffffffffff Found   Key B: ffffffffffff
+Sector 03 - Found   Key A: ffffffffffff Found   Key B: ffffffffffff
+Sector 04 - Found   Key A: a0a1a2a3a4a5 Unknown Key B
+Sector 05 - Found   Key A: a0a1a2a3a4a5 Unknown Key B
+Sector 06 - Found   Key A: a0a1a2a3a4a5 Unknown Key B
+Sector 07 - Found   Key A: a0a1a2a3a4a5 Unknown Key B
+Sector 08 - Found   Key A: a0a1a2a3a4a5 Unknown Key B
+Sector 09 - Found   Key A: a0a1a2a3a4a5 Unknown Key B
+Sector 10 - Found   Key A: a0a1a2a3a4a5 Unknown Key B
+Sector 11 - Found   Key A: a0a1a2a3a4a5 Unknown Key B
+Sector 12 - Found   Key A: a0a1a2a3a4a5 Unknown Key B
+Sector 13 - Found   Key A: a0a1a2a3a4a5 Unknown Key B
+Sector 14 - Found   Key A: a0a1a2a3a4a5 Unknown Key B
+Sector 15 - Found   Key A: a0a1a2a3a4a5 Unknown Key B

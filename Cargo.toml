@@ -1,0 +1,13 @@
+[workspace]
+members = ["crates/nfc-core", "crates/nfc-app"]
+resolver = "2"
+
+# 发布构建。`strip` 去掉符号表与调试段，显著缩小体积（docs/02 §8 估 8-15MB）；
+# `panic = "abort"` 让 panic 直接终止而不展开栈——GUI 场景下栈回溯没有消费者，
+# 且省下 unwind 表。原版 Electron 打包后约 100MB+，此处不设上限。
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"

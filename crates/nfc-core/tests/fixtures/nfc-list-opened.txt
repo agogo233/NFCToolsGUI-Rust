@@ -1,0 +1,8 @@
+NFC device: NFC_Device opened
+0 ISO14443A passive target(s) found.
+0 ISO14443B passive target(s) found.
+0 Felica passive target(s) found.
+0 ISO14443-3 passive target(s) found.
+0 ISO14443-4 passive target(s) found.
+The following NFC device(s) have been terminated:
+pn532_uart:/dev/ttyACM0:115200

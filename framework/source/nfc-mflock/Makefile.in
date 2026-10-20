@@ -1,0 +1,25 @@
+CC = gcc
+CFLAGS = -Wall -O2
+LDFLAGS = @LDFLAGS@ -lnfc
+CPPFLAGS = @CPPFLAGS@
+BIN = @prefix@/bin
+
+SRCDIR = src
+OBJDIR = obj
+
+SOURCES  := $(wildcard $(SRCDIR)/*.c)
+INCLUDES := $(wildcard $(SRCDIR)/*.h)
+OBJECTS  := $(SOURCES:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
+
+_dummy := $(shell mkdir -p obj)
+
+all: nfc-mflock
+
+$(OBJECTS): $(OBJDIR)/%.o : $(SRCDIR)/%.c
+	$(CC) $(CFLAGS) $(LDFLAGS) $(CPPFLAGS) -c $< -o $@
+
+nfc-mflock: $(OBJECTS)
+	$(CC) $(OBJECTS) $(CFLAGS) $(LDFLAGS) $(CPPFLAGS) -o $@
+install: nfc-mflock
+	install -m 755 ./nfc-mflock* $(BIN)
+

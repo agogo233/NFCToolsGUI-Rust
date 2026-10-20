@@ -1,0 +1,13 @@
+target/
+out/
+# framework/ 下的 C 工具源码已纳入版本库（vendoring）；只忽略编译产物
+framework/bin/
+buildInfo.json
+*.mfd
+!**/tests/fixtures/*.mfd
+.idea/
+.vscode/
+# python 探针脚本（tools/verify_parity.py）运行产物
+__pycache__/
+*.pyc
+PLAN.md

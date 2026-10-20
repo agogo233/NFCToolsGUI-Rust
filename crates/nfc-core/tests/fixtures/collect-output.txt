@@ -1,0 +1,3 @@
+Found tag with uid a1b2c3d4, collecting nonces for key B of block 15 (sector 3) using known key A ffffffffffff for block 0 (sector 0)
+Found tag with uid a1b2c3d4, collecting nonces for key A of block 7 (sector 1) using known key A ffffffffffff for block 0 (sector 0)
+Found tag with uid a1b2c3d4, collecting nonces for key A of block 47 (sector 11) using known key A ffffffffffff for block 0 (sector 0)

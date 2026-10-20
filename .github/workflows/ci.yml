@@ -1,0 +1,184 @@
+# CI：全量测试 + 静态门禁 + Windows 发布构建。
+#
+# 刻意**不**构建 framework/bin：那是 C 子模块（GSWXXN/* 的 fork），
+# 需要 autoconf/libtool，且 Linux 产物不能用于 Windows。用户需自行跑
+# 原版项目的 compile.sh。本仓库的 job 因此只验证 Rust 侧。
+#
+# 但**会**把原版 Electron 源码 checkout 进来（pin 到固定 commit，不拉子模块），
+# 让 verify_parity.py 的 28 项对拍真正跑起来而不是静默 SKIP。原版漂移时
+# 更新 ORIG_REF 重新对拍基线即可；对拍基准 commit 见 ORIG_REF。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 对拍基准：原版仓库 pin 到该 commit（可复现，不随上游移动而变红）。
+# 原版 = agogo233/NFCToolsGUI，分支 tauri。要重新对拍基线时，把它改成
+# 新的目标 commit，然后本机跑一遍 verify_parity.py 确认全绿再提交。
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  ORIG_REPO: agogo233/NFCToolsGUI
+  ORIG_REF: 9c5951600f04d6d4c49855c2cfff4909bc81f1e2
+  ORIG_CHECKOUT: NFCToolsGUI-ref
+
+jobs:
+  # ── 1) Linux：编译 + 测试 + 静态门禁 ───────────────────────────────────
+  test:
+    name: test (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 拉取原版源码作为对拍基准（pin commit、不拉子模块——
+      # verify_parity.py 只读 src/ 下的 js/json/html 与 src-tauri 的 Rust，
+      # 那些都在主仓库，source/ 里的 C 子模块用不上）。
+      - name: 拉取原版（对拍基准）
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ORIG_REPO }}
+          ref: ${{ env.ORIG_REF }}
+          submodules: false
+          fetch-depth: 1
+          path: ${{ env.ORIG_CHECKOUT }}
+
+      # 护栏：原版没checkout成功必须立刻大声失败，不能静默降级成「全 SKIP」。
+      - name: 校验原版已就位
+        run: |
+          test -f "${ORIGINAL_DIR}/src/command.js" || {
+            echo "::error::原版 checkout 缺失 $ORIGINAL_DIR/src/command.js"; exit 1; }
+          echo "原版就位：${ORIGINAL_DIR} @ ${{ env.ORIG_REF }}"
+        env:
+          ORIGINAL_DIR: ${{ github.workspace }}/${{ env.ORIG_CHECKOUT }}
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: 缓存
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      # eframe/winit 在 Linux 上需要这几个系统库。**不需要 libgtk-3**：
+      # rfd 用的是默认特性 xdg-portal + wayland，gtk3 是可选且非默认特性。
+      - name: 安装系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libx11-dev libxrandr-dev libxi-dev \
+            libxcursor-dev libwayland-dev libudev-dev libxcb1-dev \
+            pkg-config
+
+      - name: 外联审计（不得引入网络栈）
+        run: |
+          # 本项目是纯本地工具，任何 HTTP/DNS 依赖都是可疑的。
+          if grep -rnE '\b(reqwest|hyper|tokio::net|tokio::dns|ureq|isahc|surf|curl)\b' \
+               --include='*.rs' --include='*.toml' crates/ ; then
+            echo "::error::发现网络相关依赖或调用，纯本地工具不应有"
+            exit 1
+          fi
+          echo "外联审计通过"
+
+      - name: 格式检查
+        run: cargo fmt --all --check
+
+      - name: Clippy（零告警）
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # `real-serial` 是 default-features 之外的唯一特性，其 `RealSerial` 实现
+      # 平时不参与编译——不单独验一次，就等于从未被编译器看过。
+      - name: Clippy（real-serial 特性）
+        run: cargo clippy --workspace --all-targets --features real-serial -- -D warnings
+
+      - name: 单元 + 集成测试
+        run: cargo test --workspace --locked
+
+      - name: core selftest
+        run: cargo run -q -p nfc-core -- --selftest
+
+      # 界面自检走 egui 的测试上下文，不需要真实显示服务器，
+      # 但仍需 libxkbcommon 等 winit 依赖能加载。
+      - name: app selftest
+        run: cargo run -q -p nfc-app -- --selftest
+
+      # 对拍原版：指向上面 checkout 进来的原版。设了 NFC_ORIG_DIR 后，
+      # verify_parity.py 的 28 项 check_orig 会真跑；若仍有 SKIP 直接退出码 2 失败。
+      - name: 静态回归（对拍原版 + 接线守卫）
+        env:
+          NFC_ORIG_DIR: ${{ github.workspace }}/${{ env.ORIG_CHECKOUT }}
+        run: |
+          set -o pipefail
+          python3 tools/verify_parity.py 2>&1 | tee /tmp/verify.log
+
+  # ── 2) Windows：发布构建 ────────────────────────────────────────────────
+  build:
+    name: build (windows-x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # 对拍基准：原版 checkout 进来（pin commit、不拉子模块）。
+      - name: 拉取原版（对拍基准）
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ORIG_REPO }}
+          ref: ${{ env.ORIG_REF }}
+          submodules: false
+          fetch-depth: 1
+          path: ${{ env.ORIG_CHECKOUT }}
+
+      # 对拍原版。设了 NFC_ORIG_DIR 后 verify_parity.py 若仍 SKIP 会退出码 2 失败；
+      # 原版目录缺失则退出码 3 失败（见脚本自护栏），不会静默降级。
+      - name: 静态回归（对拍原版）
+        env:
+          NFC_ORIG_DIR: ${{ github.workspace }}\${{ env.ORIG_CHECKOUT }}
+        run: python tools\verify_parity.py
+
+      - name: 发布构建
+        run: cargo build --release --locked -p nfc-app
+
+      - name: 校验 PE 子系统是 GUI（不该闪黑框）
+        shell: pwsh
+        run: |
+          $exe = "target\release\nfc-app.exe"
+          if (-not (Test-Path $exe)) { throw "没产出 $exe" }
+          $b = [System.IO.File]::ReadAllBytes($exe)
+          $pe = [BitConverter]::ToInt32($b, 0x3C)
+          $sub = [BitConverter]::ToUInt16($b, $pe + 0x5C)
+          # 2 = IMAGE_SUBSYSTEM_WINDOWS_GUI；3 = CONSOLE（会双击闪黑框）
+          if ($sub -ne 2) { throw "Subsystem=$sub，应为 2(GUI)" }
+          Write-Host "ok PE Subsystem=$sub (GUI)"
+
+      - name: 产出 exe 体积
+        shell: pwsh
+        run: |
+          $mb = [math]::Round((Get-Item "target\release\nfc-app.exe").Length / 1MB, 1)
+          Write-Host "nfc-app.exe = $mb MB"
+
+      - name: 确认产物
+        run: |
+          $exe = "target\release\nfc-app.exe"
+          if (-not (Test-Path $exe)) { throw "未找到 $exe" }
+          "{0:N1} MB" -f ((Get-Item $exe).Length / 1MB) | Write-Host
+          # framework/bin 不在本仓库（gitignore），由用户的 compile.sh 生成。
+          # 程序启动时会有红色引导条说明这件事，不会静默失败。
+
+      - name: 上传可执行文件
+        uses: actions/upload-artifact@v4
+        with:
+          name: nfctoolsgui-win-x64
+          path: target/release/nfc-app.exe
+          retention-days: 30
