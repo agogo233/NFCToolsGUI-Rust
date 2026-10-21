@@ -214,10 +214,11 @@ fn c_widgets_exist() -> Result<(), String> {
 }
 
 fn c_three_columns() -> Result<(), String> {
-    // 对照 renderer/html/index.html:69-87 的 class 属性逐条锁定：
+    // 对照主操作区 `button_area` 逐条锁定（不再逐字对齐原版 index.html：
+    // S16 起卡片重排、S18 增 3 个写卡按钮）：
     //   读卡列 3 个，其中 read-IC 带 `primary`
     //   破解列 2 个，无 primary / danger
-    //   写卡列 5 个（含 S14 增量的 open-phw-window），其中仅 lock-ufuid 带 `danger`
+    //   写卡列 8 个，其中 write-IC 带 `primary`、format-card 与 lock-ufuid 带 `danger`
     let expect: [(&[&str], &[&str]); 3] = [
         (
             &["read-IC", "input-keys-read-IC", "detect-card-type"],
@@ -228,15 +229,18 @@ fn c_three_columns() -> Result<(), String> {
             &[
                 "write-IC",
                 "format-card",
-                "write-ufuid-uid",
                 "open-phw-window",
+                "write-ufuid-uid",
                 "lock-ufuid",
+                "cuid-write",
+                "input-uid-write",
+                "run-mfcuk",
             ],
-            &["lock-ufuid"],
+            &["write-IC", "format-card", "lock-ufuid"],
         ),
     ];
     for (i, (actions, marked)) in expect.iter().enumerate() {
-        if actions.len() != [3usize, 2, 5][i] {
+        if actions.len() != [3usize, 2, 8][i] {
             return Err(format!("第 {i} 列按钮数 {} 不符", actions.len()));
         }
         for m in *marked {
@@ -265,6 +269,7 @@ fn c_bottom_bar() -> Result<(), String> {
         || crate::app::CONSOLE_HEADER_H <= 0.0
         || crate::app::TASK_BAR_H <= 0.0
         || crate::app::LOG_MIN_H <= 0.0
+        || crate::app::CONSOLE_RESERVE_H <= 0.0
     {
         return Err("S16 控制台高度常量非正".into());
     }

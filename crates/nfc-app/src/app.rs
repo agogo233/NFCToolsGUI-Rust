@@ -39,6 +39,11 @@ pub const CONSOLE_HEADER_H: f32 = 30.0;
 pub const TASK_BAR_H: f32 = 32.0;
 /// S16：日志最小可见高度，防止最小窗口把日志挤没。
 pub const LOG_MIN_H: f32 = 120.0;
+/// 控制台最小预留高度：头部 + 最近事件一行 + 日志最小 120 + 任务条 32 +
+/// 间距与内边距的保守和。主操作区滚动 `max_height` 以此为界，
+/// 保证最小窗口 / 缺工具条时任务条/进度条始终可见。
+/// 事件列表展开时 `draw` 会按 `EVENT_LIST_MAX_H` 动态追加预留。
+pub const CONSOLE_RESERVE_H: f32 = 232.0;
 
 /// 主题模式三态（对标 Electron `nativeTheme.themeSource`）。
 ///
@@ -1231,7 +1236,23 @@ impl NfcApp {
             self.missing_tools_bar(ui);
         }
         self.guidance_bar(ui);
-        self.button_area(ui);
+        // 主操作区包一层垂直滚动：窗口过矮（820×640 / 缺工具条）时按钮区自身
+        // 滚动，而不是把最底部的任务条/进度条挤出视口。
+        // 为控制台预留最小高度；内容不足 max_height 时按内容收缩，空间全给控制台。
+        // 事件列表展开时事件区多占 EVENT_LIST_MAX_H，`log_h` 的 `LOG_MIN_H` 下限
+        // 吸收不了这 96px，故预留要跟着加大，否则任务条仍会被挤出视口。
+        let reserve = CONSOLE_RESERVE_H
+            + if self.events_expanded {
+                EVENT_LIST_MAX_H
+            } else {
+                0.0
+            };
+        let actions_max_h = (ui.available_height() - reserve - 6.0).max(160.0);
+        ScrollArea::vertical()
+            .id_salt("main-actions")
+            .max_height(actions_max_h)
+            .auto_shrink([false, true])
+            .show(ui, |ui| self.button_area(ui));
         ui.add_space(6.0);
         self.console(ui);
     }
@@ -1601,13 +1622,13 @@ impl NfcApp {
                     Item::Btn(
                         "write-IC",
                         t("html_write_card"),
-                        BtnStyle::Secondary,
+                        BtnStyle::Primary,
                         "html_tip_write_ic",
                     ),
                     Item::Btn(
                         "format-card",
                         t("html_format_card"),
-                        BtnStyle::Normal,
+                        BtnStyle::Danger,
                         "html_tip_format_card",
                     ),
                     Item::Group("html_workflow_group"),
@@ -1697,7 +1718,7 @@ impl NfcApp {
                                             true,
                                         ),
                                         BtnStyle::Danger => {
-                                            (danger_fill, text_inverse, 30.0, 13.0, false, false)
+                                            (danger_fill, text_inverse, 34.0, 13.0, false, false)
                                         }
                                         BtnStyle::Normal => {
                                             (surface2, text, 30.0, 13.0, false, false)
@@ -1708,11 +1729,32 @@ impl NfcApp {
                                     if strong {
                                         label = label.strong();
                                     }
-                                    let mut btn = egui::Button::new(label).fill(fill);
+                                    let mut btn = egui::Button::new(label)
+                                        .fill(fill)
+                                        .min_size(egui::vec2(w, h));
                                     if secondary {
                                         btn = btn.stroke(egui::Stroke::new(1.0, primary));
                                     }
-                                    let r = ui.add_sized([w, h], btn).on_hover_text(t(tip));
+                                    // 按 `command` 门禁置灰：未连接设备 / 有任务运行中 /
+                                    // 正在连接时不响应点击，并在悬停时说明原因——
+                                    // 取代「点了之后才在日志里看到报错」。
+                                    let gate = nfc_core::command::spec(action)
+                                        .map(|s| nfc_core::command::gate(s, &self.state));
+                                    let enabled = match &gate {
+                                        Some(Err(_)) => false,
+                                        Some(Ok(())) | None => true,
+                                    };
+                                    let reason = match &gate {
+                                        Some(Err(e)) => t(e.i18n_key()),
+                                        _ => String::new(),
+                                    };
+                                    let r = if enabled {
+                                        ui.add_enabled(true, btn)
+                                            .on_hover_text(t(tip))
+                                    } else {
+                                        ui.add_enabled(false, btn)
+                                            .on_disabled_hover_text(reason)
+                                    };
                                     if r.clicked() {
                                         self.exec(action, None);
                                     }
@@ -1767,7 +1809,9 @@ impl NfcApp {
                                             } else {
                                                 ui.label(
                                                     RichText::new(format!(
-                                                        "已知 {known} / 未知 {unknown}"
+                                                        "{} {known} / {} {unknown}",
+                                                        t("html_detect_known"),
+                                                        t("html_detect_unknown")
                                                     ))
                                                     .size(nfc_core::theme::FONT_SIZE[0]),
                                                 );
