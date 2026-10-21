@@ -2435,9 +2435,8 @@ fn c_export_keys_flow() -> Result<(), String> {
     // 编辑器载入一个只有默认密钥的 dump，导出应得到密钥行
     let mut sectors = nfc_core::model::dump::to_sector_lines(&vec![0xff; 1024]).unwrap();
     // A2 全扇区默认密钥（写入 trailers）
-    for si in 0..sectors.len() {
-        let trailer = "FFFFFFFFFFFFFFFFFFFFFFFFF0FFFFFFFFFFFF".to_string();
-        sectors[si][3] = trailer;
+    for sector in sectors.iter_mut() {
+        sector[3] = "FFFFFFFFFFFFFFFFFFFFFFFFF0FFFFFFFFFFFF".to_string();
     }
     app.forms.editor.sectors = sectors;
     app.exec("dump-editor-export-keys", None);
