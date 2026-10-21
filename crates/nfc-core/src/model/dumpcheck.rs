@@ -542,7 +542,7 @@ mod tests {
         let s = dump::to_sector_lines(&bytes).unwrap();
         assert_eq!(s.len(), 64, "4K 卡 = 64 组 × 4 行");
         assert!(check(&s).unwrap().is_empty());
-        // 破坏扇区 35 的尾块（落在编辑器组 47 第 0 行）
+        // 破坏扇区 35 的尾块（4K 布局下尾块恒落在所在组的第 3 行）
         let t = sector_trailer_block(35, 256) * 16;
         let group = t / 64;
         let line_in_group = (t % 64) / 16;
