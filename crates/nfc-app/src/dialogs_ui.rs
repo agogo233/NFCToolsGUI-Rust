@@ -170,7 +170,7 @@ pub fn show(ctx: &Context, m: &ConfirmModal, danger_color: egui::Color32) -> Opt
             let code_ok = match &m.code {
                 Some(want) => {
                     let cur = ctx
-                        .data(|d| d.get_persisted::<String>(code_id))
+                        .data_mut(|d| d.get_persisted::<String>(code_id))
                         .unwrap_or_default();
                     let ok = cur.trim().eq_ignore_ascii_case(want);
                     ui.horizontal(|ui| {

@@ -364,7 +364,7 @@ fn judge_connect_is_fixture_driven_for_all_three_cases() {
 #[test]
 fn write_nfc_config_round_trips_through_paths() {
     let (paths, _guard) = tmp_guarded();
-    write_nfc_config(&paths, "/dev/ttyUSB0").unwrap();
+    write_nfc_config(&paths, "/dev/ttyUSB0", DEVICE_SPEED).unwrap();
     assert_eq!(
         fs::read_to_string(paths.nfc_config()).unwrap(),
         Paths::libnfc_conf("/dev/ttyUSB0", DEVICE_SPEED)
