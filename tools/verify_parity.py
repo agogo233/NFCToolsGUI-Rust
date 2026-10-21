@@ -55,14 +55,20 @@ else:
 #   上面已经 sys.exit(3)，不会落到这里。）
 ORIG_MISSING = not ORIG.is_dir()
 ZH = REPO / "assets/locales/zh-CN.json"
-# S16 UI 体验优化本地补的 16 个 key（docs/02 §6.25 续 / S16 偏离登记；
-# 含 S18 后续补的 `html_detect_known` / `html_detect_unknown` / `html_rename`）。
+# S16 UI 体验优化本地补的 21 个 key（docs/02 §6.25 续 / §6.28 偏离登记；
+# 含 S18 后续补的 `html_detect_known` / `html_detect_unknown` / `html_rename`，
+# 以及 §6.28 P1 补的控制台悬停说明 5 个）。
 S16_EXTRA = {
     "html_console",
     "html_events",
     "html_no_events",
     "html_expand",
     "html_collapse",
+    "html_tip_clear_log",
+    "html_tip_save_log",
+    "html_tip_stop_task",
+    "html_tip_stop_idle",
+    "html_tip_autoscroll",
     "html_waiting_file",
     "html_workflow_group",
     "html_detect_summary",
@@ -946,6 +952,26 @@ def s4_model() -> None:
               f"S9 {const} 尺寸对标 windows.js {w}x{h}")
     check("default_size([w, h])" in pa, "S9 面板保留 windows.js 的默认尺寸")
     check(".constrain_to(ctx.content_rect().shrink(16.0))" in pa, "S16 面板受视口约束，不再溢出窗口")
+    # ── §6.28 P1 UI 打磨 ────────────────────────────────────────
+    check("html_tip_clear_log" in ap and "html_tip_save_log" in ap
+          and "html_tip_stop_task" in ap and "html_tip_autoscroll" in ap,
+          "P1 控制台按钮都有悬停说明")
+    check("on_disabled_hover_text" in ap and "html_tip_stop_idle" in ap,
+          "P1 停止按钮禁用态也说明原因")
+    # 快捷键接线：把整段 handle_keys 切出来逐个锚点确认，
+    # 否则 `"dump-editor-save"` 之类的字符串在 exec 分支里本来就存在，检查会假阳性。
+    _hk = (ap[ap.index("fn handle_keys("):ap.index("pub fn connecting_now(")]
+           if "fn handle_keys(" in ap else "")
+    check(all(s in _hk for s in ("Key::Escape", "self.confirm = None", "close_topmost")),
+          "P1 Esc 取消确认窗 / 关最上层面板")
+    check(all(s in _hk for s in ("Key::S", "self.confirm.is_none()", "can_save()",
+                                 "dump-editor-save")),
+          "P1 Ctrl(⌘)+S 保存转储（仅面板开着、校验通过且无确认窗时）")
+    check("pub fn close_topmost" in pa, "P1 panels 有 close_topmost（倒序关第一个）")
+    check(pa.count("horizontal_wrapped") >= 4,
+          "P1 长按钮行自动换行", f"实际 {pa.count('horizontal_wrapped')}")
+    check(".max_height(360.0)" not in pa and "list_h" in pa,
+          "P1 历史列表高度随窗口自适应（不再写死 360）")
     # body() 的返回值必须被 show() 认（回归：早期版本丢弃了，点取消不关面板）
     check("keep = body(p, ui, app)" in pa and "if !open || !keep" in pa,
           "S9 show() 认 body() 的关闭请求（点取消/确定能关面板）")
@@ -1509,8 +1535,9 @@ def s4_model() -> None:
         "html_event_success",
         "html_event_error",
     }
-    # S16 补的 16 个：控制台、事件折叠、工作流分组、检测结果、设置目录/外观、
-    # 自动执行提示、文件框等待文案、检测结果“已知/未知”、历史重命名
+    # S16 补的 21 个：控制台、事件折叠、工作流分组、检测结果、设置目录/外观、
+    # 自动执行提示、文件框等待文案、检测结果“已知/未知”、历史重命名、
+    # 控制台按钮悬停说明（§6.28 P1）
     # （docs/02 §6.25 续 / §6.28 / S16 偏离登记）。
     LOCAL_EXTRA = S8_EXTRA | S11_EXTRA | S12_EXTRA | S15_EXTRA | S16_EXTRA | S17_EXTRA | S18_EXTRA
     # 原版对拍基线（ORIG_REF）漂移时上游会新增 key，对应本重写**没有**的功能/结构。
@@ -1569,7 +1596,7 @@ def s4_model() -> None:
     check(S8_EXTRA <= set(i18n_asset), "R S8 补的 3 个 settings 按钮文案在表内")
     check(S11_EXTRA <= set(i18n_asset), "R S11 补的无进展兜底文案在表内")
     check(S15_EXTRA <= set(i18n_asset), "R S15 补的 6 个 UI 文案在表内")
-    check(S16_EXTRA <= set(i18n_asset), "R S16 补的 16 个 UI 文案在表内")
+    check(S16_EXTRA <= set(i18n_asset), "R S16 补的 21 个 UI 文案在表内")
     check_orig(LOCAL_EXTRA.isdisjoint(orig_zh),
           f"R 本地补的 {len(LOCAL_EXTRA)} 个 key 确认原版不存在")
     check(UPSTREAM_ONLY.isdisjoint(set(i18n_asset)),
@@ -1584,7 +1611,7 @@ def s4_model() -> None:
           f"{[k for k in i18n_asset if k[-1:] in {':', '.', ',', ' ', '-', '_'}]}")
     # 本地补的 key 数量原本写死在 Rust 测试与此处两处，已漂移过一次。双向钉死。
     check(len(LOCAL_EXTRA) == 14 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA),
-          "R 本地补的 i18n key 恰为 47 个", f"实际 {len(LOCAL_EXTRA)}")
+          "R 本地补的 i18n key 恰为 52 个", f"实际 {len(LOCAL_EXTRA)}")
     cd = rd(CORE / "src/command.rs")
     # rustfmt 会把字段拆成多行，故用 DOTALL 匹配整个结构体字面量
     specs = re.findall(

@@ -609,6 +609,9 @@ impl NfcApp {
     /// `pub(crate)`，测试里构造不了；自检要用它模拟「窗被遮挡时 eframe
     /// 只调 `logic` 不调 `ui`」，故把与 `Frame` 无关的本体放在这里。
     pub fn logic_body(&mut self, ctx: &egui::Context) {
+        // 全局快捷键先于任何绘制处理，保证关掉面板的那一帧不再画它。
+        self.handle_keys(ctx);
+
         // S16：全局排版 token 每帧同步一次；只写 spacing/text_styles，
         // 不会覆盖 `sync_theme` 设置的 `Visuals`。
         theme_ui::apply_style(ctx);
@@ -649,6 +652,39 @@ impl NfcApp {
 
         // S11：`pending` 不再丢弃，逐条交给 `Engine` 真正执行。
         self.consume_pending();
+    }
+
+    /// 全局快捷键：Esc 取消确认窗 / 关闭最上层面板；Ctrl(⌘)+S 保存转储。
+    ///
+    /// Esc 一律朝安全侧收敛：确认窗视为「取消」，面板只关不跑动作。
+    fn handle_keys(&mut self, ctx: &egui::Context) {
+        let (esc, save) = ctx.input(|i| {
+            let mod_down = i.modifiers.ctrl || i.modifiers.command;
+            (
+                i.key_pressed(egui::Key::Escape),
+                mod_down && i.key_pressed(egui::Key::S),
+            )
+        });
+
+        // 转储编辑器开着、校验通过且没有确认窗挡在上面时才保存；
+        // "0" = 非另存为（与面板按钮一致）。
+        if save
+            && self.confirm.is_none()
+            && self.state.panels.dump_editor
+            && self.forms.editor.can_save()
+        {
+            self.exec("dump-editor-save", Some("0".to_owned()));
+            return;
+        }
+        if !esc {
+            return;
+        }
+        if self.confirm.is_some() {
+            self.confirm = None;
+            return;
+        }
+        // 面板按 `Panel::ALL` 顺序绘制，最后画的在最上层，故只关最上层那一个。
+        panels::close_topmost(&mut self.state.panels);
     }
 
     /// 连接中禁用设备下拉（R5）。**由 `device_state` 派生**，不单独存字段——
@@ -1182,6 +1218,11 @@ pub fn event_stamp() -> String {
 pub fn format_duration(total: u32) -> String {
     let (h, m, s) = (total / 3600, (total / 60) % 60, total % 60);
     format!("{h:02}:{m:02}:{s:02}")
+}
+
+/// 控制台头部的普通按钮：文案 + 悬停说明。
+fn tip_button(ui: &mut Ui, text: &str, tip: &str) -> bool {
+    ui.button(text).on_hover_text(tip).clicked()
 }
 
 /// 标题栏的可拖拽空白区间：`bar` 去掉 `blockers` 覆盖的横向范围。
@@ -1848,21 +1889,30 @@ impl NfcApp {
                     .size(nfc_core::theme::FONT_SIZE[2]),
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.button(t("html_clear_log")).clicked() {
+                if tip_button(ui, &t("html_clear_log"), &t("html_tip_clear_log")) {
                     self.state.log_buffer.clear();
                 }
-                if ui.button(t("html_save_log")).clicked() {
+                if tip_button(ui, &t("html_save_log"), &t("html_tip_save_log")) {
                     let text = self.state.log_buffer.clone();
                     self.exec("save-log", Some(text));
                 }
                 let stop =
                     egui::Button::new(RichText::new(t("html_stop_task")).color(danger).strong());
-                if ui.add_enabled(self.state.is_running_task, stop).clicked() {
+                if ui
+                    .add_enabled(self.state.is_running_task, stop)
+                    .on_hover_text(t("html_tip_stop_task"))
+                    .on_disabled_hover_text(t("html_tip_stop_idle"))
+                    .clicked()
+                {
                     self.exec("cancel-task", None);
                 }
                 // S16：把“锁滚动/自动滚动”改成带勾选状态的自动滚动开关。
                 let mut auto = !self.lock_scroll;
-                if ui.checkbox(&mut auto, t("html_unlock_scroll")).changed() {
+                if ui
+                    .checkbox(&mut auto, t("html_unlock_scroll"))
+                    .on_hover_text(t("html_tip_autoscroll"))
+                    .changed()
+                {
                     self.lock_scroll = !auto;
                 }
             });

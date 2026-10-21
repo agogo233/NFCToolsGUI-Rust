@@ -171,6 +171,18 @@ pub fn close(panels: &mut nfc_core::state::Panels, p: Panel) {
     p.set_open(panels, false);
 }
 
+/// 关闭最上层打开的面板（Esc 用）。
+///
+/// 面板按 `Panel::ALL` 顺序绘制，最后画的浮在最上层，故倒序关第一个。
+pub fn close_topmost(panels: &mut nfc_core::state::Panels) {
+    for p in Panel::ALL.iter().rev() {
+        if p.is_open(panels) {
+            p.set_open(panels, false);
+            return;
+        }
+    }
+}
+
 // ───────────────────────── 表单状态 ─────────────────────────
 
 /// 硬解码面板的表单（对标 `hardNested.html` 的 5 个 input + 2 个 checkbox）。
@@ -1231,7 +1243,8 @@ fn dump_editor(ui: &mut Ui, app: &mut NfcApp) -> bool {
     ui.horizontal(|ui| {
         ui.label(format!("{}{name}", t("html_current_file")));
     });
-    ui.horizontal(|ui| {
+    // 6 个按钮在窄窗口下装不下一行，改自动换行而不是横向溢出（docs/02 §6.29）。
+    ui.horizontal_wrapped(|ui| {
         if ui.button(t("html_open_file")).clicked() {
             // 必须走 exec：engine 不认这个名字（不在纯 UI 名单里），
             // 直接 push 会弹出 NotWired 错误事件。
@@ -1409,48 +1422,53 @@ fn dump_history(ui: &mut Ui, app: &mut NfcApp) -> bool {
     } else {
         // 提交重命名：把编辑框内容落盘并刷新历史。
         let mut commit: Option<(String, String)> = None;
-        ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
-            for f in &files {
-                let sel = app.forms.history_selected.iter().any(|s| s == f);
-                let mut checked = sel;
-                if ui.checkbox(&mut checked, f).clicked() {
-                    if checked {
-                        app.forms.history_selected.push(f.clone());
-                    } else {
-                        app.forms.history_selected.retain(|s| s != f);
+        // 高度跟随面板窗口：预留底部按钮行 56，保底 120（原写死 360，矮窗口会溢出）。
+        let list_h = (ui.available_height() - 56.0).max(120.0);
+        ScrollArea::vertical()
+            .max_height(list_h)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                for f in &files {
+                    let sel = app.forms.history_selected.iter().any(|s| s == f);
+                    let mut checked = sel;
+                    if ui.checkbox(&mut checked, f).clicked() {
+                        if checked {
+                            app.forms.history_selected.push(f.clone());
+                        } else {
+                            app.forms.history_selected.retain(|s| s != f);
+                        }
+                    }
+                    let editing = app
+                        .forms
+                        .history_rename
+                        .as_ref()
+                        .is_some_and(|(o, _)| o == f);
+                    if editing {
+                        let (_, text) = app.forms.history_rename.as_mut().unwrap();
+                        let r = ui.add(egui::TextEdit::singleline(text).desired_width(160.0));
+                        // 原版是「失焦**或**回车」提交（`dumpHistory.js:34`）。
+                        // egui 两者都能做：失焦用 `Response::lost_focus()`，
+                        // 回车直接查输入。注意**不能**写成 `&&`——单行 TextEdit
+                        // 按回车不会失焦，而失焦那一帧通常也没有回车，
+                        // 条件互斥会让回车提交永远不触发。
+                        if r.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            commit = app.forms.history_rename.take();
+                        }
+                        if ui.small_button("✓").clicked() {
+                            commit = app.forms.history_rename.take();
+                        }
+                        if ui.small_button("✗").clicked() {
+                            app.forms.history_rename = None;
+                        }
+                    } else if ui
+                        .small_button("✎")
+                        .on_hover_text(t("html_rename"))
+                        .clicked()
+                    {
+                        app.forms.history_rename = Some((f.clone(), f.clone()));
                     }
                 }
-                let editing = app
-                    .forms
-                    .history_rename
-                    .as_ref()
-                    .is_some_and(|(o, _)| o == f);
-                if editing {
-                    let (_, text) = app.forms.history_rename.as_mut().unwrap();
-                    let r = ui.add(egui::TextEdit::singleline(text).desired_width(160.0));
-                    // 原版是「失焦**或**回车」提交（`dumpHistory.js:34`）。
-                    // egui 两者都能做：失焦用 `Response::lost_focus()`，
-                    // 回车直接查输入。注意**不能**写成 `&&`——单行 TextEdit
-                    // 按回车不会失焦，而失焦那一帧通常也没有回车，
-                    // 条件互斥会让回车提交永远不触发。
-                    if r.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        commit = app.forms.history_rename.take();
-                    }
-                    if ui.small_button("✓").clicked() {
-                        commit = app.forms.history_rename.take();
-                    }
-                    if ui.small_button("✗").clicked() {
-                        app.forms.history_rename = None;
-                    }
-                } else if ui
-                    .small_button("✎")
-                    .on_hover_text(t("html_rename"))
-                    .clicked()
-                {
-                    app.forms.history_rename = Some((f.clone(), f.clone()));
-                }
-            }
-        });
+            });
         if let Some((old, new)) = commit {
             commit_rename(&dir, &old, &new, app);
         }
@@ -1462,7 +1480,8 @@ fn dump_history(ui: &mut Ui, app: &mut NfcApp) -> bool {
     let (can_edit, can_compare, can_write) = history_button_states(n);
 
     ui.horizontal(|ui| {
-        ui.horizontal(|ui| {
+        // 窄窗口下 3 个按钮装不下一行，改自动换行（docs/02 §6.29）。
+        ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(can_compare, egui::Button::new(t("html_compute_dump")))
                 .clicked()
@@ -1505,4 +1524,28 @@ fn dump_history(ui: &mut Ui, app: &mut NfcApp) -> bool {
         });
     });
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn esc_closes_the_topmost_open_panel() {
+        let mut p = nfc_core::state::Panels::default();
+        p.settings = true;
+        p.dump_editor = true;
+        // About 在 `Panel::ALL` 里最靠后，故浮在最上层。
+        p.about = true;
+        close_topmost(&mut p);
+        assert!(!p.about);
+        assert!(p.settings && p.dump_editor);
+    }
+
+    #[test]
+    fn close_topmost_noop_when_nothing_open() {
+        let mut p = nfc_core::state::Panels::default();
+        close_topmost(&mut p);
+        assert!(!p.any_open());
+    }
 }
