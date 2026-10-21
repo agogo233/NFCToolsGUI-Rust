@@ -196,6 +196,12 @@ fn detect_local_offset_secs() -> i64 {
         wday: i32,
         yday: i32,
         isdst: i32,
+        // glibc 的 `struct tm` 在 9 个 int 之后还有 `tm_gmtoff`（long）与
+        // `tm_zone`（char*）——`localtime_r` 会**完整**写入，缺了这两个
+        // 字段会让 C 库越过本结构体的边界写坏栈内存（曾致 CI 随机 SIGSEGV），
+        // 故必须逐一声明、尺寸与 glibc 对齐。
+        gmtoff: i64,
+        zone: *const u8,
     }
     extern "C" {
         fn localtime_r(timep: *const i64, result: *mut Tm) -> *mut Tm;
@@ -215,6 +221,8 @@ fn detect_local_offset_secs() -> i64 {
         wday: 0,
         yday: 0,
         isdst: 0,
+        gmtoff: 0,
+        zone: std::ptr::null(),
     };
     let mut utc = local;
     unsafe {
