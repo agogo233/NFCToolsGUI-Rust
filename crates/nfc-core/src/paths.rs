@@ -170,13 +170,11 @@ fn detect_local_offset_secs() -> i64 {
     }
     let mut local = std::mem::MaybeUninit::uninit();
     let mut utc = std::mem::MaybeUninit::uninit();
-    unsafe {
-        if GetLocalTime(local.as_mut_ptr()) == 0 || GetSystemTime(utc.as_mut_ptr()) == 0 {
-            return 0;
-        }
-        let local = local.assume_init();
-        let utc = utc.assume_init();
-    };
+    if unsafe { GetLocalTime(local.as_mut_ptr()) == 0 || GetSystemTime(utc.as_mut_ptr()) == 0 } {
+        return 0;
+    }
+    let local = unsafe { local.assume_init() };
+    let utc = unsafe { utc.assume_init() };
     let sod = |t: &SysTime| -> i64 {
         i64::from(t.hour) * 3600 + i64::from(t.minute) * 60 + i64::from(t.second)
     };
@@ -335,7 +333,7 @@ mod tests {
         // 现实时区偏移在 ±14 小时内；探测失败时退回 0，也在范围内
         let off = local_offset_secs();
         assert!(
-            (-14 * 3600)..=(14 * 3600).contains(&off),
+            ((-14 * 3600)..=(14 * 3600)).contains(&off),
             "本地偏移异常: {off}"
         );
     }

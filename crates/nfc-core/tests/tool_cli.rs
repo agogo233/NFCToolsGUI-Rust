@@ -58,6 +58,7 @@ fn gate_ok() -> GateState {
         has_current_device: true,
         is_device_connected: true,
         is_running_task: false,
+        deep_scan: false,
     }
 }
 

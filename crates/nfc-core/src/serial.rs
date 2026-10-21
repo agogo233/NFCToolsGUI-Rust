@@ -401,6 +401,7 @@ mod tests {
             has_current_device: true,
             is_device_connected: false,
             is_running_task: false,
+            deep_scan: false,
         }
     }
 
@@ -640,6 +641,7 @@ mod tests {
                 has_current_device: true,
                 is_device_connected: false,
                 is_running_task: false,
+                deep_scan: false,
             },
             &mut |e| events.push(e),
         )

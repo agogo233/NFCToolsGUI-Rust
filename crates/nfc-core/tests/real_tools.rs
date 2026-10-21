@@ -100,6 +100,7 @@ fn gate_ok() -> GateState {
         has_current_device: true,
         is_device_connected: true,
         is_running_task: false,
+        deep_scan: false,
     }
 }
 
@@ -277,6 +278,7 @@ fn real_runner_enforces_gate_and_busy() {
         has_current_device: true,
         is_device_connected: false,
         is_running_task: false,
+        deep_scan: false,
     };
     assert_eq!(
         r.start("nfc-mfclassic", &["x".into()], &not_connected),

@@ -26,7 +26,7 @@ use nfc_core::tasks::card_write::{
 };
 use nfc_core::tasks::detect::{after_detect, detect_args, guidance_for_unknown};
 use nfc_core::tasks::dict_test::{apply_dict_choice, dict_args, report_found_key};
-use nfc_core::tasks::hard_nested::{pop_matching_unknown, HardNestedRunner, RoundContext, Step};
+use nfc_core::tasks::hard_nested::{remove_unknown, HardNestedRunner, RoundContext, Step};
 use nfc_core::tasks::mfoc::{
     apply_eta, dump_save, format_duration, mfoc_args, mfoc_keys_total, EtaTracker, SaveOutcome,
 };
@@ -68,6 +68,7 @@ fn gate() -> GateState {
         has_current_device: true,
         is_device_connected: true,
         is_running_task: false,
+        deep_scan: false,
     }
 }
 
@@ -302,11 +303,7 @@ fn case_hard_nested_autorun() {
                 assert_eq!(*r.phase(), HardNestedPhase::Collecting);
                 assert_eq!(r.after_collect(&config), Step::Crack);
                 let head = unknown[0];
-                assert!(pop_matching_unknown(
-                    &mut unknown,
-                    head.sector,
-                    head.key_type
-                ));
+                assert!(remove_unknown(&mut unknown, head.sector, head.key_type));
                 let before = unknown.len() + 1;
                 assert_eq!(
                     r.after_crack_guarded(&config, before, unknown.len()),

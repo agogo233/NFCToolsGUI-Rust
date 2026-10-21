@@ -526,9 +526,9 @@ mod tests {
                     step = Step::Crack;
                 }
                 Step::Crack => {
-                    // 每轮解掉队首一条
+                    // 每轮解掉一条匹配项（移除与队首同扇区/同类型的条目）
                     let first = u[0];
-                    assert!(pop_matching_unknown(&mut u, first.sector, first.key_type));
+                    assert!(remove_unknown(&mut u, first.sector, first.key_type));
                     step = r.after_crack(&c, u.len());
                 }
                 _ => break,

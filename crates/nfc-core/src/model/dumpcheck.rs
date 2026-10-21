@@ -61,7 +61,7 @@ pub struct FixedItem {
 fn read_access_bits(ac: [u8; 4]) -> [u8; 4] {
     [
         ((ac[2] & 0x10) >> 4) + ((ac[2] & 0x01) << 1) + ((ac[1] & 0x10) >> 2),
-        ((ac[2] & 0x20) >> 5) + ac[2] & 0x02 + ((ac[1] & 0x20) >> 3),
+        ((ac[2] & 0x20) >> 5) + (ac[2] & 0x02) + ((ac[1] & 0x20) >> 3),
         ((ac[2] & 0x40) >> 6) + ((ac[2] & 0x04) >> 1) + ((ac[1] & 0x40) >> 4),
         ((ac[2] & 0x80) >> 7) + ((ac[2] & 0x08) >> 2) + ((ac[1] & 0x80) >> 5),
     ]
@@ -581,9 +581,9 @@ mod tests {
         // 扇区 3 尾块：KeyA = aabbccddeeff，KeyB = 112233445566
         let t = 3 * 64 + 48;
         let mut line = [0u8; 16];
-        line[0..6] = [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff];
-        line[10..16] = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
-        line[6..10] = [0xff, 0x07, 0x80, 0x69];
+        line[0..6].copy_from_slice(&[0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]);
+        line[10..16].copy_from_slice(&[0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+        line[6..10].copy_from_slice(&[0xff, 0x07, 0x80, 0x69]);
         s[3][3] = hex::hex_encode(&line);
         let keys = key_dict(&s);
         // 扇区 0 默认 FF×6 排最前，随后按扇区顺序；重复只留首次

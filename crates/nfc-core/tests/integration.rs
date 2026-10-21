@@ -69,6 +69,7 @@ fn gs_connected(has_device: bool) -> GateState {
         has_current_device: has_device,
         is_device_connected: false,
         is_running_task: false,
+        deep_scan: false,
     }
 }
 
@@ -916,6 +917,7 @@ fn s5_eta_converges_over_mock_runner_chunks() {
                 has_current_device: true,
                 is_device_connected: true,
                 is_running_task: false,
+                deep_scan: false,
             },
         )
         .unwrap();
@@ -1032,7 +1034,7 @@ use nfc_core::tasks::card_write::{
 };
 use nfc_core::tasks::dict_test::{apply_dict_choice, dict_args, report_found_key};
 use nfc_core::tasks::hard_nested::{
-    pop_matching_unknown, HardNestedRunner, RoundContext, Step, TOOL_COLLECT, TOOL_CRYPTO1,
+    remove_unknown, HardNestedRunner, RoundContext, Step, TOOL_COLLECT, TOOL_CRYPTO1,
 };
 use nfc_core::tasks::phw::{block0_bcc_ok, patch_data_block, SectorBlock};
 
@@ -1209,11 +1211,7 @@ fn s7_auto_run_loop_drains_unknown() {
         assert_eq!(r.after_detect(&known, &unknown), Step::Collect);
         assert_eq!(r.after_collect(&config), Step::Crack);
         let head = unknown[0];
-        assert!(pop_matching_unknown(
-            &mut unknown,
-            head.sector,
-            head.key_type
-        ));
+        assert!(remove_unknown(&mut unknown, head.sector, head.key_type));
         assert_eq!(r.after_crack(&config, unknown.len()), Step::Detect);
         guard += 1;
     }

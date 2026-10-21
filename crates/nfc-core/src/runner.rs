@@ -680,6 +680,7 @@ mod tests {
             has_current_device: true,
             is_device_connected: true,
             is_running_task: false,
+            deep_scan: false,
         }
     }
 
@@ -926,6 +927,7 @@ mod tests {
             has_current_device: false,
             is_device_connected: true,
             is_running_task: false,
+            deep_scan: false,
         };
         // 连 nfc-list 也不放行：原版 currentDevice === null 时先判定
         assert_eq!(gate("nfc-list", st), Err(ToolError::NotConnected));
@@ -938,6 +940,7 @@ mod tests {
             has_current_device: true,
             is_device_connected: false,
             is_running_task: false,
+            deep_scan: false,
         };
         assert_eq!(gate("nfc-list", st), Ok(()));
         assert_eq!(gate("nfc-mfoc", st), Err(ToolError::NotConnected));
@@ -950,6 +953,7 @@ mod tests {
             has_current_device: true,
             is_device_connected: true,
             is_running_task: true,
+            deep_scan: false,
         };
         assert_eq!(gate("nfc-list", st), Err(ToolError::Busy));
         assert_eq!(gate("nfc-mfoc", st), Err(ToolError::Busy));
@@ -1049,6 +1053,7 @@ mod tests {
             has_current_device: true,
             is_device_connected: false,
             is_running_task: false,
+            deep_scan: false,
         };
         assert_eq!(r.start("nfc-mfoc", &[], &st), Err(ToolError::NotConnected));
         assert!(r.started.is_empty());

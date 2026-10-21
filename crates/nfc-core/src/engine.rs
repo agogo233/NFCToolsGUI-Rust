@@ -1509,7 +1509,13 @@ impl Engine {
     }
 
     /// 工具退出后的收尾。
-    fn finish(&mut self, run: Running, exit: &runner::Exit, state: &mut AppState, paths: &Paths) {
+    fn finish(
+        &mut self,
+        mut run: Running,
+        exit: &runner::Exit,
+        state: &mut AppState,
+        paths: &Paths,
+    ) {
         state.is_running_task = false;
         state.progress = None;
 

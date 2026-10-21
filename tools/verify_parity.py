@@ -805,7 +805,8 @@ def s4_model() -> None:
           "S7 autoRun 无进展兜底（防无限递归）")
     check("pub fn cancel" in hn, "S7 提供中止路径")
     check("pub fn nonces_default_name" in hn and '"nonces"' in hn, "S7 nonce 默认名回落")
-    check("pub fn remove_unknown" in hn and "pop" in hn, "S7 移除匹配到的 unknown（任意位置）")
+    check("pub fn remove_unknown" in hn and "remove_unknown_removes_non_head_match" in hn,
+          "S7 移除匹配到的 unknown（任意位置）")
     check("pub fn progress_percent" in hn and ".min(100.0)" in hn, "S7 进度上限 100")
     dt = rd(CORE / "src/tasks/dict_test.rs")
     check('TOOL_DICT: &str = "nfc-mfdict"' in dt, "S7 字典工具名")
