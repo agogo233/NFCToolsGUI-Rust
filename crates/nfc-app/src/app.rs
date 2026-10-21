@@ -1749,11 +1749,9 @@ impl NfcApp {
                                         _ => String::new(),
                                     };
                                     let r = if enabled {
-                                        ui.add_enabled(true, btn)
-                                            .on_hover_text(t(tip))
+                                        ui.add_enabled(true, btn).on_hover_text(t(tip))
                                     } else {
-                                        ui.add_enabled(false, btn)
-                                            .on_disabled_hover_text(reason)
+                                        ui.add_enabled(false, btn).on_disabled_hover_text(reason)
                                     };
                                     if r.clicked() {
                                         self.exec(action, None);
