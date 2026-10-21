@@ -68,21 +68,27 @@ pub enum FilePurpose {
     ReadIcSave,
     /// HardNested `collectOnly`：采完才弹（默认名含本轮 sector）。
     NoncesSave,
+    /// S18 `cuid-write`：选源 dump（CUID 空卡写入）。
+    CuidDump,
+    /// S18 `dump-editor-export-keys`：把密钥字典另存为文件。
+    ExportKeys,
 }
 
 impl FilePurpose {
     /// 系统弹窗打开时，底栏显示的等待文案。
     pub fn pending_text(self) -> &'static str {
         match self {
-            FilePurpose::WriteDump | FilePurpose::WriteUidDump | FilePurpose::EditorFile => {
-                "正在等待选择文件…"
-            }
+            FilePurpose::WriteDump
+            | FilePurpose::WriteUidDump
+            | FilePurpose::EditorFile
+            | FilePurpose::CuidDump => "正在等待选择文件…",
             FilePurpose::ComparatorA | FilePurpose::ComparatorB => "正在等待选择转储…",
             FilePurpose::DictFile => "正在等待选择字典…",
             FilePurpose::SaveLog
             | FilePurpose::EditorSaveAs
             | FilePurpose::ReadIcSave
-            | FilePurpose::NoncesSave => "正在等待选择保存路径…",
+            | FilePurpose::NoncesSave
+            | FilePurpose::ExportKeys => "正在等待选择保存路径…",
         }
     }
 }
@@ -422,6 +428,8 @@ mod tests {
             FilePurpose::EditorSaveAs,
             FilePurpose::ComparatorA,
             FilePurpose::ComparatorB,
+            FilePurpose::CuidDump,
+            FilePurpose::ExportKeys,
         ];
         for p in all {
             assert!(!p.pending_text().is_empty(), "{p:?} 缺等待文案");

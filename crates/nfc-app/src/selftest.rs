@@ -113,6 +113,12 @@ pub fn run() -> eframe::Result {
         ),
         // ── S14 手机/手环操作区 ──
         ("手机/手环开面板+块号门禁", case_phone_wristband),
+        // ── S18 新能力接线 ──
+        ("CUID 写选源后进确认框", c_cuid_write_flow),
+        ("手输卡号面板打开 + 非法输入", c_uid_input_invalid),
+        ("手输卡号合法输入进确认框", c_uid_input_valid),
+        ("编辑器导出密钥落盘", c_export_keys_flow),
+        ("全加密爆破启动 mfcuk", c_run_mfcuk_flow),
     ];
 
     let total = cases.len();
@@ -2320,6 +2326,164 @@ fn case_phone_wristband() -> Result<(), String> {
     }
     if block0_bcc_ok("04A8A68A000400010000000000000000") {
         return Err("不自洽 block0 被误判为自洽".into());
+    }
+    Ok(())
+}
+
+// ═══════════════════ S18 新能力接线 ═══════════════════
+
+/// `cuid-write`：写卡列「CUID写」无参时先选源 dump（CuidDump），
+/// 选中后进 `CuidWrite` 应用内确认框（S18）。
+fn c_cuid_write_flow() -> Result<(), String> {
+    let (_d, mut app) = app_with_temp_dumps("cuid");
+    let p = app.paths.dumpfiles_dir().join("src.mfd");
+    std::fs::write(&p, vec![0x33; 64]).unwrap();
+    app.exec("cuid-write", None);
+    if app.dialogs_host.outstanding() != 1 {
+        return Err("cuid-write 应弹一次源 dump 文件框".into());
+    }
+    reply_picked(&mut app, FilePurpose::CuidDump, "src.mfd");
+    let c = app.confirm.take().ok_or("应有 CUID 确认框")?;
+    if !matches!(c.kind, ConfirmKind::CuidWrite { .. }) {
+        return Err(format!("确认类型错: {:?}", c.kind));
+    }
+    if c.message.is_empty() {
+        return Err("CUID 确认正文为空".into());
+    }
+    app.on_confirm_result(c, true);
+    app.consume_pending();
+    // 确认后要真的启动备份段（engine `cuid-write` → read_then_exec 第一段）
+    let (t1, _, _) = app
+        .engine
+        .runner()
+        .started_last()
+        .ok_or("CUID 写未启动第一段")?;
+    if t1 != "nfc-mfdetect" {
+        return Err(format!("第一段应变 mfdetect，实为 {t1}"));
+    }
+    Ok(())
+}
+
+/// `input-uid-write`：打开 UidInput 面板（重置输入框）；
+/// `done-input-uid-write` 非法输入 → 只记错误不弹确认框（S18）。
+fn c_uid_input_invalid() -> Result<(), String> {
+    let mut app = connected_app();
+    app.exec("input-uid-write", None);
+    if !app.state.panels.uid_input {
+        return Err("UidInput 面板未打开".into());
+    }
+    if !app.forms.input_uid.is_empty() {
+        return Err("开面板时输入框未清空".into());
+    }
+    // 非法输入：不是 8/32 hex
+    app.forms.input_uid = "nothex".into();
+    app.exec("done-input-uid-write", Some(app.forms.input_uid.clone()));
+    if app.confirm.is_some() {
+        return Err("非法输入不应弹确认框".into());
+    }
+    use nfc_core::state::EventKind;
+    if !app.state.events.iter().any(|e| e.kind == EventKind::Error) {
+        return Err("非法输入未记 error 事件".into());
+    }
+    Ok(())
+}
+
+/// `done-input-uid-write`：合法 8 位 UID → 拼 0 块 → `UidInputWrite` 确认框
+/// （带 B6 随机码），确认后 engine 启动 `nfc-mfsetuid`（S18）。
+fn c_uid_input_valid() -> Result<(), String> {
+    let (_d, mut app) = app_with_temp_dumps("uid-input");
+    app.exec("input-uid-write", None);
+    // 8 位 UID（a1b2c3d4，BCC=0x04），清洗后应通过并拼 0 块
+    app.forms.input_uid = "a1b2c3d4".into();
+    app.exec("done-input-uid-write", Some(app.forms.input_uid.clone()));
+    let c = app.confirm.take().ok_or("合法输入应有确认框")?;
+    if !matches!(c.kind, ConfirmKind::UidInputWrite { .. }) {
+        return Err(format!("确认类型错: {:?}", c.kind));
+    }
+    if c.code.is_none() {
+        return Err("UidInputWrite 应带 B6 随机码".into());
+    }
+    let ConfirmKind::UidInputWrite { text } = &c.kind else {
+        unreachable!()
+    };
+    if text != "a1b2c3d4" {
+        return Err("确认框载荷丢了原文".into());
+    }
+    if !c.message.contains("A1B2C3D4") {
+        return Err("确认正文应含拼好的 0 块大写 hex".into());
+    }
+    app.on_confirm_result(c, true);
+    app.consume_pending();
+    let (tool, args, _) = app
+        .engine
+        .runner()
+        .started_last()
+        .ok_or("确认后未启动 nfc-mfsetuid")?;
+    if tool != "nfc-mfsetuid" {
+        return Err(format!("工具错: {tool}"));
+    }
+    if args[0] != "-q" || args[1].len() != 32 {
+        return Err(format!("参数错: {args:?}"));
+    }
+    Ok(())
+}
+
+/// `dump-editor-export-keys`：编辑器「导出密钥」→ 系统保存框（ExportKeys），
+/// 写 `dumpcheck::key_dict` 到文件（S18）。
+fn c_export_keys_flow() -> Result<(), String> {
+    let (_d, mut app) = app_with_temp_dumps("export-keys");
+    // 编辑器载入一个只有默认密钥的 dump，导出应得到密钥行
+    let mut sectors = nfc_core::model::dump::to_sector_lines(&vec![0xff; 1024]).unwrap();
+    // A2 全扇区默认密钥（写入 trailers）
+    for (si, _s) in sectors.iter_mut().enumerate() {
+        let trailer = "FFFFFFFFFFFFFFFFFFFFFFFFF0FFFFFFFFFFFF".to_string();
+        sectors[si][3] = trailer;
+    }
+    app.forms.editor.sectors = sectors;
+    app.exec("dump-editor-export-keys", None);
+    if app.dialogs_host.outstanding() != 1 {
+        return Err("导出应弹一次保存框".into());
+    }
+    app.dialogs_host.feed_reply(
+        FilePurpose::ExportKeys,
+        Some(app.paths.dumpfiles_dir().join("keys.txt")),
+    );
+    app.tick();
+    if !app.paths.dumpfiles_dir().join("keys.txt").exists() {
+        return Err("导出文件未落盘".into());
+    }
+    Ok(())
+}
+
+/// `run-mfcuk`：写卡列「全加密爆破」→ 直接启动 mfcuk（无需文件/确认），
+/// 跑完把爆出的密钥 save_keys 落盘（S18）。
+fn c_run_mfcuk_flow() -> Result<(), String> {
+    use nfc_core::runner::Chunk;
+    let (_d, app) = app_with_temp_dumps("mfcuk");
+    let mut app = app.with_mock_backend(vec![
+        // `MfcukKeyParser` 认 `recovered KEY: [xxx]` 行
+        Chunk::stdout("recovered KEY: [4d3c2b1a0f1e]"),
+    ]);
+    app.exec("run-mfcuk", None);
+    app.consume_pending();
+    let (tool, args, _) = app
+        .engine
+        .runner()
+        .started_last()
+        .ok_or("run-mfcuk 未启动")?;
+    if tool != "mfcuk" {
+        return Err(format!("工具错: {tool}"));
+    }
+    if args != nfc_core::tasks::card_write::mfcuk_args() {
+        return Err(format!("参数错: {args:?}"));
+    }
+    // mock 吐一行 mfcuk 输出，跑完应产出 Key 方向事件（密钥落盘的标志）。
+    for _ in 0..3 {
+        app.tick();
+    }
+    use nfc_core::state::EventKind;
+    if !app.state.events.iter().any(|e| e.kind == EventKind::Key) {
+        return Err(format!("mfcuk 密钥未推 Key 事件: {:?}", app.state.events));
     }
     Ok(())
 }

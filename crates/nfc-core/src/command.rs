@@ -1,4 +1,5 @@
-//! 34 个 action 注册表与前置门禁（30 对齐原版 command.js + 4 个 S14 手机/手环增量）。
+//! 39 个 action 注册表与前置门禁（30 对齐原版 command.js + 4 个 S14 手机/手环
+//! 增量 + 5 个 S18 新增）。
 //!
 //! action 名称与顺序严格对标原版 `src/command.js` 的 `actions` map。
 //! 门禁对标 `execUtils.js::exec()` 的设备门禁与 `isRunningTask` 单任务限制。
@@ -6,8 +7,9 @@
 use crate::state::AppState;
 use crate::state::DeviceState;
 
-/// 34 个 action 名称清单：前 30 顺序同原版 `command.js` actions map，
-/// 末 4 项（phw-*）为 S14 手机/手环增量，原版 Electron 没有、仅 Tauri 端口实现。
+/// 39 个 action 名称清单：前 30 顺序同原版 `command.js` actions map，
+/// 34-37（phw-*）为 S14 手机/手环增量，38-42（末 5 项）为 S18 新增
+/// （CUID 写 / 手输卡号 / 导出密钥 / 全加密爆破 / 深层扫描开关）。
 pub const ALL_ACTIONS: &[&str] = &[
     "open-settings-window",
     "scan-usb-devices",
@@ -43,6 +45,12 @@ pub const ALL_ACTIONS: &[&str] = &[
     "phw-read-uid",
     "phw-write-uid",
     "phw-write-data",
+    // S18 新增（MifareOneTool / MyPN532 / 上游 Tauri 的能力搬运）：
+    "cuid-write",
+    "input-uid-write",
+    "done-input-uid-write",
+    "dump-editor-export-keys",
+    "run-mfcuk",
 ];
 
 /// 单个 action 的门禁声明。
@@ -264,6 +272,39 @@ pub const ACTION_SPECS: &[ActionSpec] = &[
         idle: true,
         not_while_connecting: false,
     },
+    // S18 新增
+    ActionSpec {
+        name: "cuid-write",
+        connected: true,
+        idle: true,
+        not_while_connecting: false,
+    },
+    // 面板开关：仅需空闲（对标 `hard-nested` / `dict-test` 的开面板语义）
+    ActionSpec {
+        name: "input-uid-write",
+        connected: false,
+        idle: true,
+        not_while_connecting: false,
+    },
+    ActionSpec {
+        name: "done-input-uid-write",
+        connected: true,
+        idle: true,
+        not_while_connecting: false,
+    },
+    // 纯文件操作（编辑器导出密钥字典），不占门禁
+    ActionSpec {
+        name: "dump-editor-export-keys",
+        connected: false,
+        idle: false,
+        not_while_connecting: false,
+    },
+    ActionSpec {
+        name: "run-mfcuk",
+        connected: true,
+        idle: true,
+        not_while_connecting: false,
+    },
 ];
 
 /// 按名称查注册表项。
@@ -313,8 +354,8 @@ mod tests {
     use crate::i18n;
 
     #[test]
-    fn all_actions_is_exactly_34() {
-        assert_eq!(ALL_ACTIONS.len(), 34);
+    fn all_actions_is_exactly_39() {
+        assert_eq!(ALL_ACTIONS.len(), 39);
     }
 
     #[test]
@@ -350,7 +391,8 @@ mod tests {
 
     #[test]
     fn connected_actions_match_spec_doc() {
-        // docs/01 §3 标注「连接」前置的 10 个 action
+        // docs/01 §3 标注「连接」前置的 action（S18 新增 cuid-write /
+        // done-input-uid-write / run-mfcuk 均 connected+idle）
         let want: &[&str] = &[
             "read-IC",
             "write-IC",
@@ -365,6 +407,9 @@ mod tests {
             "phw-read-uid",
             "phw-write-uid",
             "phw-write-data",
+            "cuid-write",
+            "done-input-uid-write",
+            "run-mfcuk",
         ];
         let got: Vec<&str> = ACTION_SPECS
             .iter()
@@ -394,6 +439,10 @@ mod tests {
             "phw-read-uid",
             "phw-write-uid",
             "phw-write-data",
+            "cuid-write",
+            "input-uid-write",
+            "done-input-uid-write",
+            "run-mfcuk",
         ];
         let got: Vec<&str> = ACTION_SPECS
             .iter()
@@ -498,6 +547,6 @@ mod tests {
             .iter()
             .filter(|s| s.connected || s.idle || s.not_while_connecting)
             .count();
-        assert_eq!(gated, 17, "13 连接 + 16 空闲 + 1 连接中，去重后应为 17");
+        assert_eq!(gated, 21, "16 连接 + 20 空闲 + 1 连接中，去重后应为 21");
     }
 }

@@ -4,7 +4,7 @@
 //! 偏离登记见 docs/02 §6。
 //!
 //! 流程：探测（autoRun 时）→ 采集 nonce → [collectOnly 则保存退出] → cropto1_bs
-//! 破解 → 命中则移除队首 unknown → autoRun 则递归下一轮。
+//! 破解 → 命中则移除对应 unknown（任意位置，S18 F1）→ autoRun 则递归下一轮。
 //!
 //! 设计：`HardNestedRunner` 持显式状态机 [`HardNestedPhase`]，把「本轮该跑哪个
 //! 工具、跑完该做什么」表达为纯函数，便于对原版那个 120 行的嵌套闭包做矩阵测试。
@@ -254,20 +254,23 @@ impl HardNestedRunner {
     }
 }
 
-/// 从 `unknown` 队首移除一条，对标 `command.js:333-335`。
+/// 从 `unknown` 队列里移除命中的那条（任意位置），对标 `command.js:333-335`
+/// 的 `shift()` 并修正其已知缺陷。
 ///
-/// 原版只在「命中的扇区与类型与队首一致」时 `shift()`，避免乱序命中破坏队列。
-pub fn pop_matching_unknown(
-    unknown: &mut Vec<UnknownKeyInfo>,
-    sector: u8,
-    key_type: KeyType,
-) -> bool {
-    match unknown.first() {
-        Some(u) if u.sector == sector && u.key_type == key_type => {
-            unknown.remove(0);
+/// 原版只在「命中的扇区与类型与**队首**一致」时 `shift()`，命中非队首时结果
+/// 被静默丢弃（§6.2 #27 登记的「已知功能限制」：该 unknown 永远留在队列，
+/// 队首一直挡着它）。S18 改为按 `(sector, key_type)` 在**任意位置**移除命中项：
+/// 乱序命中不再丢密钥，autoRun 的下一轮队列也随之推进。返回是否移除成功。
+pub fn remove_unknown(unknown: &mut Vec<UnknownKeyInfo>, sector: u8, key_type: KeyType) -> bool {
+    let pos = unknown
+        .iter()
+        .position(|u| u.sector == sector && u.key_type == key_type);
+    match pos {
+        Some(i) => {
+            unknown.remove(i);
             true
         }
-        _ => false,
+        None => false,
     }
 }
 
@@ -596,32 +599,34 @@ mod tests {
     // ---------------------------------------------------------- unknown 队列
 
     #[test]
-    fn pop_matching_removes_only_head() {
+    fn remove_unknown_removes_head() {
         let mut u = unknown(3);
-        assert!(pop_matching_unknown(&mut u, 1, KeyType::B));
+        assert!(remove_unknown(&mut u, 1, KeyType::B));
         assert_eq!(u.len(), 2);
         assert_eq!(u[0].sector, 2);
     }
 
     #[test]
-    fn pop_matching_ignores_non_head_match() {
+    fn remove_unknown_removes_non_head_match() {
+        // S18（F1）：命中第 2 条即移除该条，不再要求它是队首
         let mut u = unknown(3);
-        // 命中第 2 条，不应移除队首
-        assert!(!pop_matching_unknown(&mut u, 2, KeyType::B));
-        assert_eq!(u.len(), 3);
+        assert!(remove_unknown(&mut u, 2, KeyType::B));
+        assert_eq!(u.len(), 2);
+        assert_eq!(u[0].sector, 1, "队首保持不变");
+        assert_eq!(u[1].sector, 3, "命中项被移除");
     }
 
     #[test]
-    fn pop_matching_respects_key_type() {
+    fn remove_unknown_respects_key_type() {
         let mut u = unknown(2);
-        assert!(!pop_matching_unknown(&mut u, 1, KeyType::A));
+        assert!(!remove_unknown(&mut u, 1, KeyType::A));
         assert_eq!(u.len(), 2);
     }
 
     #[test]
-    fn pop_matching_on_empty_is_safe() {
+    fn remove_unknown_on_empty_is_safe() {
         let mut u: Vec<UnknownKeyInfo> = Vec::new();
-        assert!(!pop_matching_unknown(&mut u, 0, KeyType::A));
+        assert!(!remove_unknown(&mut u, 0, KeyType::A));
     }
 
     // ---------------------------------------------------------- 文案

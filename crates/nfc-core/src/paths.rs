@@ -61,9 +61,14 @@ impl Paths {
         self.base.join("registry.json")
     }
 
-    /// `libnfc.conf` 内容；`device` 为串口路径，`speed` 恒 115200。
+    /// `libnfc.conf` 内容；`device` 为串口路径，`speed` 由调用方指定（S18 可调）。
     pub fn libnfc_conf(device: &str, speed: u32) -> String {
         format!("device.name = \"NFC_Device\"\ndevice.connstring = \"pn532_uart:{device}:{speed}\"")
+    }
+
+    /// CUID 空卡密钥文件（`cuid-write` 的第二段用，收尾时删除）。
+    pub fn cuid_keyfile(&self) -> PathBuf {
+        self.base.join("cuid.mfd")
     }
 
     /// dump 默认文件名：`{uid}_{timestamp}.mfd`；uid 为空时退化为 `card`。
@@ -111,18 +116,133 @@ pub fn dict_file_from(exe_dir: Option<&Path>, repo_root: &Path) -> PathBuf {
     exe_dir.map(|d| d.join("dict.dic")).unwrap_or(repo)
 }
 
-/// 当前时间戳 `yyyy_MM_dd_HH_mm_ss`。
+/// 当前时间戳 `yyyy_MM_dd_HH_mm_ss`（**本地时区**）。
 ///
-/// 对标 `command.js::getTimeList()`。原版取**本地时区**（`getHours()`），
-/// 而 Rust 标准库无时区支持，故此处固定用 UTC——与本地时区差 8 小时
-/// （东八区）。**已披露于 README §已知限制**；完全对齐需引入时区库，
-/// 本版刻意不做（影响仅文件名/日志名，无正确性问题）。
+/// 对标 `command.js::getTimeList()` 的本地时区语义。S18（F3）修正：
+/// 此前用 UTC（§6.23 登记的「刻意不做」），东八区用户看到的文件名早 8 小时。
+/// 现按本地时区偏移渲染，偏移来自 C 库（Windows `GetLocalTime` / POSIX
+/// `localtime_r`），零新增依赖。
 pub fn timestamp() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    format_timestamp(secs)
+    format_timestamp(secs + local_offset_secs())
+}
+
+/// 事件条时间戳 `HH:MM:SS`（**本地时区**，对标原版 `index.js:118` 的
+/// `getHours()`）。`app::event_stamp` 委托到此。
+pub fn event_stamp() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let sod = (secs + local_offset_secs()).rem_euclid(86_400);
+    format!("{:02}:{:02}:{:02}", sod / 3600, (sod % 3600) / 60, sod % 60)
+}
+
+/// 本地时区相对 UTC 的偏移（秒），进程内只算一次。
+///
+/// 取「同一瞬间」的本地钟与 UTC 钟之差，归一化到 `(-86400, 86400]`。
+/// 拿不到（C 库调用失败）时按 0 处理（退回 UTC，与旧行为一致）。
+fn local_offset_secs() -> i64 {
+    static OFFSET: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+    *OFFSET.get_or_init(detect_local_offset_secs)
+}
+
+/// 平台的本地偏移探测。
+#[cfg(windows)]
+fn detect_local_offset_secs() -> i64 {
+    #[repr(C)]
+    struct SysTime {
+        year: u16,
+        month: u16,
+        day_of_week: u16,
+        day: u16,
+        hour: u16,
+        minute: u16,
+        second: u16,
+        milliseconds: u32,
+    }
+    extern "system" {
+        fn GetLocalTime(out: *mut SysTime) -> u32;
+        fn GetSystemTime(out: *mut SysTime) -> u32;
+    }
+    let mut local = std::mem::MaybeUninit::uninit();
+    let mut utc = std::mem::MaybeUninit::uninit();
+    unsafe {
+        if GetLocalTime(local.as_mut_ptr()) == 0 || GetSystemTime(utc.as_mut_ptr()) == 0 {
+            return 0;
+        }
+        let local = local.assume_init();
+        let utc = utc.assume_init();
+    };
+    let sod = |t: &SysTime| -> i64 {
+        i64::from(t.hour) * 3600 + i64::from(t.minute) * 60 + i64::from(t.second)
+    };
+    normalize_offset(sod(&local) - sod(&utc))
+}
+
+/// 平台的本地偏移探测（POSIX：C 库 `localtime_r` / `gmtime_r`）。
+#[cfg(not(windows))]
+fn detect_local_offset_secs() -> i64 {
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Tm {
+        sec: i32,
+        min: i32,
+        hour: i32,
+        mday: i32,
+        mon: i32,
+        year: i32,
+        wday: i32,
+        yday: i32,
+        isdst: i32,
+    }
+    extern "C" {
+        fn localtime_r(timep: *const i64, result: *mut Tm) -> *mut Tm;
+        fn gmtime_r(timep: *const i64, result: *mut Tm) -> *mut Tm;
+    }
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let mut local = Tm {
+        sec: 0,
+        min: 0,
+        hour: 0,
+        mday: 0,
+        mon: 0,
+        year: 0,
+        wday: 0,
+        yday: 0,
+        isdst: 0,
+    };
+    let mut utc = local;
+    unsafe {
+        if localtime_r(&secs, &mut local).is_null() || gmtime_r(&secs, &mut utc).is_null() {
+            return 0;
+        }
+    };
+    // 用「当年内的秒数」相减；跨年瞬间 yday 差一年，由归一化吸收。
+    let soy = |t: &Tm| -> i64 {
+        i64::from(t.yday) * 86_400
+            + i64::from(t.hour) * 3600
+            + i64::from(t.min) * 60
+            + i64::from(t.sec)
+    };
+    normalize_offset(soy(&local) - soy(&utc))
+}
+
+/// 把「同刻本地/UTC 之差」归一化到 `(-86400, 86400]`（跨年 / 跨午夜时差一整日）。
+fn normalize_offset(mut d: i64) -> i64 {
+    while d <= -43_200 {
+        d += 86_400;
+    }
+    while d > 43_200 {
+        d -= 86_400;
+    }
+    d
 }
 
 /// 纯函数：unix 秒 → `yyyy_MM_dd_HH_mm_ss`。
@@ -198,6 +318,34 @@ mod tests {
         for i in [4, 7, 10, 13, 16] {
             assert_eq!(b[i], b'_', "位置 {i} 应为下划线，实际: {t}");
         }
+    }
+
+    #[test]
+    fn normalize_offset_wraps_across_day_boundary() {
+        assert_eq!(normalize_offset(0), 0);
+        assert_eq!(normalize_offset(8 * 3600), 8 * 3600, "东八区");
+        assert_eq!(normalize_offset(-5 * 3600), -5 * 3600, "西五区");
+        // 跨年瞬间差一整天：-82800（= 3600 - 86400）应归一回 3600
+        assert_eq!(normalize_offset(3600 - 86_400), 3600);
+        assert_eq!(normalize_offset(-3600 + 86_400), -3600);
+    }
+
+    #[test]
+    fn detected_local_offset_is_sane() {
+        // 现实时区偏移在 ±14 小时内；探测失败时退回 0，也在范围内
+        let off = local_offset_secs();
+        assert!(
+            (-14 * 3600)..=(14 * 3600).contains(&off),
+            "本地偏移异常: {off}"
+        );
+    }
+
+    #[test]
+    fn event_stamp_shape_is_hh_mm_ss() {
+        let s = event_stamp();
+        assert_eq!(s.len(), 8, "实际: {s}");
+        assert_eq!(s.as_bytes()[2], b':');
+        assert_eq!(s.as_bytes()[5], b':');
     }
 
     #[test]

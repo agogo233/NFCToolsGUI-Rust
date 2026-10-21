@@ -49,18 +49,18 @@ pub fn dict_file_name(path: &str) -> &str {
     path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
-/// 从 `paths` 解析出字典的默认配置，对标 `command.js:388-392`。
+/// 由检测结果构造字典测试配置，对标 `command.js:388-392`。
 ///
-/// 起始位置 `0` 是原版 `DictTestConfig` 的缺省（面板里用户可改）。
-pub fn default_config(unknown_head: Option<(u8, KeyType)>) -> DictTestConfig {
-    match unknown_head {
-        Some((sector, key_type)) => DictTestConfig {
-            sector,
-            key_type,
-            start_position: 0,
-        },
-        None => DictTestConfig::default(),
-    }
+/// S18 修正（原 §6.2 #32 登记的歧义）：无 unknown 时返回 `None`（面板应
+/// 禁用、不给出「扇区 0」假目标），有 unknown 队首时返回 `Some`。
+/// 原先无 unknown 也返回全零 `DictTestConfig`（扇区 0 + KeyA），调用方
+/// 无法区分「没有未知扇区」与「目标恰好是扇区 0」。
+pub fn default_config(unknown_head: Option<(u8, KeyType)>) -> Option<DictTestConfig> {
+    unknown_head.map(|(sector, key_type)| DictTestConfig {
+        sector,
+        key_type,
+        start_position: 0, // 原版 `DictTestConfig` 缺省起始位置 0
+    })
 }
 
 /// 字典测试的状态条，对标 `command.js:385`。
@@ -148,17 +148,17 @@ mod tests {
 
     #[test]
     fn default_config_from_unknown_head() {
-        let c = default_config(Some((5, KeyType::A)));
+        let c = default_config(Some((5, KeyType::A))).unwrap();
         assert_eq!(c.sector, 5);
         assert_eq!(c.key_type, KeyType::A);
         assert_eq!(c.start_position, 0);
     }
 
     #[test]
-    fn default_config_without_unknown_is_zeroed() {
+    fn default_config_without_unknown_is_none() {
+        // S18：无 unknown 时不再返回全零配置（那是「扇区 0」的假目标）
         let c = default_config(None);
-        assert_eq!(c, DictTestConfig::default());
-        assert_eq!(c.start_position, 0);
+        assert!(c.is_none(), "无 unknown 必须为 None，不得给出扇区 0 假目标");
     }
 
     // ---------------------------------------------------------- 对话框

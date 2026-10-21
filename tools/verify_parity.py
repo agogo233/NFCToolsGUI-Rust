@@ -78,6 +78,47 @@ S17_EXTRA = {
     "log_msg_block0_bcc_invalid",
     "log_msg_write_incomplete",
 }
+# S18 搬运本地新增的 14 个 key（原版没有）：CUID 写、mfcuk、通信速度、
+# 深度扫描、B6 确认码、值块标记（docs/02 §6.27 登记）。
+S18_EXTRA = {
+    "dialog_msg_confirm_cuid_write",
+    "html_applies_after_reconnect",
+    "html_confirm_code",
+    "html_cuid_write",
+    "html_deep_scan",
+    "html_mfcuk_run",
+    "html_tip_cuid_write",
+    "html_tip_mfcuk_run",
+    "html_value_block",
+    "indicator_mfcuk_running",
+    "indicator_writing_cuid",
+    "log_msg_applies_after_reconnect",
+    "log_msg_cuid_key_built",
+    "log_msg_start_mfcuk",
+}
+# S18 从「上游独有」挪回的 20 个 key：两版共有且文案逐字一致。
+S18_MIGRATED = {
+    "dialog_msg_invalid_uid_input",
+    "html_check_all_ok",
+    "html_check_dump",
+    "html_data_not_classic_layout",
+    "html_error_acl_corrupt",
+    "html_error_acl_invalid",
+    "html_error_bcc",
+    "html_error_not_hex",
+    "html_error_size",
+    "html_error_size_bytes",
+    "html_export_keys",
+    "html_fix_dump",
+    "html_fix_none",
+    "html_fix_summary",
+    "html_speed",
+    "html_tip_write_uid_input",
+    "html_uid_input_placeholder",
+    "html_uid_input_title",
+    "html_write_uid_input",
+    "log_msg_bcc_force",
+}
 # 两个 scratch 目录：每次运行重建（a_rustfmt rmtree 后重拷，b_resolve mkdir）。
 # 用系统临时目录而非写死 /tmp/opencode——后者是本机产物，CI 的 Linux/Windows
 # runner 上未必存在或可写。
@@ -262,10 +303,12 @@ def d_align() -> None:
 # ---------------------------------------------------------------- H i18n
 def h_i18n() -> None:
     keys = json.loads(rd(REPO / "assets/locales/zh-CN.json"))
+    orig_zh_keys = set(rd_json(ORIG / "src/locales/zh-CN.json")) if not ORIG_MISSING else set()
     check(
-        len(keys) == 194 + len(S16_EXTRA) + len(S17_EXTRA),
-        f"H zh-CN.json {194 + len(S16_EXTRA) + len(S17_EXTRA)} key"
-        f"（基础 194 + S16 补 {len(S16_EXTRA)} + S17 补 {len(S17_EXTRA)}）",
+        len(keys) == 194 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(S18_MIGRATED),
+        f"H zh-CN.json {194 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(S18_MIGRATED)} key"
+        f"（基础 194 + S16 补 {len(S16_EXTRA)} + S17 补 {len(S17_EXTRA)}"
+        f" + S18 新增 {len(S18_EXTRA)} + S18 迁移 {len(S18_MIGRATED)}）",
         f"实际 {len(keys)}",
     )
     # S8 新增的 3 个 settings 按钮文案（原版 settings.html 硬编码英文，无 i18n key，
@@ -276,6 +319,12 @@ def h_i18n() -> None:
         check(k in keys, f"H zh-CN 含 S16 {k}")
     for k in S17_EXTRA:
         check(k in keys, f"H zh-CN 含 S17 {k}")
+    for k in S18_EXTRA:
+        check(k in keys, f"H zh-CN 含 S18 新增 {k}")
+    for k in S18_MIGRATED:
+        check(k in keys, f"H zh-CN 含 S18 迁移 {k}")
+    for k in S18_MIGRATED:
+        check(k in orig_zh_keys, f"H S18 迁移 {k} 确在上游（非误造）")
     check(not (REPO / "assets/locales/en.json").exists(), "H 无 en.json（仅中文决策）")
     body = rd(CORE / "src/serial.rs")
     used = set()
@@ -718,7 +767,7 @@ def s4_model() -> None:
     # S5 单测数量
     s5_units = sum(rd(CORE / f"src/{f}").count("#[test]")
                    for f in ["data.rs", "dialogs.rs", "tasks/mfoc.rs", "tasks/detect.rs"])
-    check(s5_units == 80, "S5 单测累计 80（含 S6/S11-2/S17 新增）", f"实际 {s5_units}")
+    check(s5_units == 82, "S5 单测累计 82（含 S6/S11-2/S17/F4 新增）", f"实际 {s5_units}")
     ints = rd(CORE / "tests/integration.rs")
     check(ints.count("#[test]") == 58, "S5+S6/S7 集成测试累计 58", f"实际 {ints.count('#[test]')}")
     check(ints.count("fn s5_") == 14, "S5 新增 14 个集成测试", f"实际 {ints.count('fn s5_')}")
@@ -756,7 +805,7 @@ def s4_model() -> None:
           "S7 autoRun 无进展兜底（防无限递归）")
     check("pub fn cancel" in hn, "S7 提供中止路径")
     check("pub fn nonces_default_name" in hn and '"nonces"' in hn, "S7 nonce 默认名回落")
-    check("pub fn pop_matching_unknown" in hn and "remove(0)" in hn, "S7 移除队首 unknown")
+    check("pub fn remove_unknown" in hn and "pop" in hn, "S7 移除匹配到的 unknown（任意位置）")
     check("pub fn progress_percent" in hn and ".min(100.0)" in hn, "S7 进度上限 100")
     dt = rd(CORE / "src/tasks/dict_test.rs")
     check('TOOL_DICT: &str = "nfc-mfdict"' in dt, "S7 字典工具名")
@@ -775,7 +824,7 @@ def s4_model() -> None:
     # 测试数
     s6s7_units = sum(rd(CORE / f"src/{f}").count("#[test]")
                      for f in ["tasks/card_write.rs", "tasks/hard_nested.rs", "tasks/dict_test.rs"])
-    check(s6s7_units == 66, "S6/S7 新增 66 个单测", f"实际 {s6s7_units}")
+    check(s6s7_units == 74, "S6/S7 新增 74 个单测（含 S17/S18 增量）", f"实际 {s6s7_units}")
     ints2 = rd(CORE / "tests/integration.rs")
     check(ints2.count("#[test]") == 58, "S6/S7 后集成测试 58", f"实际 {ints2.count('#[test]')}")
     check(ints2.count("fn s6_") == 7 and ints2.count("fn s7_") == 4, "S6/S7 新增 11 个集成测试",
@@ -901,7 +950,7 @@ def s4_model() -> None:
     # 数 `("` 会漏。每项都以 `c_xxx,` 结尾。
     _vec = stf9[stf9.index("vec![") : stf9.index("];", stf9.index("vec!["))]
     n_cases = len(re.findall(r'\bc_[a-z0-9_]+\b', _vec))
-    check(n_cases == 79, "S9-S13 UI selftest 79 项（S8 13 + S9 15 + S10 14 + S11-1 5 + S11-2 19 + S11-7 3 + S13 4 + S15 2 + S17 4）", f"实际 {n_cases}")
+    check(n_cases == 84, "S9-S18 UI selftest 84 项（79 原有 + S18 增 5）", f"实际 {n_cases}")
 
     # ── S10 dump 三面板 ──────────────────────────────────────────
     de = rd(ORIG / "src/renderer/html/dumpEditor.html")
@@ -1020,7 +1069,7 @@ def s4_model() -> None:
     # selftest
     _vec2 = stf9[stf9.index("vec![") : stf9.index("];", stf9.index("vec!["))]
     n11 = len(re.findall(r"\bc_[a-z0-9_]+\b", _vec2))
-    check(n11 == 79, "S11-S13 UI selftest 79 项（含 S11-7 的 3 项、S13 的 4 项、S15 的 2 项与 S17 的 4 项）", f"实际 {n11}")
+    check(n11 == 84, "S11-S18 UI selftest 84 项（含 S18 新增 5 项）", f"实际 {n11}")
 
     # ── S11-2 系统文件对话框 + 写卡接线 ───────────────────────────
     dh = rd(APP / "src/dialogs_host.rs")
@@ -1077,20 +1126,20 @@ def s4_model() -> None:
     # ── S11-3 30 action parity 表（docs/04 §9）─────────────────────
     d04 = rd(REPO / "docs/04-测试计划.md")
     cm9 = rd(CORE / "src/command.rs")
-    check("## 9. 34 个 action 的 parity 核验表" in d04, "S11-3 docs/04 §9 parity 表存在")
+    check("## 9. 39 个 action 的 parity 核验表" in d04, "S11-3 docs/04 §9 parity 表存在")
     _i = cm9.index("pub const ALL_ACTIONS"); _j = cm9.index("\n];", _i)
     _all = re.findall(r'"([a-zA-Z0-9-]+)"', cm9[_i:_j])
-    check(len(_all) == 34, "S11-3 ALL_ACTIONS 为 34 项（30 对齐 + 4 S14 phw）", f"实际 {len(_all)}")
+    check(len(_all) == 39, "S11-3 ALL_ACTIONS 为 39 项（30 对齐 + 4 S14 phw + 5 S18 增量）", f"实际 {len(_all)}")
     _missing = [a for a in _all if f"`{a}`" not in d04]
-    check(not _missing, "S11-3 34 个 action 全部在 parity 表中", f"缺 {_missing}")
+    check(not _missing, "S11-3 39 个 action 全部在 parity 表中", f"缺 {_missing}")
     _rows = d04.count("\n| ") - d04.count("\n|---")
-    check(_rows >= 30, "S11-3 parity 表至少 30 行数据", f"实际 {_rows}")
+    check(_rows >= 35, "S11-3 parity 表至少 35 行数据", f"实际 {_rows}")
     for kw in ["libnfc-collect", "readICThenExec", "nfc-mfsetuid", "nfc-mflock",
-               "nfc-mfclassic f A u", "ToolError::NotWired"]:
+               "nfc-mfclassic f A u", "ToolError::NotWired", "mfcuk", "nfc-mfsetuid"]:
         check(kw in d04, f"S11-3 parity 表提到 {kw}")
     # run-hard-nested 必须仍是显式未接线，不能悄悄变成别的行为
     check("run-hard-nested" in d04, "S11-3 表中含 run-hard-nested")
-    check("34 个全部对齐" in d04, "S11-3 结论为 34 个全部对齐（30 对齐 + 4 S14 增量）")
+    check("39 个全部对齐" in d04, "S11-3 结论为 39 个全部对齐（30 对齐 + 4 S14 + 5 S18 增量）")
     check("无进展即停" in d04, "S11-3 登记 HardNested 的无进展兜底偏离")
     # 未接线机制本身仍须保留：S12 若新加不接的动作要能显式报错
     check("ToolError::NotWired" in eng, "S11-3 未接线动作仍显式报错")
@@ -1165,7 +1214,7 @@ def s4_model() -> None:
           "S11-5 autoRun 下一轮配置从最新 known/unknown 重建")
     check("collect_args" in eng and "crypto1_args" in eng,
           "S11-5 采集/破解参数经 RoundContext 构造")
-    check("pop_matching_unknown" in eng, "S11-5 命中后移除队首 unknown")
+    check("remove_unknown" in eng, "S11-5 命中后移除匹配到的 unknown")
     check("CollectParser::new" in eng and "SingleKeyParser::cropto1()" in eng,
           "S11-5 两个工具各有输出解析器")
     # 非 0 退出不推进（与 readICThenExec 的 reject 语义一致）
@@ -1457,7 +1506,7 @@ def s4_model() -> None:
     }
     # S16 补的 13 个：控制台、事件折叠、工作流分组、检测结果、设置目录/外观、
     # 自动执行提示与文件框等待文案（docs/02 §6.25 续 / S16 偏离登记）。
-    LOCAL_EXTRA = S8_EXTRA | S11_EXTRA | S12_EXTRA | S15_EXTRA | S16_EXTRA | S17_EXTRA
+    LOCAL_EXTRA = S8_EXTRA | S11_EXTRA | S12_EXTRA | S15_EXTRA | S16_EXTRA | S17_EXTRA | S18_EXTRA
     # 原版对拍基线（ORIG_REF）漂移时上游会新增 key，对应本重写**没有**的功能/结构。
     # 搬运这些文案没有意义（没有代码会 t() 它们），故显式登记为「上游有、我们不做」。
     # 若将来真要做对应功能，把 key 从这里挪进 LOCAL_EXTRA 即可。
@@ -1467,20 +1516,14 @@ def s4_model() -> None:
         "html_theme_system",
         "html_theme_light",
         "html_theme_dark",
-        "html_speed",
         # ── 主窗按钮悬浮提示与分组标题：S15 搬回了 11 个（我们有的按钮 +
         # UFUID 分组），其余属我们没有的 UI 结构 ──
         "html_device_group",
         "html_dump_group",
         "html_solving_group",
-        "html_tip_write_uid_input",
         "html_tip_dec_full_card",
-        # ── 手动输入 UID 写 UFUID（dea7854）：我们只走 dump block0 ──
-        "html_write_uid_input",
-        "html_uid_input_title",
-        "html_uid_input_placeholder",
-        "dialog_msg_invalid_uid_input",
-        "log_msg_bcc_force",
+        # ── 手动输入 UID 写 UFUID（dea7854）与 dump 体检/修复/导出：S18 已实现，
+        #    其 key 移入 S18_MIGRATED，不在此处。
         # ── 全加密全卡解密（mfcud/mfcuk 求解器）：v2 边界内 ──
         "html_dec_full_card",
         "dialog_full_enc_expectation",
@@ -1503,23 +1546,9 @@ def s4_model() -> None:
         "log_msg_nonce_archived",
         "log_msg_nonce_key_found",
         "log_msg_nonce_no_key",
-        # ── dump 编辑器全卡校验/修复、密钥字典导出与容量提示 ──
-        "html_check_dump",
-        "html_check_all_ok",
-        "html_export_keys",
-        "html_fix_dump",
-        "html_fix_none",
-        "html_fix_summary",
-        "html_error_acl_corrupt",
-        "html_error_acl_invalid",
-        "html_error_bcc",
-        "html_error_not_hex",
-        "html_error_size",
-        "html_error_size_bytes",
-        # ── 杂项：设备自动选择、静默保存、格式化确认等文案重构 ──
+        # ── 杂项：设备自动选择、静默保存等文案重构 ──
         "html_auto_select_device",
         "html_silent_save_dump",
-        "html_data_not_classic_layout",
         "dialog_msg_dict_test_large_sector",
         "dialog_msg_invalid_file_name",
         "dialog_msg_write_bad_size",
@@ -1548,28 +1577,29 @@ def s4_model() -> None:
           "R i18n key 名不得以标点结尾（疑似误建的新 key）",
           f"{[k for k in i18n_asset if k[-1:] in {':', '.', ',', ' ', '-', '_'}]}")
     # 本地补的 key 数量原本写死在 Rust 测试与此处两处，已漂移过一次。双向钉死。
-    check(len(LOCAL_EXTRA) == 14 + len(S16_EXTRA) + len(S17_EXTRA),
-          "R 本地补的 i18n key 恰为 30 个", f"实际 {len(LOCAL_EXTRA)}")
+    check(len(LOCAL_EXTRA) == 14 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA),
+          "R 本地补的 i18n key 恰为 44 个", f"实际 {len(LOCAL_EXTRA)}")
     cd = rd(CORE / "src/command.rs")
     # rustfmt 会把字段拆成多行，故用 DOTALL 匹配整个结构体字面量
     specs = re.findall(
         r'ActionSpec \{\s*name: "([\w-]+)",\s*'
         r'connected: (true|false),\s*idle: (true|false),\s*'
         r'not_while_connecting: (true|false),?\s*\}', cd)
-    check(len(specs) == 34, "R ACTION_SPECS 覆盖 34 个 action", f"实际 {len(specs)}")
-    check(sum(1 for _, c, _, _ in specs if c == "true") == 13, "R connected 门禁 13 个")
-    check(sum(1 for _, _, i, _ in specs if i == "true") == 16, "R idle 门禁 16 个")
+    check(len(specs) == 39, "R ACTION_SPECS 覆盖 39 个 action", f"实际 {len(specs)}")
+    check(sum(1 for _, c, _, _ in specs if c == "true") == 16, "R connected 门禁 16 个")
+    check(sum(1 for _, _, i, _ in specs if i == "true") == 20, "R idle 门禁 20 个")
     check(sum(1 for _, _, _, n in specs if n == "true") == 1, "R not_while_connecting 1 个")
     cn = {a for a, c, _, _ in specs if c == "true"}
     idl = {a for a, _, i, _ in specs if i == "true"}
     check(cn <= idl, "R connected ⊆ idle")
-    check(len(cn | idl | {a for a, _, _, n in specs if n == "true"}) == 17, "R 三门禁并集 17")
+    check(len(cn | idl | {a for a, _, _, n in specs if n == "true"}) == 21, "R 三门禁并集 21")
     allact = re.findall(r'"([\w-]+)"', cd[cd.index("ALL_ACTIONS"):cd.index("];", cd.index("ALL_ACTIONS"))])
     check([s[0] for s in specs] == allact, "R ALL_ACTIONS 与 ACTION_SPECS 顺序一致")
     js_actions = re.findall(r'^\s{4}"([\w-]+)"\s*:', rd(JS), re.M)
     phw_extra = ["open-phw-window", "phw-read-uid", "phw-write-uid", "phw-write-data"]
-    check_orig(allact[:30] == js_actions and allact[30:] == phw_extra,
-          "R ALL_ACTIONS 前30 对齐 command.js + 末4 为 S14 phw 增量")
+    s18_extra = ["cuid-write", "input-uid-write", "done-input-uid-write", "dump-editor-export-keys", "run-mfcuk"]
+    check_orig(allact[:30] == js_actions and allact[30:34] == phw_extra and allact[34:] == s18_extra,
+          "R ALL_ACTIONS 前30 对齐 command.js + 34-37 为 S14 phw + 38-42 为 S18 新增")
     ru = rd(CORE / "src/runner.rs")
     gate_rs = ru[ru.index("pub fn gate("):]
     gate_rs = gate_rs[:gate_rs.index("\n}\n")]

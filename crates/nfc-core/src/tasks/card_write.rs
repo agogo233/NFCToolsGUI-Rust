@@ -6,11 +6,16 @@
 //! 三类写卡工具（`nfc-mfclassic` / `nfc-mfsetuid` / `nfc-mflock`）经核实
 //! **完全不解析 stdout**，只按退出码判定（见 docs/04 §2），故本模块只负责：
 //! 参数拼装、危险确认、block0 读取与校验、结果文案。运行编排在 S11 接 `ToolRunner`。
+//!
+//! S18 新增：卡数据体检摘要（`dumpcheck`）、CUID 空卡密钥文件、手输卡号写
+//! UFUID（`clean_uid_input` / `uid_to_block0`，对标上游 Tauri `commands.rs`）、
+//! 全加密爆破 `mfcuk` 的参数与 mfcuk 输出解析。
 
 use std::path::{Path, PathBuf};
 
 use crate::dialogs::{DialogProvider, FileFilter, OpenDialogRequest};
 use crate::i18n;
+use crate::model::dumpcheck;
 use crate::paths::Paths;
 use crate::state::{AppState, Event};
 
@@ -259,6 +264,119 @@ pub fn report_write_result(state: &mut AppState, code: Option<i32>) {
         "log_msg_write_failed"
     };
     state.apply(Event::Log(format!("\n\n{}\n", i18n::t(key))));
+}
+
+// ─────────────────────── S18：体检摘要 / CUID / 手输卡号 / mfcuk ───────────────────────
+
+/// 读一个 dump 文件做体检，返回**问题行**（`write-IC` / `cuid-write` 的
+/// 确认框正文追加用）。文件不可读 / 结构不合法时返回空（确认框保持原样）；
+/// 完全干净也返回空（不追加「未发现问题」噪音，问题才提示）。
+pub fn dump_check_lines(path: &Path) -> Vec<String> {
+    let Ok(bytes) = std::fs::read(path) else {
+        return Vec::new();
+    };
+    let Ok(sectors) = crate::model::dump::to_sector_lines(&bytes) else {
+        return Vec::new();
+    };
+    dumpcheck::problem_lines(&sectors)
+}
+
+/// CUID 空卡密钥文件（对标 MifareOneTool `S50(uid)` + `Wipe`，
+/// `ClassMifareS50.cs:170-207/336-345`）：1024B 全默认密钥，block0 =
+/// 卡号 + BCC + Fudan 厂商字节。`uid_hex` 为 8 位 hex（4 字节 UID）。
+///
+/// `nfc-mfclassic` 的 keyfile 机制只读前 4 字节选卡（UID），密钥段取
+/// 默认全 FF——恰好匹配出厂 CUID 卡（全 FF 密钥、`ff078069` 访问位）。
+pub fn cuid_keyfile_bytes(uid_hex: &str) -> Option<Vec<u8>> {
+    let uid = hex4(uid_hex)?;
+    let mut out = vec![0u8; 1024];
+    out[0..4].copy_from_slice(&uid);
+    out[4] = uid[0] ^ uid[1] ^ uid[2] ^ uid[3];
+    // Fudan 厂商段：08 04 00 + "bcdEfghi"
+    out[5..16].copy_from_slice(&[
+        0x08, 0x04, 0x00, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69,
+    ]);
+    for s in 0..16 {
+        let t = s * 64 + 48;
+        out[t..t + 6].copy_from_slice(&[0xff; 6]);
+        out[t + 6..t + 10].copy_from_slice(&[0xff, 0x07, 0x80, 0x69]);
+        out[t + 10..t + 16].copy_from_slice(&[0xff; 6]);
+    }
+    Some(out)
+}
+
+/// 取 8 位 hex → 4 字节。非法返回 `None`。
+fn hex4(s: &str) -> Option<[u8; 4]> {
+    let b = crate::model::hex::hex_decode(s.trim()).ok()?;
+    if b.len() != 4 {
+        return None;
+    }
+    Some([b[0], b[1], b[2], b[3]])
+}
+
+/// `cuid-write` 的第二段参数：`nfc-mfclassic W A u <src> <cuidkey> f`
+/// （大写 W = 解锁写，keyfile 用 CUID 空卡）。
+pub fn cuid_write_args(src: &Path, keyfile: &Path) -> Vec<String> {
+    vec![
+        "W".to_string(),
+        "A".to_string(),
+        "u".to_string(),
+        src.display().to_string(),
+        keyfile.display().to_string(),
+        "f".to_string(),
+    ]
+}
+
+/// 手输卡号清洗（对标上游 Tauri `clean_uid_input`）：剥分隔符，
+/// 只接受 8 位（UID）或 32 位（完整 0 块）hex，输出大写。
+pub fn clean_uid_input(text: &str) -> Option<String> {
+    let trimmed: String = text
+        .chars()
+        .filter(|&c| !matches!(c, ' ' | '\t' | '\r' | '\n' | ':' | '-' | '_' | '.'))
+        .collect();
+    if trimmed.is_empty()
+        || !trimmed.chars().all(|c| c.is_ascii_hexdigit())
+        || !(trimmed.len() == 8 || trimmed.len() == 32)
+    {
+        return None;
+    }
+    Some(trimmed.to_uppercase())
+}
+
+/// 8 位 UID → 完整 32 位 0 块（对标上游 Tauri `uid_to_block0`）：
+/// UID(4) + BCC(1) + SAK/ATQA(08 04 00) + 8 字节补零。
+pub fn uid_to_block0(uid: &str) -> String {
+    let b = hex4(uid).unwrap_or([0u8; 4]);
+    let bcc = b[0] ^ b[1] ^ b[2] ^ b[3];
+    let mut s = crate::model::hex::hex_encode_upper(&b);
+    s.push_str(&crate::model::hex::hex_encode_upper(&[
+        bcc, 0x08, 0x04, 0x00,
+    ]));
+    s.push_str("0000000000000000");
+    s
+}
+
+/// 手输 0 块写入 UFUID 的确认正文（`write-ufuid-uid` 同构，BCC 不自洽时
+/// 追加「将强制执行写入」警示）。
+pub fn input_uid_confirm(block0_hex: &str, force_bcc: bool) -> crate::dialogs::ConfirmRequest {
+    let mut message = format!("{}{}", i18n::t("dialog_msg_confirm_write_uid"), block0_hex);
+    if force_bcc {
+        message.push('\n');
+        message.push_str(&i18n::t("log_msg_bcc_force"));
+    }
+    crate::dialogs::ConfirmRequest {
+        title: i18n::t("dialog_title_danger_operation"),
+        message,
+    }
+}
+
+/// `run-mfcuk` 的参数。取 MifareOneTool `buttonMfcuk` 的组合
+/// （`-v 3 -C -R -1 -s 250 -S 250`：全扇区采集 + 爆破，verbose 3）。
+pub const MFCUK_ARGS: &[&str] = &["-v", "3", "-C", "-R", "-1", "-s", "250", "-S", "250"];
+
+/// `run-mfcuk` 的启动参数（`MFCUK_ARGS` 的所有权版本）。
+pub fn mfcuk_args() -> Vec<String> {
+    MFCUK_ARGS.iter().map(|s| s.to_string()).collect()
 }
 
 #[cfg(test)]
@@ -584,5 +702,116 @@ mod tests {
         let mut s2 = AppState::new();
         report_failure(&mut s2, WriteFailure::ReadFailed);
         assert!(s2.log_buffer.contains("无法读取转储文件"));
+    }
+
+    // ---------------------------------------------------------- S18 新增
+
+    #[test]
+    fn cuid_keyfile_layout_and_bcc() {
+        let bytes = cuid_keyfile_bytes("a1b2c3d4").unwrap();
+        assert_eq!(bytes.len(), 1024);
+        assert_eq!(&bytes[0..4], &[0xa1, 0xb2, 0xc3, 0xd4]);
+        assert_eq!(bytes[4], 0xa1 ^ 0xb2 ^ 0xc3 ^ 0xd4, "BCC 自洽");
+        assert_eq!(
+            &bytes[5..16],
+            &[0x08, 0x04, 0x00, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69]
+        );
+        // 全部 16 个尾块：默认密钥 + ff078069 访问位
+        for s in 0..16 {
+            let t = s * 64 + 48;
+            assert_eq!(&bytes[t..t + 6], &[0xff; 6]);
+            assert_eq!(&bytes[t + 6..t + 10], &[0xff, 0x07, 0x80, 0x69]);
+            assert_eq!(&bytes[t + 10..t + 16], &[0xff; 6]);
+        }
+        // 数据块全零
+        assert_eq!(bytes[64..128][..32], [0u8; 32][..]);
+    }
+
+    #[test]
+    fn cuid_keyfile_rejects_bad_uid() {
+        assert!(cuid_keyfile_bytes("xyz").is_none());
+        assert!(cuid_keyfile_bytes("a1b2c3").is_none(), "不足 4 字节");
+        assert!(cuid_keyfile_bytes("a1b2c3d4e5f6").is_none(), "超过 4 字节");
+    }
+
+    #[test]
+    fn cuid_write_args_are_uppercase_w_with_keyfile() {
+        let a = cuid_write_args(Path::new("/d/src.mfd"), Path::new("/d/cuid.mfd"));
+        assert_eq!(a, vec!["W", "A", "u", "/d/src.mfd", "/d/cuid.mfd", "f"]);
+    }
+
+    #[test]
+    fn clean_uid_input_accepts_8_or_32_hex_and_strips_separators() {
+        assert_eq!(clean_uid_input("a1-b2:c3.d4"), Some("A1B2C3D4".to_string()));
+        assert_eq!(clean_uid_input("a1 b2 c3 d4"), Some("A1B2C3D4".to_string()));
+        let block0 = "A1B2C3D40804006263646566676869";
+        assert_eq!(clean_uid_input(block0), Some(block0.to_string()));
+        assert_eq!(clean_uid_input("a1b2c3d"), None, "7 位不行");
+        assert_eq!(clean_uid_input("a1b2c3d4e5"), None, "10 位不行");
+        assert_eq!(clean_uid_input("a1b2c3g4"), None, "非 hex");
+        assert_eq!(clean_uid_input(" "), None);
+    }
+
+    #[test]
+    fn uid_to_block0_matches_original_layout() {
+        // UID(4) + BCC(1) + 08 04 00 + 8 字节补零；a1^b2^c3^d4 = 04
+        let b = uid_to_block0("a1b2c3d4");
+        assert_eq!(b, "A1B2C3D4040804000000000000000000");
+        assert_eq!(b.len(), 32);
+        // 全零 UID
+        assert_eq!(
+            uid_to_block0("00000000"),
+            "00000000000804000000000000000000"
+        );
+    }
+
+    #[test]
+    fn input_uid_confirm_appends_force_note_only_when_bcc_bad() {
+        let normal = input_uid_confirm("A1B2C3D4040804000000000000000000", false);
+        assert!(normal.message.ends_with("A1B2C3D4040804000000000000000000"));
+        assert!(!normal.message.contains("强制执行"), "BCC 自洽不该提示强制");
+        let forced = input_uid_confirm("A1B2C3D4EE0804000000000000000000", true);
+        assert!(
+            forced.message.contains("强制执行"),
+            "BCC 不自洽必须警示强制写入"
+        );
+    }
+
+    #[test]
+    fn mfcuk_args_follow_mifare_one_tool_combo() {
+        assert_eq!(
+            mfcuk_args(),
+            vec!["-v", "3", "-C", "-R", "-1", "-s", "250", "-S", "250"]
+        );
+    }
+
+    #[test]
+    fn dump_check_lines_empty_for_clean_or_unreadable() {
+        let dir = tempdir("dclean");
+        let _guard = TempGuard(dir.clone());
+        let paths = Paths::new(&dir);
+        let _ = std::fs::create_dir_all(paths.dumpfiles_dir());
+        // 干净 1K dump（全默认值）→ 空
+        let mut bytes = vec![0u8; 1024];
+        for s in 0..16 {
+            let t = s * 64 + 48;
+            bytes[t..t + 6].copy_from_slice(&[0xff; 6]);
+            bytes[t + 6..t + 10].copy_from_slice(&[0xff, 0x07, 0x80, 0x69]);
+            bytes[t + 10..t + 16].copy_from_slice(&[0xff; 6]);
+        }
+        let p = paths.dumpfiles_dir().join("ok.mfd");
+        std::fs::write(&p, &bytes).unwrap();
+        assert!(
+            dump_check_lines(&p).is_empty(),
+            "干净卡数据不给确认框添噪音"
+        );
+        // 坏 BCC → 有问题行
+        let p2 = paths.dumpfiles_dir().join("bad.mfd");
+        let mut bad = bytes.clone();
+        bad[4] = 0xEE; // BCC 错误（UID 全 0，期望 0）
+        std::fs::write(&p2, &bad).unwrap();
+        assert!(!dump_check_lines(&p2).is_empty(), "坏 BCC 应有提示行");
+        // 读不到 → 空
+        assert!(dump_check_lines(&paths.dumpfiles_dir().join("nope.mfd")).is_empty());
     }
 }

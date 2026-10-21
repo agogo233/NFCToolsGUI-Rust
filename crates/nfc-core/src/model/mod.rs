@@ -6,6 +6,7 @@
 //! fixture 的构造方式与不可取证项见 docs/04 §2。
 
 pub mod dump;
+pub mod dumpcheck;
 pub mod hex;
 pub mod keys;
 pub mod parse;

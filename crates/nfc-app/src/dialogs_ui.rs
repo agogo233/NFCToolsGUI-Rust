@@ -50,6 +50,10 @@ pub enum ConfirmKind {
     },
     /// `format-card`：格式化卡片。S17 安全加固新增（原版无确认框）。
     FormatCard,
+    /// S18 `cuid-write`：CUID 空卡写入。源 dump 已选好。
+    CuidWrite { dump: String },
+    /// S18 `done-input-uid-write`：手输卡号写 UFUID。载荷为原始输入文本。
+    UidInputWrite { text: String },
 }
 
 /// 待确认的模态窗内容。
@@ -62,6 +66,9 @@ pub struct ConfirmModal {
     pub message: String,
     /// 原版 `detail:`（`command.js:511` 的 `files.join('\n')`）。
     pub detail: Option<String>,
+    /// S18 B6：危险操作随机码。非 `None` 时须输入正确码才放行（对标
+    /// MifareOneTool `ConfirmDangerousOperation` 的随机确认码）。
+    pub code: Option<String>,
 }
 
 impl ConfirmModal {
@@ -72,6 +79,7 @@ impl ConfirmModal {
             title: title.to_owned(),
             message,
             detail: None,
+            code: None,
         }
     }
 
@@ -80,6 +88,29 @@ impl ConfirmModal {
         self.detail = Some(detail);
         self
     }
+
+    /// S18 B6：加一道随机码门槛。返回的 `code` 应同时存进 `self.code` 与
+    /// 渲染层的输入框初值。
+    pub fn with_code(mut self, code: String) -> Self {
+        self.code = Some(code);
+        self
+    }
+}
+
+/// 生成一个 4 位十六进制随机码（B6 危险操作确认码）。
+///
+/// 用时间 + pid 派生，不引入 `rand` 依赖（对标 MifareOneTool 的
+/// `RNG 双字节 hex` 但零依赖）。
+pub fn random_code() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u64)
+        .unwrap_or(0);
+    let pid = std::process::id() as u64;
+    format!(
+        "{:04X}",
+        ((nanos ^ pid.wrapping_mul(0x9E37_79B9)) & 0xFFFF) as u16
+    )
 }
 
 /// 危险操作确认窗的公共标题（`i18n("dialog_title_danger_operation")`）。
@@ -113,6 +144,8 @@ pub fn close_while_running_modal() -> ConfirmModal {
 /// 用户仍能在它面前继续点主窗口的写卡按钮。
 pub fn show(ctx: &Context, m: &ConfirmModal, danger_color: egui::Color32) -> Option<bool> {
     let mut out: Option<bool> = None;
+    // B6 随机码输入框的持久状态（跨帧保留）
+    let code_id = egui::Id::new("nfc-danger-confirm-code-input");
     let r = egui::Modal::new(egui::Id::new("nfc-danger-confirm"))
         .area(egui::containers::modal::Modal::default_area(egui::Id::new(
             "nfc-danger-confirm-area",
@@ -133,6 +166,29 @@ pub fn show(ctx: &Context, m: &ConfirmModal, danger_color: egui::Color32) -> Opt
                         }
                     });
             }
+            // S18 B6：随机码门槛——输入匹配才放行
+            let code_ok = match &m.code {
+                Some(want) => {
+                    let cur = ctx
+                        .data(|d| d.get_persisted_string(code_id))
+                        .unwrap_or_default();
+                    let ok = cur.trim().eq_ignore_ascii_case(want);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(t("html_confirm_code")).strong());
+                        let mut buf = cur.clone();
+                        let resp = ui.add(
+                            egui::TextEdit::singleline(&mut buf)
+                                .desired_width(120.0)
+                                .hint_text(format!("输入 {} 以放行", want)),
+                        );
+                        if resp.changed() {
+                            ctx.data_mut(|d| d.set_persisted_string(code_id, buf));
+                        }
+                    });
+                    ok
+                }
+                None => true,
+            };
             ui.separator();
             ui.horizontal(|ui| {
                 // 原版按钮序为 `[确定, 取消]`（command.js:509），此处保持
@@ -140,10 +196,8 @@ pub fn show(ctx: &Context, m: &ConfirmModal, danger_color: egui::Color32) -> Opt
                 if ui.button(t("dialog_button_cancel")).clicked() {
                     out = Some(false);
                 }
-                if ui
-                    .button(RichText::new(t("dialog_button_ok")).color(danger_color))
-                    .clicked()
-                {
+                let ok_btn = RichText::new(t("dialog_button_ok")).color(danger_color);
+                if ui.add_enabled(code_ok, egui::Button::new(ok_btn)).clicked() {
                     out = Some(true);
                 }
             });

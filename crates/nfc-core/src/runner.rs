@@ -75,7 +75,7 @@ pub fn tool_path(bin_dir: &Path, tool: &str) -> PathBuf {
     bin_dir.join(tool)
 }
 
-/// execUtils.js 里门禁读到的 `status` 三个字段。
+/// execUtils.js 里门禁读到的 `status` 三个字段 + S18 的深层扫描开关。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct GateState {
     /// `status.currentDevice !== null`（原版门禁在此为 null 时无条件拒绝，含 nfc-list）。
@@ -84,6 +84,9 @@ pub struct GateState {
     pub is_device_connected: bool,
     /// `status.isRunningTask`
     pub is_running_task: bool,
+    /// S18：深层扫描（`LIBNFC_INTRUSIVE_SCAN=1`）。对标 MyPN532 的
+    /// `scan-device deep`：对响应慢 / 不被常规探测发现的读卡器做侵入式扫描。
+    pub deep_scan: bool,
 }
 
 impl GateState {
@@ -92,6 +95,7 @@ impl GateState {
             has_current_device: s.current_device.is_some(),
             is_device_connected: s.is_device_connected,
             is_running_task: s.is_running_task,
+            deep_scan: s.deep_scan,
         }
     }
 }
@@ -219,6 +223,8 @@ pub const KNOWN_TOOLS: &[&str] = &[
     "nfc-mflock",
     "libnfc-collect",
     "cropto1_bs",
+    // S18：全加密爆破（compile.sh 第 8 段已产出该二进制，此前只缺接线）
+    "mfcuk",
 ];
 
 /// 工具在 `bin_dir` 下是否就位。
@@ -312,7 +318,7 @@ impl NfcToolRunner {
         &self.conf_dir
     }
 
-    fn spawn(&mut self, tool: &str, args: &[String]) -> Result<(), ToolError> {
+    fn spawn(&mut self, tool: &str, args: &[String], deep_scan: bool) -> Result<(), ToolError> {
         let (tx, rx) = channel();
         let ready = Arc::new(AtomicBool::new(false));
         let pending = Arc::new(AtomicUsize::new(0));
@@ -322,6 +328,11 @@ impl NfcToolRunner {
             .env("LIBNFC_SYSCONFDIR", &self.conf_dir)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        // S18 深层扫描：对响应慢 / 不被常规探测发现的读卡器，
+        // 让 libnfc 在 nfc_open 时做侵入式设备扫描。
+        if deep_scan {
+            cmd.env("LIBNFC_INTRUSIVE_SCAN", "1");
+        }
 
         // Windows：release 主程序是 GUI 子系统，自身没有控制台；framework/bin 下的
         // 工具是控制台程序。不指定该标志时，Windows 会为每个子进程新分配一个控制台
@@ -420,7 +431,7 @@ impl ToolRunner for NfcToolRunner {
         if self.job.is_some() {
             return Err(ToolError::Busy);
         }
-        self.spawn(tool, args)
+        self.spawn(tool, args, gs.deep_scan)
     }
 
     fn pump(&mut self, emit: &mut dyn FnMut(&Chunk)) {
@@ -861,7 +872,7 @@ mod tests {
         let d = std::env::temp_dir().join(format!("nfc-mt-part-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
-        // 放 3 个，留 5 个缺
+        // 放 3 个，其余缺
         for t in &KNOWN_TOOLS[..3] {
             std::fs::write(d.join(t), b"").unwrap();
         }
@@ -886,6 +897,7 @@ mod tests {
             "nfc-mflock",
             "libnfc-collect",
             "cropto1_bs",
+            "mfcuk",
         ] {
             assert!(KNOWN_TOOLS.contains(&spawned), "清单漏了 {spawned}");
         }
@@ -893,7 +905,7 @@ mod tests {
         assert!(KNOWN_TOOLS.contains(&"mfoc"), "清单漏了读卡用的 mfoc");
         assert_eq!(
             KNOWN_TOOLS.len(),
-            9,
+            10,
             "清单长度变了，同步更新 package.sh 与文档"
         );
     }

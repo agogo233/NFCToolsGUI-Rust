@@ -87,8 +87,9 @@ if [[ -d "$BIN_DIR" ]]; then
   # 清单与 crates/nfc-core/src/runner.rs 的 KNOWN_TOOLS 保持一致
   # `mfoc`（读卡）与 `nfc-mfclassic`（写卡/格式化）都要——两者参数风格不同，
   # 见 crates/nfc-core/src/runner.rs 的 KNOWN_TOOLS 注释。
-  for t in nfc-list mfoc nfc-mfclassic nfc-mfdetect nfc-mfdict \
-           nfc-mfsetuid nfc-mflock libnfc-collect cropto1_bs; do
+  # `mfcuk`（全加密爆破，S18）也在此列。
+  for t in nfc-list mfoc nfc-mfclassic nfc-mfdetect nfc-mfdict nfc-mfsetuid \
+           nfc-mflock libnfc-collect cropto1_bs mfcuk; do
     if [[ -f "$BIN_DIR/$t" || -f "$BIN_DIR/$t.exe" ]]; then
       printf '      %s\n' "$t"
     else

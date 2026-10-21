@@ -426,6 +426,60 @@ impl SingleKeyParser {
     }
 }
 
+// ---------------------------------------------------------------- mfcuk（S18）
+
+/// `mfcuk` 命中密钥的行内模式（全加密爆破逐扇区恢复，一轮可能出**多把**）。
+///
+/// 两条来源行：`Found Key A [aabbccddeeff]`（collect/restore 命中）与
+/// `recovered KEY: [aabbccddeeff]`（爆破求解器落定），均限定 12 位 hex。
+fn mfcuk_key_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(?:Found\s+Key\s+[AB]|recovered\s+KEY:)\s*\[([0-9A-Fa-f]{12})\]")
+            .expect("静态正则")
+    })
+}
+
+/// `mfcuk` 输出解析。对标 MifareOneTool 的 `mfcuk -v 3 -C -R -1 -s 250 -S 250`
+/// 爆破流程（原版只在 cmd 窗口里裸跑，无解析；此处把命中的密钥收进历史）。
+#[derive(Debug, Default)]
+pub struct MfcukKeyParser {
+    buf: LineBuffer,
+    keys: Vec<String>,
+}
+
+impl MfcukKeyParser {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push(&mut self, chunk: &str) {
+        for line in self.buf.push(chunk) {
+            if let Some(m) = mfcuk_key_re().captures(&line) {
+                self.keys.push(m[1].to_string());
+            }
+        }
+    }
+
+    pub fn flush(&mut self) {
+        for line in self.buf.flush() {
+            if let Some(m) = mfcuk_key_re().captures(&line) {
+                self.keys.push(m[1].to_string());
+            }
+        }
+    }
+
+    /// 按命中顺序取走全部密钥（一次性语义；调用方经
+    /// [`crate::model::keys::save_keys`] 去重落盘）。
+    pub fn take_keys(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.keys)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
+}
+
 // ---------------------------------------------------------------- 写卡完成行
 
 /// `nfc-mfclassic` 的完成行解析：`Done, X of Y blocks written.` / `read.`。
@@ -933,5 +987,49 @@ mod tests {
             Some((w, t)) if t >= 1 => w == t - 1,
             _ => false,
         }
+    }
+
+    // ---------------------------------------------------------- mfcuk
+
+    #[test]
+    fn mfcuk_parser_collects_all_hits_in_order() {
+        let mut p = MfcukKeyParser::new();
+        p.push("collecting nonces for sector 3\n");
+        p.push("Found Key A [aabbccddeeff]\n");
+        p.push("Found Key B [112233445566]\nrecovered KEY: [cafe12345678]\n");
+        p.flush();
+        assert_eq!(
+            p.take_keys(),
+            vec![
+                "aabbccddeeff".to_string(),
+                "112233445566".to_string(),
+                "cafe12345678".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn mfcuk_parser_ignores_non_key_lines() {
+        let mut p = MfcukKeyParser::new();
+        p.push("Starting mfcuk\nNo key found in sector 5\nDone.\n");
+        p.flush();
+        assert!(p.take_keys().is_empty());
+    }
+
+    #[test]
+    fn mfcuk_parser_survives_chunk_boundaries() {
+        let mut p = MfcukKeyParser::new();
+        p.push("Found Ke");
+        p.push("y A [deadbeef1234\n");
+        p.flush();
+        assert_eq!(p.take_keys(), vec!["deadbeef1234".to_string()]);
+    }
+
+    #[test]
+    fn mfcuk_parser_rejects_short_or_bad_hex() {
+        let mut p = MfcukKeyParser::new();
+        p.push("Found Key A [aabbccddee]\nrecovered KEY: [zz]\n");
+        p.flush();
+        assert!(p.take_keys().is_empty(), "10 位 hex 与非法字符都不算命中");
     }
 }

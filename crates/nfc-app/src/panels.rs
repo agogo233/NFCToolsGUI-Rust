@@ -43,6 +43,9 @@ const SIZE_DUMP_HISTORY: [f32; 2] = [520.0, 560.0];
 /// 手机/手环面板。S16：原版 400×360 在加入滚动/步骤提示后偏小，调到 440×420。
 const SIZE_PHW: [f32; 2] = [440.0, 420.0];
 
+/// S18：手输卡号写 UFUID 面板。
+const SIZE_UID_INPUT: [f32; 2] = [420.0, 300.0];
+
 /// 面板标识。顺序即绘制顺序（决定叠放层级）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Panel {
@@ -55,10 +58,11 @@ pub enum Panel {
     DumpHistory,
     About,
     PhoneWristband,
+    UidInput,
 }
 
 impl Panel {
-    const ALL: [Panel; 9] = [
+    const ALL: [Panel; 10] = [
         Panel::Settings,
         Panel::InputKeys,
         Panel::HardNested,
@@ -68,6 +72,7 @@ impl Panel {
         Panel::DumpHistory,
         Panel::About,
         Panel::PhoneWristband,
+        Panel::UidInput,
     ];
 
     /// 面板标题（走 i18n，与原版 `windows.js` 的 `title` 一致）。
@@ -89,6 +94,7 @@ impl Panel {
             Panel::DumpHistory => "html_dump_history",
             Panel::About => "html_about",
             Panel::PhoneWristband => "html_phw_title",
+            Panel::UidInput => "html_uid_input_title",
         }
     }
 
@@ -104,6 +110,7 @@ impl Panel {
             Panel::DumpComparator => SIZE_DUMP_COMPARATOR,
             Panel::DumpHistory => SIZE_DUMP_HISTORY,
             Panel::PhoneWristband => SIZE_PHW,
+            Panel::UidInput => SIZE_UID_INPUT,
         }
     }
 
@@ -134,6 +141,7 @@ impl Panel {
             Panel::DumpHistory => p.dump_history,
             Panel::About => p.about,
             Panel::PhoneWristband => p.phone_wristband,
+            Panel::UidInput => p.uid_input,
         }
     }
 
@@ -148,6 +156,7 @@ impl Panel {
             Panel::DumpHistory => p.dump_history = v,
             Panel::About => p.about = v,
             Panel::PhoneWristband => p.phone_wristband = v,
+            Panel::UidInput => p.uid_input = v,
         }
     }
 }
@@ -312,6 +321,8 @@ impl Default for PhwForm {
 pub struct Forms {
     /// inputKeys 的文本框内容。
     pub input_keys: String,
+    /// S18：手输卡号面板的输入框内容。
+    pub input_uid: String,
     pub hard_nested: HardNestedForm,
     pub dict_test: DictTestForm,
     /// S14：手机/手环面板的扇区/块文本框内容。
@@ -344,6 +355,8 @@ pub struct EditorForm {
     pub file_name: Option<String>,
     /// 有未保存改动。
     pub dirty: bool,
+    /// S18：上次「体检全卡」的结果（逐扇区问题）。空 = 未体检或无问题。
+    pub check_issues: Vec<nfc_core::model::dumpcheck::CheckIssue>,
 }
 
 impl EditorForm {
@@ -507,6 +520,7 @@ fn body(p: Panel, ui: &mut Ui, app: &mut NfcApp) -> bool {
         Panel::DumpComparator => dump_comparator(ui, app),
         Panel::DumpHistory => dump_history(ui, app),
         Panel::PhoneWristband => phone_wristband(ui, app),
+        Panel::UidInput => uid_input(ui, app),
     }
 }
 
@@ -601,6 +615,43 @@ fn settings(ui: &mut Ui, app: &mut NfcApp) -> bool {
             ui.label(env!("APP_VERSION"));
             ui.label(env!("BUILDER"));
         });
+        // S18 B2：通信速度 + 深层扫描。改完**不立即生效**——要等下次连接
+        // （`connect()` 才读 `state.current_speed` / `GateState.deep_scan`），
+        // 故文案提示「将在重连设备后生效」。
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(t("html_speed")).strong());
+            let speeds: [(u32, &str); 5] = [
+                (115200, "115200"),
+                (230400, "230400"),
+                (460800, "460800"),
+                (921600, "921600"),
+                (19200, "19200"),
+            ];
+            let cur = app.state.current_speed;
+            egui::ComboBox::from_id_source("conn_speed")
+                .selected_text(
+                    speeds
+                        .iter()
+                        .find(|(s, _)| *s == cur)
+                        .map(|(_, l)| *l)
+                        .unwrap_or("115200"),
+                )
+                .width(110.0)
+                .show_ui(ui, |ui| {
+                    for (s, l) in speeds {
+                        if ui.selectable_label(s == cur, *l).clicked() {
+                            app.state.current_speed = *s;
+                        }
+                    }
+                });
+        });
+        ui.checkbox(&mut app.state.deep_scan, t("html_deep_scan"))
+            .on_hover_text(t("html_deep_scan"));
+        if app.state.is_device_connected {
+            ui.label(RichText::new(t("html_applies_after_reconnect")).size(11.0))
+                .on_hover_text(t("html_applies_after_reconnect"));
+        }
     });
 
     if open_dump {
@@ -635,6 +686,29 @@ fn input_keys(ui: &mut Ui, app: &mut NfcApp) -> bool {
             app.pending
                 .push(Action::WithArg("done-input-keys-read-IC", keys.join(",")));
         }
+        return false;
+    }
+    !cancel
+}
+
+/// S18：手输卡号写 UFUID（`input-uid-write` 开面板）。
+///
+/// 输入 8 位 UID 或 32 位完整 0 块；点「确定」把原文本交给
+/// `done-input-uid-write`，由其做清洗 → 拼 0 块 → B6 危险确认码确认 → 派发，
+/// 最后 engine 的 `input_uid_write` 拼块 → BCC 判定 → `nfc-mfsetuid` 写入。
+fn uid_input(ui: &mut Ui, app: &mut NfcApp) -> bool {
+    ui.label(RichText::new(t("html_uid_input_title")).strong());
+    ui.add_space(4.0);
+    ui.add(
+        egui::TextEdit::singleline(&mut app.forms.input_uid)
+            .desired_width(f32::INFINITY)
+            .hint_text(t("html_uid_input_placeholder")),
+    );
+    ui.add_space(4.0);
+
+    let (cancel, ok) = footer(ui, &t("dialog_button_ok"), true);
+    if ok {
+        app.exec("done-input-uid-write", Some(app.forms.input_uid.clone()));
         return false;
     }
     !cancel
@@ -1074,6 +1148,23 @@ fn dump_editor(ui: &mut Ui, app: &mut NfcApp) -> bool {
                                     }),
                             );
                         });
+                        // S18：值块标记——该扇区含值块时在号后贴一个小徽章
+                        // （对标 MyPN532 DumpSectorEditor 的 value block 高亮）。
+                        let is_1k = app.forms.editor.sectors.len() == 16;
+                        if !nfc_core::model::dumpcheck::value_block_lines(
+                            si,
+                            &app.forms.editor.sectors,
+                            is_1k,
+                        )
+                        .is_empty()
+                        {
+                            ui.add_space(4.0);
+                            ui.label(
+                                RichText::new(t("html_value_block"))
+                                    .size(10.0)
+                                    .color(paint.color(paint.key_b)),
+                            );
+                        }
                     });
                     // 把 4 行拼成带换行的单串，交给一个 multiline 输入
                     let mut text = sector.join("\n");
@@ -1094,6 +1185,35 @@ fn dump_editor(ui: &mut Ui, app: &mut NfcApp) -> bool {
         if dirty {
             app.forms.editor.dirty = true;
         }
+    }
+
+    // S18：体检结果区——「体检全卡」之后在这里逐条列出问题 / 值块 / 未发现。
+    // 结果存在 `app.forms.editor.check_issues`，由 `check_report` 生成展示行。
+    let check_lines = {
+        let issues = &app.forms.editor.check_issues;
+        if issues.is_empty() && app.forms.editor.sectors.is_empty() {
+            Vec::new()
+        } else {
+            nfc_core::model::dumpcheck::check_report(&app.forms.editor.sectors)
+        }
+    };
+    if !check_lines.is_empty() {
+        ui.add_space(4.0);
+        egui::Frame::NONE
+            .fill(paint.color(paint.surface2))
+            .corner_radius(egui::CornerRadius::same(4))
+            .inner_margin(egui::Margin::symmetric(8, 6))
+            .show(ui, |ui| {
+                for line in &check_lines {
+                    // 以「!」开头的问题行用危险色，其余（值块 / 未发现）正常色
+                    let color = if line.starts_with('!') {
+                        danger
+                    } else {
+                        paint.color(paint.text)
+                    };
+                    ui.label(RichText::new(line.clone()).size(12.0).color(color));
+                }
+            });
     }
 
     // 底部文件条（`dumpEditor.html:16-27`）
@@ -1128,6 +1248,26 @@ fn dump_editor(ui: &mut Ui, app: &mut NfcApp) -> bool {
         {
             // "1" = 另存为，弹系统保存框
             app.exec("dump-editor-save", Some("1".to_owned()));
+        }
+        // S18：体检 / 修复 / 导出密钥（纯 UI 动作，不进 engine 队列）
+        if ui.button(t("html_check_dump")).clicked() {
+            app.forms.editor.check_issues =
+                nfc_core::model::dumpcheck::check(&app.forms.editor.sectors).unwrap_or_else(|e| e);
+        }
+        if ui.button(t("html_fix_dump")).clicked() {
+            if let Ok((fixed, items)) = nfc_core::model::dumpcheck::fix(&app.forms.editor.sectors) {
+                app.forms.editor.sectors = fixed;
+                app.forms.editor.dirty = true;
+                app.forms.editor.check_issues.clear();
+                // 修复日志逐条写进控制台
+                for line in nfc_core::model::dumpcheck::fix_report(&items) {
+                    app.state
+                        .apply(nfc_core::state::Event::Log(format!("\n{line}\n")));
+                }
+            }
+        }
+        if ui.button(t("html_export_keys")).clicked() {
+            app.exec("dump-editor-export-keys", None);
         }
     });
 

@@ -428,6 +428,36 @@ impl NfcApp {
             // S11-7：这两个由 `pump_pending_save` 投递、在上面的 match 之前
             // 就已 `return` 了，走不到这里。
             dialogs_host::FilePurpose::ReadIcSave | dialogs_host::FilePurpose::NoncesSave => {}
+            // S18：CUID 空卡写入——选好源 dump 后进确认窗（engine 再过一道闸）。
+            dialogs_host::FilePurpose::CuidDump => {
+                self.confirm = Some(dialogs_ui::ConfirmModal::new(
+                    dialogs_ui::ConfirmKind::CuidWrite {
+                        dump: path.to_string_lossy().into_owned(),
+                    },
+                    &dialogs_ui::danger_title(),
+                    t("dialog_msg_confirm_cuid_write"),
+                ));
+            }
+            // S18：编辑器导出密钥字典——把当前编辑器内容的密钥写进用户选的文件。
+            dialogs_host::FilePurpose::ExportKeys => {
+                let lines = nfc_core::model::dumpcheck::key_dict(&self.forms.editor.sectors);
+                let body = lines.join("\n");
+                match std::fs::write(&path, body) {
+                    Ok(()) => {
+                        let name = path.to_string_lossy().into_owned();
+                        self.push_event(EventKind::Success, &name);
+                        self.state.apply(Event::Log(format!(
+                            "\n\n{} {name}\n",
+                            t("log_msg_file_already_saved_to")
+                        )));
+                    }
+                    Err(e) => {
+                        self.state
+                            .apply(Event::Log(format!("\n{}\n", t("log_msh_save_failed"))));
+                        self.push_event(EventKind::Error, &format!("{e}"));
+                    }
+                }
+            }
         }
     }
 
@@ -474,6 +504,17 @@ impl NfcApp {
             }
             dialogs_ui::ConfirmKind::FormatCard => {
                 self.push_approved(Action::Plain("format-card"));
+                false
+            }
+            // S18：CUID 空卡写入确认后，源 dump 作为载荷交给 engine。
+            dialogs_ui::ConfirmKind::CuidWrite { dump } => {
+                self.push_approved(Action::WithArg("cuid-write", dump));
+                false
+            }
+            // S18：手输卡号写 UFUID 确认后，原始输入文本作为载荷交给 engine
+            // （engine 侧 `input_uid_write` 再做清洗 / 拼块 / BCC 判定）。
+            dialogs_ui::ConfirmKind::UidInputWrite { text } => {
+                self.push_approved(Action::WithArg("done-input-uid-write", text));
                 false
             }
         }
@@ -1037,6 +1078,74 @@ impl NfcApp {
                     self.pending.push(Action::WithArg(name, a));
                 }
             }
+            // S18：CUID 空卡写入。带 dumpId（引导条带）直接进确认窗，
+            // 不带则弹文件框选源 dump。
+            "cuid-write" => match arg {
+                Some(dump) => {
+                    self.confirm = Some(dialogs_ui::ConfirmModal::new(
+                        dialogs_ui::ConfirmKind::CuidWrite { dump },
+                        &dialogs_ui::danger_title(),
+                        t("dialog_msg_confirm_cuid_write"),
+                    ));
+                }
+                None => self.open_file_for(dialogs_host::FilePurpose::CuidDump),
+            },
+            // S18：手输卡号写 UFUID。开 UidInput 面板，载荷是初始文本（空串）。
+            "input-uid-write" => {
+                self.forms.input_uid = String::new();
+                panels::open(&mut self.state.panels, panels::Panel::UidInput);
+            }
+            // S18：面板「确定」后在此先过 app 层确认（危险操作随机码 B6），
+            // 确认后 `on_confirm_result` 才把输入文本作为载荷派发给 engine
+            // （engine 侧 `input_uid_write` 再做清洗 / 拼块 / BCC 判定）。
+            // 正文复用 core 的 `input_uid_confirm`，让用户在一处看到与真正
+            // 写入一致的 0 块 hex（含强制 BCC 警示）——与 `phw-write-uid`
+            // 用 `write_uid_confirm` 构造正文的做法一致。
+            "done-input-uid-write" => {
+                let Some(text) = arg else {
+                    return;
+                };
+                // 与 engine `input_uid_write` 同源：清洗 → 拼 0 块 → 判 BCC。
+                // 非法输入不弹确认框，只记一条错误。
+                let Some(cleaned) = nfc_core::tasks::card_write::clean_uid_input(&text) else {
+                    self.state.apply(Event::Log(format!(
+                        "\n{}\n",
+                        t("dialog_msg_invalid_uid_input")
+                    )));
+                    self.push_event(EventKind::Error, &t("dialog_msg_invalid_uid_input"));
+                    return;
+                };
+                let block0 = if cleaned.len() == 8 {
+                    nfc_core::tasks::card_write::uid_to_block0(&cleaned)
+                } else {
+                    cleaned
+                };
+                let force_bcc = !nfc_core::tasks::phw::block0_bcc_ok(&block0);
+                self.confirm = Some(
+                    dialogs_ui::ConfirmModal::new(
+                        dialogs_ui::ConfirmKind::UidInputWrite { text },
+                        &dialogs_ui::danger_title(),
+                        nfc_core::tasks::card_write::input_uid_confirm(&block0, force_bcc).message,
+                    )
+                    .with_code(dialogs_ui::random_code()),
+                );
+            }
+            // S18：编辑器体检/修复/导出。check/fix 是纯 UI 动作（不进队列）；
+            // export 弹保存框，把当前编辑器内容的密钥字典另存为文件。
+            "dump-editor-export-keys" => {
+                let default =
+                    PathBuf::from(format!("NFCTools_keys_{}", nfc_core::paths::timestamp()));
+                self.save_file_for(
+                    dialogs_host::FilePurpose::ExportKeys,
+                    default,
+                    vec![nfc_core::dialogs::FileFilter {
+                        name: t("file_type_txt"),
+                        extensions: vec!["txt".to_owned()],
+                    }],
+                );
+            }
+            // S18：全加密爆破（mfcuk）。纯启动，无文件框、无确认窗。
+            "run-mfcuk" => self.pending.push(Action::Plain(name)),
             // 面板类（S10）与 about（S11）暂由后续里程碑接管
             other => self.pending.push(Action::Plain(other)),
         }
@@ -1053,17 +1162,11 @@ fn open_in_os(target: &std::path::Path) -> Result<(), String> {
     open::that_detached(target).map_err(|e| format!("{target:?}: {e}"))
 }
 
-/// 事件条时间戳（`index.js:118` 的 `HH:MM:SS`）。
+/// 事件条时间戳（`index.js:118` 的 `HH:MM:SS`，本地时区，S18 F3 修正）。
 ///
-/// 已知偏离：原版用本地时区（`getHours()` 等），此处用 UTC。已登记于
-/// docs/02 §6 —— 与 `paths::timestamp()` 的 UTC 偏离同源。
+/// 实现委托 [`nfc_core::paths::event_stamp`]（原版 `getHours()` 即本地时区）。
 pub fn event_stamp() -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let sod = now % 86_400;
-    format!("{:02}:{:02}:{:02}", sod / 3600, (sod % 3600) / 60, sod % 60)
+    nfc_core::paths::event_stamp()
 }
 
 /// 秒 → `HH:MM:SS`（`index.js:43-47`）。
@@ -1522,6 +1625,25 @@ impl NfcApp {
                         t("html_lock_ufuid"),
                         BtnStyle::Danger,
                         "html_tip_lock_ufuid",
+                    ),
+                    // S18：CUID 空卡写入 / 手输卡号 / 全加密爆破
+                    Item::Btn(
+                        "cuid-write",
+                        t("html_cuid_write"),
+                        BtnStyle::Normal,
+                        "html_tip_cuid_write",
+                    ),
+                    Item::Btn(
+                        "input-uid-write",
+                        t("html_write_uid_input"),
+                        BtnStyle::Normal,
+                        "html_tip_write_uid_input",
+                    ),
+                    Item::Btn(
+                        "run-mfcuk",
+                        t("html_mfcuk_run"),
+                        BtnStyle::Normal,
+                        "html_tip_mfcuk_run",
                     ),
                 ],
             ),

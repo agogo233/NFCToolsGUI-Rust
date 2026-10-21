@@ -210,42 +210,45 @@ pub fn mfoc_args(paths: &Paths, extra: &[String]) -> Vec<String> {
 /// let i = value.indexOf("UID (NFCID1):")
 /// if (i >= 0) { i += 14; cardID = value.substring(i, i + 14).replace(/\s+/g, "") }
 /// ```
-/// 即：定位标记 → 跳过 14 字符的标记本身 → 取其后 14 个字符 → **去掉所有空白**
+/// 即：定位标记 → 跳过 14 字符的标记本身 → 取 UID → 去掉所有空白
 /// （原版 mfoc 输出里 UID 是分两行印的，中间有换行与空格）。
 ///
 /// `nfc-mfclassic` 可能吐多个含该标记的数据块，故取**最后一个**
 /// （与原版一致：每次命中都覆盖 `cardID`）。
 ///
-/// **保留原版的一处缺陷**：窗口按含空白的 14 个字符切、之后才去空白。
-/// 故 mfoc 若把 UID 折行且缩进较深，取到的 ID 会被截断。刻意不改，
-/// 见同文件的 `take_uid_truncates_like_original_when_wrapped`。
+/// S18 修正（原 §6.15 登记的原版缺陷）：原版的 14 字符窗口**按含空白计**，
+/// UID 折行且缩进较深时取到的 ID 被截断。现改为「跳过前导空白后按行取」：
+/// 到下一个换行为止，非空白字符封顶 [`UID_MAX_HEX`]（14，兼容 7 字节卡号），
+/// 行内空白容忍。文件名前缀与原版在常见格式（同行、单换行折行）下完全一致。
 pub const MARKER_UID_NFCID: &str = "UID (NFCID1):";
 /// `MARKER_UID_NFCID` 的字节长度，原版的 `i += 14` 即此。
 const MARKER_UID_NFCID_LEN: usize = 14;
-/// UID 窗口长度，原版的 `substring(i, i + 14)` 即此。
-const UID_WINDOW: usize = 14;
+/// UID 非空白字符上限（4 字节 = 8 hex，7 字节 = 14 hex，封顶 14）。
+const UID_MAX_HEX: usize = 14;
+/// 每次匹配最多扫描的字符数（防整块无换行输出时的无界扫描）。
+const UID_SCAN_CAP: usize = 128;
 
 /// 见 [`MARKER_UID_NFCID`]。返回已去空白的 UID，形如 `A1B2C3D4`。
 pub fn take_uid(text: &str) -> Option<String> {
     let mut found = None;
     for (idx, _) in text.match_indices(MARKER_UID_NFCID) {
-        let start = idx + MARKER_UID_NFCID_LEN;
-        let window = &text[start..];
-        // 原版按字符切；此处按字节切，但只取 ASCII hex 窗口，
-        // 遇到非 ASCII 字节提前结束即可。
-        let mut end = window
-            .char_indices()
-            .nth(UID_WINDOW)
-            .map(|(i, _)| i)
-            .unwrap_or(window.len());
-        // 别切进 UTF-8 字符中间
-        while end > 0 && !window.is_char_boundary(end) {
-            end -= 1;
+        let rest = &text[idx + MARKER_UID_NFCID_LEN..];
+        let mut hex = String::new();
+        let mut non_ws = 0usize;
+        let mut started = false;
+        for ch in rest.chars().take(UID_SCAN_CAP) {
+            if !ch.is_whitespace() {
+                hex.push(ch);
+                non_ws += 1;
+                started = true;
+                if non_ws >= UID_MAX_HEX {
+                    break;
+                }
+            } else if started && ch == '\n' {
+                // 首个非空白之后的换行 = UID 行结束（行内空格照旧容忍）
+                break;
+            }
         }
-        let hex: String = window[..end]
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .collect();
         if !hex.is_empty() {
             found = Some(hex);
         }
@@ -716,16 +719,27 @@ mod tests {
         assert_eq!(take_uid(line).as_deref(), Some("a1b2c3d4"));
     }
 
-    /// 原版的潜在缺陷：`substring(i, i+14)` 取的是**含空白的 14 个字符**，
-    /// 之后才 `.replace(/\s+/g, "")`。故若 mfoc 把 UID 折到下一行且缩进较深，
-    /// 14 字符窗口装不下完整 UID，会被截断。此处**刻意保持一致**：
-    /// 文件名前缀只是给用户看的默认名，截断不影响功能；
-    /// 擅自「修正」反而会让本重写与原版对拍不出来。
+    /// S18 修正（原 §6.15 登记的原版缺陷）：原版 14 字符窗口**按含空白计**，
+    /// UID 折到下一行且缩进较深时会被截断。现改为跳前导空白后按行取，
+    /// 深缩进折行也能取到完整 UID。
     #[test]
-    fn take_uid_truncates_like_original_when_wrapped() {
+    fn take_uid_wrapped_deep_indent_gets_full_uid() {
         let out = "UID (NFCID1):\n        a1b2c3d4\n";
-        // 14 字符窗口里有 1 换行 + 8 空格 = 9 个空白，只剩 5 个 hex
-        assert_eq!(take_uid(out).as_deref(), Some("a1b2c3"));
+        assert_eq!(take_uid(out).as_deref(), Some("a1b2c3d4"));
+    }
+
+    /// 标记后紧跟换行（UID 在下一行、无缩进）同样取全。
+    #[test]
+    fn take_uid_next_line_no_indent_gets_full_uid() {
+        let out = "UID (NFCID1):\na1b2c3d4\n";
+        assert_eq!(take_uid(out).as_deref(), Some("a1b2c3d4"));
+    }
+
+    /// 7 字节 UID（14 hex）取满上限，不被截。
+    #[test]
+    fn take_uid_seven_byte_uid_gets_all_fourteen_hex() {
+        let out = "UID (NFCID1): a1b2c3d4e5f60718\n";
+        assert_eq!(take_uid(out).as_deref(), Some("a1b2c3d4e5f60718"));
     }
 
     #[test]

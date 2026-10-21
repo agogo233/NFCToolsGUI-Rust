@@ -8,11 +8,11 @@
 //! 分层：`Engine` 只依赖 `ToolRunner` trait（生产 `NfcToolRunner` / 测试
 //! `MockToolRunner`），不碰 egui，故可被 `--selftest` 用 mock 完整驱动。
 //!
-//! **当前覆盖范围**：读卡链路（`nfc-mfdetect` / `nfc-mfclassic` / `nfc-mfdict`）
-//! 与 `cancel-task`。写卡链路（`nfc-mfclassic -W` / `nfc-mfsetuid` / `nfc-mflock`）
-//! 与 hard-nested 的多轮状态机留给 S11 第二步——它们的参数依赖文件对话框
-//! 选出的路径，而对话框在 app 层（rfd）。未接线的动作会显式报
-//! `ToolError::NotWired` 并记一条日志，不会静默无反应。
+//! **当前覆盖范围**（S17 后全链路已接线）：读卡（`nfc-mfdetect` / `mfoc` /
+//! `nfc-mfdict`）、写卡（`nfc-mfclassic` / `nfc-mfsetuid` / `nfc-mflock`）、
+//! HardNested 多轮状态机、手机/手环操作区、S18 全加密爆破（`mfcuk`）与
+//! CUID 空卡写入。未接线的动作会显式报 `ToolError::NotWired` 并记一条日志，
+//! 不会静默无反应。
 
 use std::path::PathBuf;
 
@@ -73,6 +73,9 @@ struct NextStage {
     report: bool,
     /// 状态指示文案（`command.js:118` 的 `statusMsg`）。
     status_key: &'static str,
+    /// S18 CUID：第二段在备份成功后，用备份 block0 的 UID 生成 CUID 空卡密钥
+    /// 文件，并改用大写 `W`（解锁写）+ 该密钥文件。`args[3]` 仍是源 dump。
+    cuid: bool,
 }
 
 /// HardNested 闭环里当前跑的是哪一步。
@@ -143,6 +146,10 @@ struct Running {
     phw_read_uid: bool,
     /// `phw-write-data`：mfdetect 读回后、写回前，把 block0 写进目标块。
     phw_patch: Option<tasks::phw::SectorBlock>,
+    /// S18 CUID：本段是 CUID 写回的第二段，收尾时需删 CUID 密钥文件。
+    cuid: bool,
+    /// S18 全加密爆破：`run-mfcuk` 的密钥解析器（一轮可能出多把）。
+    mfcuk: Option<crate::model::parse::MfcukKeyParser>,
 }
 
 /// 动作编排器。
@@ -464,7 +471,8 @@ impl Engine {
         state.current_device = Some(dev.to_owned());
         state.apply(Event::DeviceState(crate::state::DeviceState::Connecting));
         let gs = GateState::from_state(state);
-        let mut flow = ConnectFlow::new(dev);
+        // S18：波特率由 `state.current_speed` 提供（设置面板可调，默认 115200）。
+        let mut flow = ConnectFlow::new(dev).with_speed(state.current_speed);
         let mut emit = |e: Event| state.apply(e);
         if let Err(e) = flow.begin(paths, self.runner.as_mut(), &gs, &mut emit) {
             return Err(match e {
@@ -552,6 +560,30 @@ impl Engine {
                         remove_temp: true,
                         report: true,
                         status_key: "indicator_writing_ic_card",
+                        cuid: false,
+                    },
+                )
+            }
+            // S18：CUID 空卡写入。复用 write-IC 的「备份 + 两段式」，仅第二段
+            // 改用大写 W（解锁写）+ 按当前卡号生成的 CUID 空卡密钥文件。
+            "cuid-write" => {
+                let dump = arg.unwrap_or_default();
+                let tasks::card_write::PrepareOutcome::Ready(src) =
+                    tasks::card_write::prepare_write(paths, Some(&dump), dialog)
+                else {
+                    return Ok(());
+                };
+                self.read_then_exec(
+                    name,
+                    state,
+                    paths,
+                    NextStage {
+                        tool: "nfc-mfclassic",
+                        args: tasks::card_write::mfclassic_write_args(&src, &paths.temp_mfd()),
+                        remove_temp: true,
+                        report: true,
+                        status_key: "indicator_writing_cuid",
+                        cuid: true,
                     },
                 )
             }
@@ -575,6 +607,7 @@ impl Engine {
                         // 格式化成败对用户不可见）。成功才删备份并报成功。
                         report: true,
                         status_key: "indicator_formatting_ic_card",
+                        cuid: false,
                     },
                 )
             }
@@ -626,9 +659,29 @@ impl Engine {
             "phw-read-uid" => self.phw_read_uid(state, paths),
             "phw-write-uid" => self.phw_write_uid(name, state, paths, dialog),
             "phw-write-data" => self.phw_write_data(name, state, paths, dialog),
+            // S18：手输卡号写 UFUID（`input-uid-write` 开面板由 app 层处理，
+            // 这里只处理真正跑 `nfc-mfsetuid` 的 `done-input-uid-write`）。
+            "done-input-uid-write" => self.input_uid_write(name, arg, state, dialog),
+            // S18 全加密爆破：`mfcuk` 直接启动，密钥解析器挂在 Running 上。
+            "run-mfcuk" => {
+                let args = tasks::card_write::mfcuk_args();
+                self.launch(
+                    "mfcuk",
+                    &args,
+                    state,
+                    "log_msg_start_mfcuk",
+                    Running {
+                        name,
+                        mfcuk: Some(crate::model::parse::MfcukKeyParser::new()),
+                        ..Running::default()
+                    },
+                )
+            }
             // 纯 UI / 由 app 层处理的动作：Engine 无事可做。
             // 注意 `hard-nested` / `dict-test` 在这里是「开面板」，
             // 真正跑命令的是它们的 `*-config-done` 变体。
+            // S18：`input-uid-write`（开面板）/ `dump-editor-export-keys`
+            //（编辑器导出，纯文件）同属 app 层。
             "input-keys-read-IC"
             | "hard-nested"
             | "dict-test"
@@ -640,7 +693,9 @@ impl Engine {
             | "open-history-keys"
             | "open-dict-file"
             | "save-log"
-            | "open-dump-folder" => Ok(()),
+            | "open-dump-folder"
+            | "input-uid-write"
+            | "dump-editor-export-keys" => Ok(()),
             other => {
                 // 未接线：显式记一条日志，避免"点了没反应"被当成正常。
                 state.apply(Event::Log(format!("\n{other}\n")));
@@ -799,6 +854,7 @@ impl Engine {
                     remove_temp: true,
                     report: true,
                     status_key: "indicator_writing_phw_data",
+                    cuid: false,
                 }),
                 phw_patch: Some(target),
                 ..Running::default()
@@ -824,6 +880,57 @@ impl Engine {
         std::fs::write(paths.temp_mfd(), &bytes)
             .map_err(|_| crate::i18n::t("log_msg_card_read_failed"))?;
         Ok(())
+    }
+
+    /// S18 手输卡号写 UFUID：清洗输入 → 拼 0 块 → 危险确认 → `nfc-mfsetuid`。
+    ///
+    /// 对标上游 Tauri `done_input_uid_write`：8 位 UID 自动补成 0 块，32 位直接
+    /// 用；BCC 不自洽时追加 `-f`（强制写入）并警示。`-q` 静默。
+    fn input_uid_write(
+        &mut self,
+        name: &'static str,
+        arg: Option<String>,
+        state: &mut AppState,
+        dialog: &mut dyn DialogProvider,
+    ) -> Result<(), ToolError> {
+        let text = arg.unwrap_or_default();
+        let Some(cleaned) = tasks::card_write::clean_uid_input(&text) else {
+            state.apply(Event::Log(format!(
+                "\n{}\n",
+                crate::i18n::t("dialog_msg_invalid_uid_input")
+            )));
+            return Ok(());
+        };
+        let block0 = if cleaned.len() == 8 {
+            tasks::card_write::uid_to_block0(&cleaned)
+        } else {
+            cleaned
+        };
+        // BCC 不自洽时强制写入（对标上游 `-f` 分支）。
+        let force_bcc = !tasks::phw::block0_bcc_ok(&block0);
+        if !dialog.confirm_danger(&tasks::card_write::input_uid_confirm(&block0, force_bcc)) {
+            return Ok(());
+        }
+        if force_bcc {
+            state.apply(Event::Log(format!(
+                "\n{}\n",
+                crate::i18n::t("log_msg_bcc_force")
+            )));
+        }
+        let mut args = tasks::card_write::mfsetuid_args(&block0);
+        if force_bcc {
+            args.push("-f".to_string());
+        }
+        self.launch(
+            "nfc-mfsetuid",
+            &args,
+            state,
+            "indicator_writing_ufuid_uid",
+            Running {
+                name,
+                ..Running::default()
+            },
+        )
     }
 
     /// `hard-nested-config-done`：auto_run 的第一步永远是 `nfc-mfdetect`。
@@ -1105,6 +1212,62 @@ impl Engine {
             });
             return Ok(());
         }
+        // S18 CUID：备份成功后按当前卡号生成 CUID 空卡密钥文件，第二段改
+        // 大写 `W`（解锁写）+ 该密钥文件。生成失败同样中止，绝不写卡。
+        if next.cuid {
+            let uid_hex = match tasks::card_write::read_block0_hex(&temp) {
+                Ok(h) if tasks::card_write::block0_is_valid(&h) => h,
+                _ => {
+                    state.apply(Event::Log(format!(
+                        "\n{}: {skip_name}\n",
+                        crate::i18n::t("log_msg_card_read_failed")
+                    )));
+                    state.apply(Event::Status {
+                        text: crate::i18n::t("indicator_error"),
+                        indicator: Indicator::Error,
+                    });
+                    return Ok(());
+                }
+            };
+            let keyfile = paths.cuid_keyfile();
+            let bytes = match tasks::card_write::cuid_keyfile_bytes(&uid_hex[..8]) {
+                Some(b) => b,
+                None => {
+                    state.apply(Event::Log(format!(
+                        "\n{}\n",
+                        crate::i18n::t("log_msg_card_read_failed")
+                    )));
+                    return Ok(());
+                }
+            };
+            if std::fs::write(&keyfile, &bytes).is_err() {
+                state.apply(Event::Status {
+                    text: crate::i18n::t("indicator_error"),
+                    indicator: Indicator::Error,
+                });
+                return Ok(());
+            }
+            state.apply(Event::Log(format!(
+                "\n{}\n",
+                crate::i18n::t("log_msg_cuid_key_built")
+            )));
+            let src = next.args.get(3).cloned().unwrap_or_default();
+            let args = tasks::card_write::cuid_write_args(std::path::Path::new(&src), &keyfile);
+            return self.launch(
+                next.tool,
+                &args,
+                state,
+                next.status_key,
+                Running {
+                    name: next.tool,
+                    remove_temp: next.remove_temp,
+                    report: next.report,
+                    block_stats: Some(BlockStatsParser::new()),
+                    cuid: true,
+                    ..Running::default()
+                },
+            );
+        }
         self.launch(
             next.tool,
             &next.args,
@@ -1199,6 +1362,10 @@ impl Engine {
         if let Some(c) = run.crypto.as_mut() {
             c.push(text);
         }
+        // S18 全加密爆破：mfcuk 一轮可出多把密钥，逐行收集
+        if let Some(p) = run.mfcuk.as_mut() {
+            p.push(text);
+        }
     }
 
     /// 重建 autoRun 下一轮的配置，对标 `command.js:350-359`：
@@ -1286,18 +1453,18 @@ impl Engine {
                 self.hn.after_collect(&cfg)
             }
             HnStep::Crack => {
-                // 命中则存密钥，并在与队首一致时推进队列（command.js:341-348）
+                // 命中则存密钥，并在队列中移除该 unknown（S18 F1：任意位置，非仅队首）
                 if let Some(mut c) = run.crypto {
                     c.flush();
                     if let Some(key) = c.take() {
                         let _ = crate::model::keys::save_keys(paths, &[key]);
                     }
                 }
-                // 只有当命中的扇区与队首一致才 shift，避免乱序命中破坏队列
-                // （command.js:347）
+                // 命中的扇区/类型在 unknown 里**任意位置**移除（command.js:347
+                // 原为只比队首，S18 F1 修正为按值移除，乱序命中不再丢密钥）
                 if let (Some(s), Some(k)) = (self.hn_round.sector, self.hn_round.key_type) {
                     let mut list = to_unknown(&state.unknown_key_info);
-                    if tasks::hard_nested::pop_matching_unknown(&mut list, s, k) {
+                    if tasks::hard_nested::remove_unknown(&mut list, s, k) {
                         state.unknown_key_info =
                             list.iter().map(|u| (u.sector, u.key_type)).collect();
                     }
@@ -1345,6 +1512,32 @@ impl Engine {
     fn finish(&mut self, run: Running, exit: &runner::Exit, state: &mut AppState, paths: &Paths) {
         state.is_running_task = false;
         state.progress = None;
+
+        // S18 CUID：本次 CUID 写入生成的密钥文件是过程产物，收尾即删。
+        if run.cuid {
+            let _ = std::fs::remove_file(paths.cuid_keyfile());
+        }
+        // S18 全加密爆破：mfcuk 一轮可出多把密钥，无论退出码如何都先收走，
+        // 落进历史密钥（下次读卡 / 字典测试可直接复用）。
+        if let Some(mut p) = run.mfcuk.take() {
+            p.flush();
+            let keys = p.take_keys();
+            if !keys.is_empty() {
+                match crate::model::keys::save_keys(paths, &keys) {
+                    Ok(fresh) => {
+                        for k in fresh {
+                            state.apply(Event::EventItem {
+                                kind: EventKind::Key,
+                                text: format!("mfcuk: {k}"),
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        state.apply(Event::Log(format!("\n{}\n", e)));
+                    }
+                }
+            }
+        }
 
         // mfdetect 退出时要 flush 解析器（结算末行），再落盘新密钥
         if let Some(mut p) = run.parser {
@@ -1985,7 +2178,9 @@ mod tests {
     #[test]
     fn unwired_action_reports_not_wired_and_logs() {
         // 「点了没反应」必须变成可见错误，而不是静默返回 Ok。
-        // `run-hard-nested`（libnfc-collect 多轮状态机）尚未接线。
+        // `run-hard-nested` 不是独立的 action：它的多轮状态机（collect→crack）
+        // 由 `hard-nested-config-done` 驱动，直接按名字派发须显式报 NotWired
+        // （S11-5 的回归钉点，见 verify_parity「未接线动作仍显式报错」）。
         let (_d, p) = paths("unwired");
         let mut e = Engine::new(Box::new(MockToolRunner::new(vec![])));
         let mut st = connected();
@@ -2483,7 +2678,7 @@ mod tests {
         assert!(!e.is_running());
     }
 
-    /// 破解命中 → 存密钥 + 移除队首 unknown（command.js:341-348）。
+    /// 破解命中 → 存密钥 + 在 unknown 队列移除对应项（S18 F1：任意位置）。
     #[test]
     fn hard_nested_crack_saves_key_and_pops_unknown() {
         let (_d, p) = paths("hn-hit");

@@ -151,12 +151,13 @@ impl PortScanner {
     }
 }
 
-/// 写 `libnfc.conf`。内容见 `Paths::libnfc_conf`，波特率恒 115200。
-pub fn write_nfc_config(paths: &Paths, device: &str) -> Result<(), DeviceError> {
+/// 写 `libnfc.conf`。内容见 `Paths::libnfc_conf`，波特率由调用方指定
+/// （S18：设置面板可调；默认 [`crate::paths::DEVICE_SPEED`]）。
+pub fn write_nfc_config(paths: &Paths, device: &str, speed: u32) -> Result<(), DeviceError> {
     if let Some(parent) = paths.nfc_config().parent() {
         fs::create_dir_all(parent).map_err(|e| DeviceError::WriteConfig(e.to_string()))?;
     }
-    fs::write(paths.nfc_config(), Paths::libnfc_conf(device, DEVICE_SPEED))
+    fs::write(paths.nfc_config(), Paths::libnfc_conf(device, speed))
         .map_err(|e| DeviceError::WriteConfig(e.to_string()))
 }
 
@@ -180,6 +181,9 @@ pub fn judge_connect(text: &str) -> Option<bool> {
 /// `nfc-list` 判为 `NotConnected`（原版门禁在 `currentDevice === null` 时无条件拒绝）。
 pub struct ConnectFlow {
     device: String,
+    /// 连接时写入 `libnfc.conf` 的波特率。S18：由 `state.current_speed` 提供，
+    /// 默认 115200。
+    speed: u32,
     output: String,
     connected: Option<bool>,
 }
@@ -188,9 +192,16 @@ impl ConnectFlow {
     pub fn new(device: impl Into<String>) -> Self {
         Self {
             device: device.into(),
+            speed: DEVICE_SPEED,
             output: String::new(),
             connected: None,
         }
+    }
+
+    /// S18：连接前设置波特率（设置面板改速后重连时由 engine 传入）。
+    pub fn with_speed(mut self, speed: u32) -> Self {
+        self.speed = speed;
+        self
     }
 
     pub fn device(&self) -> &str {
@@ -209,7 +220,7 @@ impl ConnectFlow {
             text: i18n::t("indicator_connecting_device"),
             indicator: Indicator::Running,
         });
-        if let Err(e) = write_nfc_config(paths, &self.device) {
+        if let Err(e) = write_nfc_config(paths, &self.device, self.speed) {
             emit(Event::DeviceState(DeviceState::Failed));
             return Err(e);
         }
@@ -538,7 +549,7 @@ mod tests {
     #[test]
     fn write_nfc_config_writes_expected_content() {
         let paths = tmp_paths("write");
-        write_nfc_config(&paths, "/dev/ttyACM0").unwrap();
+        write_nfc_config(&paths, "/dev/ttyACM0", DEVICE_SPEED).unwrap();
         assert!(paths.nfc_config().is_file());
         assert_eq!(
             fs::read_to_string(paths.nfc_config()).unwrap(),
@@ -549,9 +560,21 @@ mod tests {
     }
 
     #[test]
+    fn write_nfc_config_respects_custom_speed() {
+        let paths = tmp_paths("write-speed");
+        write_nfc_config(&paths, "/dev/ttyACM0", 921_600).unwrap();
+        assert_eq!(
+            fs::read_to_string(paths.nfc_config()).unwrap(),
+            Paths::libnfc_conf("/dev/ttyACM0", 921_600)
+        );
+        let dirs: Vec<_> = DIRS.with(|d| d.borrow().clone());
+        drop_dirs(&dirs);
+    }
+
+    #[test]
     fn write_nfc_config_reports_error_when_parent_missing() {
         let paths = Paths::new(NO_PARENT);
-        let err = write_nfc_config(&paths, "/dev/ttyACM0").unwrap_err();
+        let err = write_nfc_config(&paths, "/dev/ttyACM0", DEVICE_SPEED).unwrap_err();
         assert!(matches!(err, DeviceError::WriteConfig(_)));
         assert!(err.to_string().contains("libnfc.conf"));
     }

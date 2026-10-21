@@ -115,7 +115,7 @@ pub struct DictTestConfig {
     pub start_position: u32,
 }
 
-/// 8 个面板的可见性（对标原版 8 个 BrowserWindow）。
+/// 9 个面板的可见性（对标原版 8 个 BrowserWindow + S18 手输卡号面板）。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Panels {
     pub settings: bool,
@@ -127,6 +127,8 @@ pub struct Panels {
     pub dump_history: bool,
     pub about: bool,
     pub phone_wristband: bool,
+    /// S18：手输卡号写 UFUID（`input-uid-write`）。
+    pub uid_input: bool,
 }
 
 impl Panels {
@@ -140,6 +142,7 @@ impl Panels {
             || self.dump_history
             || self.about
             || self.phone_wristband
+            || self.uid_input
     }
 }
 
@@ -222,6 +225,8 @@ pub struct AppState {
     pub device_list: Vec<String>,
     pub current_device: Option<String>,
     pub current_speed: u32,
+    /// S18：深层扫描开关（`LIBNFC_INTRUSIVE_SCAN=1`）。默认关。
+    pub deep_scan: bool,
     pub is_device_connected: bool,
     pub device_state: DeviceState,
     pub is_running_task: bool,
