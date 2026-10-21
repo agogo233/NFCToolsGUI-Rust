@@ -170,7 +170,7 @@ pub fn show(ctx: &Context, m: &ConfirmModal, danger_color: egui::Color32) -> Opt
             let code_ok = match &m.code {
                 Some(want) => {
                     let cur = ctx
-                        .data(|d| d.get_persisted_string(code_id))
+                        .data(|d| d.get_persisted::<String>(code_id))
                         .unwrap_or_default();
                     let ok = cur.trim().eq_ignore_ascii_case(want);
                     ui.horizontal(|ui| {
@@ -182,7 +182,7 @@ pub fn show(ctx: &Context, m: &ConfirmModal, danger_color: egui::Color32) -> Opt
                                 .hint_text(format!("输入 {} 以放行", want)),
                         );
                         if resp.changed() {
-                            ctx.data_mut(|d| d.set_persisted_string(code_id, buf));
+                            ctx.data_mut(|d| d.insert_persisted(code_id, buf));
                         }
                     });
                     ok

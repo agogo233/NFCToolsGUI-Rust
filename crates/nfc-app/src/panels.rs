@@ -629,7 +629,7 @@ fn settings(ui: &mut Ui, app: &mut NfcApp) -> bool {
                 (19200, "19200"),
             ];
             let cur = app.state.current_speed;
-            egui::ComboBox::from_id_source("conn_speed")
+            egui::ComboBox::from_id_salt("conn_speed")
                 .selected_text(
                     speeds
                         .iter()
@@ -640,8 +640,8 @@ fn settings(ui: &mut Ui, app: &mut NfcApp) -> bool {
                 .width(110.0)
                 .show_ui(ui, |ui| {
                     for (s, l) in speeds {
-                        if ui.selectable_label(s == cur, *l).clicked() {
-                            app.state.current_speed = *s;
+                        if ui.selectable_label(s == cur, l).clicked() {
+                            app.state.current_speed = s;
                         }
                     }
                 });
@@ -1117,6 +1117,9 @@ fn dump_editor(ui: &mut Ui, app: &mut NfcApp) -> bool {
     } else {
         // 编辑区：逐扇区一个多行输入
         let mut dirty = false;
+        // S18：值块徽章需知卡容量（1K=16 扇区）；iteration 内只读这个拷贝，
+        // 不在此处再拦 `sectors`，避免与 `iter_mut` 的圈入冲突。
+        let editor_is_1k = app.forms.editor.sectors.len() == 16;
         ScrollArea::vertical().show(ui, |ui| {
             for (si, sector) in app.forms.editor.sectors.iter_mut().enumerate() {
                 // 校验（`dumpEditor.js:98-118` 的 checkData）
@@ -1150,11 +1153,12 @@ fn dump_editor(ui: &mut Ui, app: &mut NfcApp) -> bool {
                         });
                         // S18：值块标记——该扇区含值块时在号后贴一个小徽章
                         // （对标 MyPN532 DumpSectorEditor 的 value block 高亮）。
-                        let is_1k = app.forms.editor.sectors.len() == 16;
+                        // 只用当前这一扇区构造单元素切片，避免在 `iter_mut`
+                        // 存续期间再不可变借用整个 `sectors`（E0502）。
                         if !nfc_core::model::dumpcheck::value_block_lines(
                             si,
-                            &app.forms.editor.sectors,
-                            is_1k,
+                            std::slice::from_ref(&*sector),
+                            editor_is_1k,
                         )
                         .is_empty()
                         {

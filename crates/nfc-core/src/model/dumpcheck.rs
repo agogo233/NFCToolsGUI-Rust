@@ -111,9 +111,9 @@ fn sector_first_block(sector: usize, block_count: usize) -> usize {
 /// 扇区序号 → 尾块号。`dumpTools.js:28-32`：4K 卡的 32 号以后每扇区 16 块。
 fn sector_trailer_block(sector: usize, block_count: usize) -> usize {
     let first = sector_first_block(sector, block_count);
-    if block_count <= 128 {
-        first + 3
-    } else if sector < 32 {
+    // 1K 卡（≤128 块）整卡及 4K 卡的前 32 扇区都是 4 块/扇区 → 尾块 = first+3；
+    // 仅 4K 卡 32 号起的扩展扇区为 16 块/扇区 → first+15。
+    if block_count <= 128 || sector < 32 {
         first + 3
     } else {
         first + 15
@@ -428,9 +428,9 @@ mod tests {
             bytes[t + 6..t + 10].copy_from_slice(&[0xff, 0x07, 0x80, 0x69]); // 访问位
             bytes[t + 10..t + 16].copy_from_slice(&[0xff; 6]); // KeyB
         }
-        // 块 0：UID 01 02 03 04，BCC = 04
+        // 块 0：UID 01 02 03 04，BCC = 01^02^03^04（逐位异或）
         bytes[0..4].copy_from_slice(&[0x01, 0x02, 0x03, 0x04]);
-        bytes[4] = 0x01 ^ 0x02 ^ 0x03 ^ 0x04;
+        bytes[4] = bytes[0..4].iter().fold(0x00, |acc, &b| acc ^ b);
         dump::to_sector_lines(&bytes).unwrap()
     }
 
@@ -579,7 +579,6 @@ mod tests {
     fn key_dict_extracts_sectors_in_order_and_dedupes() {
         let mut s = blank_1k();
         // 扇区 3 尾块：KeyA = aabbccddeeff，KeyB = 112233445566
-        let t = 3 * 64 + 48;
         let mut line = [0u8; 16];
         line[0..6].copy_from_slice(&[0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]);
         line[10..16].copy_from_slice(&[0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);

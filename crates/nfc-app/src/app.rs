@@ -789,8 +789,10 @@ impl NfcApp {
             return;
         }
         let req = match purpose {
-            // command.js:130-138
-            dialogs_host::FilePurpose::WriteDump | dialogs_host::FilePurpose::WriteUidDump => {
+            // command.js:130-138；CuidDump 是 S18 CUID 空卡写入的源 dump，同款过滤器
+            dialogs_host::FilePurpose::WriteDump
+            | dialogs_host::FilePurpose::WriteUidDump
+            | dialogs_host::FilePurpose::CuidDump => {
                 nfc_core::tasks::card_write::open_dump_request(&self.paths.dumpfiles_dir())
             }
             // command.js:416-422 / command.js:470-476：原版这里把
@@ -815,12 +817,14 @@ impl NfcApp {
                 }],
                 message: t("dialog_msg_choose_dictionary_file"),
             },
-            // 保存类不走「打开」框
-            // S11-7：同上，不由 `save_file_for` 发起。
+            // 保存类不走「打开」框。
+            // S11-7：同 ReadIcSave 等挂起保存，不由 `save_file_for` 发起。
             dialogs_host::FilePurpose::SaveLog
             | dialogs_host::FilePurpose::EditorSaveAs
             | dialogs_host::FilePurpose::ReadIcSave
-            | dialogs_host::FilePurpose::NoncesSave => return,
+            | dialogs_host::FilePurpose::NoncesSave
+            // S18：导出密钥是「保存到」，走 `save_file_for`，不在这里弹打开框。
+            | dialogs_host::FilePurpose::ExportKeys => return,
         };
         self.dialogs_host.request_open(purpose, req);
     }
