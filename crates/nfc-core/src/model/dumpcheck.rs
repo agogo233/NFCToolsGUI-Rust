@@ -529,19 +529,20 @@ mod tests {
 
     #[test]
     fn four_k_layout_places_large_sector_trailers() {
-        // 4K 卡（4096 字节 = 256 块 = 48 扇区）：32 号以后的尾块在首块 +15
+        // 4K 卡（4096 字节 = 256 块 = 40 扇区：32 单扇区 + 8 扩展扇区）
+        // 32 号以后的尾块在首块 +15
         let mut bytes = vec![0u8; 4096];
-        for s in 0..48 {
+        for s in 0..40 {
             let t = sector_trailer_block(s, 256) * 16;
             bytes[t..t + 6].copy_from_slice(&[0xff; 6]);
             bytes[t + 6..t + 10].copy_from_slice(&[0xff, 0x07, 0x80, 0x69]);
-            bytes[t + 11..t + 17].copy_from_slice(&[0xff; 6]);
+            bytes[t + 10..t + 16].copy_from_slice(&[0xff; 6]);
         }
         bytes[4] = bytes[0] ^ bytes[1] ^ bytes[2] ^ bytes[3];
         let s = dump::to_sector_lines(&bytes).unwrap();
         assert_eq!(s.len(), 64, "4K 卡 = 64 组 × 4 行");
         assert!(check(&s).unwrap().is_empty());
-        // 破坏扇区 35 的尾块（组 35 在第 9 行）
+        // 破坏扇区 35 的尾块（落在编辑器组 47 第 0 行）
         let t = sector_trailer_block(35, 256) * 16;
         let group = t / 64;
         let line_in_group = (t % 64) / 16;
@@ -560,14 +561,15 @@ mod tests {
 
     #[test]
     fn value_block_heuristic_matches_reference_vectors() {
-        // 参考向量（MyPN532 语义）：值 00000001，反码是 0xffffffff - 值 → FFFFFFFE
-        assert!(is_value_block("00000001ffffffffff0000000105fa05fa"));
+        // 参考向量（MyPN532 语义）：值 1，反码 = 0xffffffff - 1 → FFFFFFFE，
+        // 地址字段 05fa（补码互补），17 列为 05fa05fa。
+        assert!(is_value_block("00000001fffffffe0000000105fa05fa"));
         // 值 0 的合法值块：反码必须全 FF
         assert!(is_value_block("00000000ffffffff0000000005fa05fa"));
         // 值与反码不一致（反码写成全 FF 但值非 0）→ 否
         assert!(!is_value_block("00000001ffffffff0000000105fa05fa"));
         // 地址补码破坏 → 否
-        assert!(!is_value_block("00000001ffffffff0000000105fa05fb"));
+        assert!(!is_value_block("00000001fffffffe0000000105fa05fb"));
         // 全零块：值 0 但反码也是 0（应为全 FF）→ 否
         assert!(!is_value_block("00000000000000000000000000000000"));
         // 非 hex / 短行
@@ -608,7 +610,7 @@ mod tests {
     #[test]
     fn check_report_lists_issues_and_value_block_hints() {
         let mut s = blank_1k();
-        s[4][1] = "00000001ffffffffff0000000105fa05fa".to_string(); // 值块
+        s[4][1] = "00000001fffffffe0000000105fa05fa".to_string(); // 值块
         let lines = check_report(&s);
         assert_eq!(lines.len(), 1);
         assert!(lines[0].contains(t("html_value_block").as_str()));

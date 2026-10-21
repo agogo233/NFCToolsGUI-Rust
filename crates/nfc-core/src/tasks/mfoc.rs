@@ -738,8 +738,11 @@ mod tests {
     /// 7 字节 UID（14 hex）取满上限，不被截。
     #[test]
     fn take_uid_seven_byte_uid_gets_all_fourteen_hex() {
-        let out = "UID (NFCID1): a1b2c3d4e5f60718\n";
-        assert_eq!(take_uid(out).as_deref(), Some("a1b2c3d4e5f60718"));
+        let out = "UID (NFCID1): a1b2c3d4e5f607\n";
+        assert_eq!(take_uid(out).as_deref(), Some("a1b2c3d4e5f607"));
+        // 超过上限的输入按 [`UID_MAX_HEX`] 截断，不越界
+        let over = "UID (NFCID1): a1b2c3d4e5f60718\n";
+        assert_eq!(take_uid(over).as_deref(), Some("a1b2c3d4e5f607"));
     }
 
     #[test]

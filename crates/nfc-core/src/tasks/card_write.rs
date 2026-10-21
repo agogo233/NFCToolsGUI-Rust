@@ -744,7 +744,7 @@ mod tests {
     fn clean_uid_input_accepts_8_or_32_hex_and_strips_separators() {
         assert_eq!(clean_uid_input("a1-b2:c3.d4"), Some("A1B2C3D4".to_string()));
         assert_eq!(clean_uid_input("a1 b2 c3 d4"), Some("A1B2C3D4".to_string()));
-        let block0 = "A1B2C3D40804006263646566676869";
+        let block0 = "A1B2C3D4040804006263646566676869"; // 32 hex 完整 0 块
         assert_eq!(clean_uid_input(block0), Some(block0.to_string()));
         assert_eq!(clean_uid_input("a1b2c3d"), None, "7 位不行");
         assert_eq!(clean_uid_input("a1b2c3d4e5"), None, "10 位不行");

@@ -1020,7 +1020,7 @@ mod tests {
     fn mfcuk_parser_survives_chunk_boundaries() {
         let mut p = MfcukKeyParser::new();
         p.push("Found Ke");
-        p.push("y A [deadbeef1234\n");
+        p.push("y A [deadbeef1234]\n");
         p.flush();
         assert_eq!(p.take_keys(), vec!["deadbeef1234".to_string()]);
     }
