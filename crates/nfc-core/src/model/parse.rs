@@ -911,7 +911,7 @@ mod tests {
     fn block_stats_split_across_chunks() {
         let mut p = BlockStatsParser::new();
         p.push("Done, 63 of 64 blocks wri");
-        p.push("ten.\n");
+        p.push("tten.\n");
         assert_eq!(p.take(), Some((63, 64)));
     }
 
