@@ -1532,11 +1532,13 @@ mod tests {
 
     #[test]
     fn esc_closes_the_topmost_open_panel() {
-        let mut p = nfc_core::state::Panels::default();
-        p.settings = true;
-        p.dump_editor = true;
         // About 在 `Panel::ALL` 里最靠后，故浮在最上层。
-        p.about = true;
+        let mut p = nfc_core::state::Panels {
+            settings: true,
+            dump_editor: true,
+            about: true,
+            ..Default::default()
+        };
         close_topmost(&mut p);
         assert!(!p.about);
         assert!(p.settings && p.dump_editor);
