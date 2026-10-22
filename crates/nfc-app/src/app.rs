@@ -85,15 +85,18 @@ impl ThemeMode {
     }
 }
 
+/// 引导条按钮：`(action 名, 按钮文案, 动作参数)`。
+///
+/// 第三元素为动作入参：`DumpSaved` 引导「写这张卡」直接带 dumpId
+/// （对标 `command.js:127-130` 的带参跳确认框）；其余引导不传参（`None`，
+/// 等同旧行为——弹文件框选择）。
+pub type GuidanceButton = (&'static str, String, Option<String>);
+
 /// 应用的全部 UI 状态。
 pub struct NfcApp {
     pub state: AppState,
-    /// 引导条（`(文案, [(action, 按钮文案, 动作参数)])`），`None` 为隐藏。
-    ///
-    /// 第三元素为动作入参：`DumpSaved` 引导「写这张卡」直接带 dumpId
-    /// （对标 `command.js:127-130` 的带参跳确认框）；其余引导不传参（`None`，`
-    /// 等同旧行为——弹文件框选择）。
-    pub guidance: Option<(String, Vec<(&'static str, String, Option<String>)>)>,
+    /// 引导条（`(文案, 按钮列表)`），`None` 为隐藏。
+    pub guidance: Option<(String, Vec<GuidanceButton>)>,
     /// S15：冷启动引导已展示过（一次性，避免每帧刷屏 / 连接后反复弹）。
     pub cold_guided: bool,
     /// 锁滚动（`index.js:3` `isLockScroll`）。
