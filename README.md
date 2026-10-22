@@ -15,7 +15,7 @@
 | 转储编辑 | 转储比较 |
 | 历史记录 | 密钥管理 |
 
-34 个 action 的「触发点 → 对话框/确认 → 工具与参数 → 收尾 → 原版行号」对照表见
+39 个 action 的「触发点 → 对话框/确认 → 工具与参数 → 收尾 → 原版行号」对照表见
 [docs/04 §9](docs/04-测试计划.md)。
 
 ## 驱动安装
@@ -108,7 +108,7 @@ cargo run -p nfc-app --release
 
 ```bash
 cargo run -p nfc-core -- --selftest   # 14 项核心行为
-cargo run -p nfc-app  -- --selftest   # 73 项界面 + 接线（S8 主窗口 + S9 面板 + S10 三面板 + S11 接线 + S13 设备层）
+cargo run -p nfc-app  -- --selftest   # 87 项界面 + 接线（S8 主窗口 + S9 面板 + S10 三面板 + S11 接线 + S13 设备层，S14/S18/S19 另增）
 ```
 
 ### 平台依赖
@@ -121,14 +121,14 @@ cargo run -p nfc-app  -- --selftest   # 73 项界面 + 接线（S8 主窗口 + S
 ## 开发
 
 ```bash
-cargo test --workspace          # 476 项（含 15 项真实 C 工具测试 + 6 项原版解析套件）
+cargo test --workspace          # 539 项（含 15 项真实 C 工具测试——缺 framework/bin 时自动跳过；6 项原版解析套件）
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
-python3 tools/verify_parity.py  # 693 项静态门禁（parity 表 / 接线守卫）
+python3 tools/verify_parity.py  # 799 项静态门禁（parity 表 / 接线守卫）
 ```
 
 `tools/verify_parity.py` 把关键不变量钉在源码文本上——它会核对
-`command::ALL_ACTIONS` 那 34 个 action 与 docs/04 §9 的表是否一一对应，
+`command::ALL_ACTIONS` 那 39 个 action 与 docs/04 §9 的表是否一一对应，
 并守住一批「曾经真错过」的缺陷。路径相对脚本解析，仓库克隆到任何位置都能跑；
 原版 Electron 源码不在时相关对拍项自动跳过。
 

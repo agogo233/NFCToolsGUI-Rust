@@ -23,14 +23,14 @@ NFCToolsGUI 的 Rust 重写版（AGPL-3.0）。与 PN532 交互的跨平台桌�
 cargo build --release              # → target/release/nfc-app(.exe)
 cargo run -p nfc-app --release     # 运行 GUI
 cargo run -p nfc-core -- --selftest   # 14 项核心行为（不开窗口）
-cargo run -p nfc-app  -- --selftest   # 73 项界面 + 接线
+cargo run -p nfc-app  -- --selftest   # 87 项界面 + 接线
 
-cargo test --workspace             # 476 项
+cargo test --workspace             # 539 项
 cargo test -p nfc-core --test real_tools --test tool_cli   # 需要 framework/bin（否则自动跳过）
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --workspace --all-targets --features real-serial -- -D warnings   # CI 额外跑一次：RealSerial 平时不参与编译
 cargo fmt --all --check
-python3 tools/verify_parity.py     # 693 项静态门禁（34 action parity 表 + 接线守卫）
+python3 tools/verify_parity.py     # 799 项静态门禁（39 action parity 表 + 接线守卫）
 ./scripts/package.sh               # 构建 + 打包 out/NFCToolsGUI-win-x64.zip
 ./scripts/package.sh --check       # 只跑门禁与检测
 ```
@@ -47,7 +47,7 @@ python3 tools/verify_parity.py     # 693 项静态门禁（34 action parity 表 
 
 ## verify_parity.py 门禁
 
-把 `command::ALL_ACTIONS`（34 个 action）钉在 `docs/04 §9` 的 parity 表上，并守住一批「曾经真错过」的缺陷。路径相对脚本解析，克隆到任何位置都能跑。
+把 `command::ALL_ACTIONS`（39 个 action）钉在 `docs/04 §9` 的 parity 表上，并守住一批「曾经真错过」的缺陷。路径相对脚本解析，克隆到任何位置都能跑。
 
 - 依赖原版 Electron 源码的 28 项 `check_orig` 对拍：原版不在时记 SKIP（**不算失败**）。
 - 显式设了 `NFC_ORIG_DIR` 却指向不存在的目录 → 退出码 3（防静默降级）。
@@ -70,7 +70,7 @@ python3 tools/verify_parity.py     # 693 项静态门禁（34 action parity 表 
 - `docs/01-功能规格.md` — 功能规格
 - `docs/02-架构设计.md` — 架构 + §6 偏离登记
 - `docs/03-实施计划.md` — S0–S12 实施计划
-- `docs/04-测试计划.md` — 测试计划 + §9 34 action parity 表
+- `docs/04-测试计划.md` — 测试计划 + §9 39 action parity 表
 - `PLAN.md` — 总计划
 
 ## 真机验收
