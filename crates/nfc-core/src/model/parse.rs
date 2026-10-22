@@ -993,18 +993,17 @@ mod tests {
     /// 钉住规则，避免回归到单一判据。
     #[test]
     fn block_stats_complete_criterion() {
-        use BlockStatsParser::is_write_complete;
         // 普通写：63/64 → 完整（block0 未写）
-        assert!(is_write_complete((63, 64), false));
+        assert!(BlockStatsParser::is_write_complete((63, 64), false));
         // 普通写：60/64 → 不完整
-        assert!(!is_write_complete((60, 64), false));
+        assert!(!BlockStatsParser::is_write_complete((60, 64), false));
         // CUID：64/64 → 完整（block0 已写）
-        assert!(is_write_complete((64, 64), true));
+        assert!(BlockStatsParser::is_write_complete((64, 64), true));
         // CUID：63/64 → 不完整（block0 没写上）
-        assert!(!is_write_complete((63, 64), true));
+        assert!(!BlockStatsParser::is_write_complete((63, 64), true));
         // 退化 total == 0 → 不完整（且不触发 `total - 1` 下溢）
-        assert!(!is_write_complete((0, 0), false));
-        assert!(!is_write_complete((0, 0), true));
+        assert!(!BlockStatsParser::is_write_complete((0, 0), false));
+        assert!(!BlockStatsParser::is_write_complete((0, 0), true));
     }
 
     // ---------------------------------------------------------- mfcuk
