@@ -120,7 +120,10 @@ pub fn run() -> eframe::Result {
         ("编辑器导出密钥落盘", c_export_keys_flow),
         ("全加密爆破启动 mfcuk", c_run_mfcuk_flow),
         ("默认字典路径可用", c_default_dict_path),
-        ("dump 保存后引导直达确认", c_dump_saved_guidance_carries_dump_id),
+        (
+            "dump 保存后引导直达确认",
+            c_dump_saved_guidance_carries_dump_id,
+        ),
         ("编辑器入口拒绝路径穿越", c_editor_rejects_traversal),
     ];
 
