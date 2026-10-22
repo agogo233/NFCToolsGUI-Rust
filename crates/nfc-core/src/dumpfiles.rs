@@ -99,7 +99,11 @@ pub fn rename(dir: &Path, old: &str, new: &str) -> Result<PathBuf, DumpFileError
 }
 
 /// 文件名必须是单一文件名：非空、不含路径分隔符、不是 `.` / `..`。
-fn is_plain_name(name: &str) -> bool {
+///
+/// 除本模块的 [`delete`] / [`rename`] 外，app 侧编辑器载入、比较器两侧
+/// 载入、编辑器保存写回也用它做入口防线（纵深防御：所有把用户可见文件名
+/// 拼到 dumpfiles 下的入口都过同一道校验）。
+pub fn is_plain_name(name: &str) -> bool {
     !name.is_empty()
         && name != "."
         && name != ".."

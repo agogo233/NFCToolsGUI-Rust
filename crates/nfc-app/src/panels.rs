@@ -1409,7 +1409,9 @@ fn render_diff_row(
 /// `dumpHistory.html`：文件列表 + 底部四个按钮。
 fn dump_history(ui: &mut Ui, app: &mut NfcApp) -> bool {
     // 列表来自 core 的 dumpfiles::list（只列 .mfd）
-    let dir = nfc_core::paths::Paths::from_app_data().dumpfiles_dir();
+    // 目录随注入的 app.paths 走：`--selftest` 会把它换成临时目录，
+    // 用 from_app_data() 会绕过注入、读到真实用户数据目录。
+    let dir = app.paths.dumpfiles_dir();
     let files = nfc_core::dumpfiles::list(&dir);
     // 勾选集合与实际文件求交，剔除已被删的
     app.forms.history_selected.retain(|f| files.contains(f));

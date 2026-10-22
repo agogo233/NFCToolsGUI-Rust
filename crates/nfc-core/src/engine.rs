@@ -1230,7 +1230,9 @@ impl Engine {
                 }
             };
             let keyfile = paths.cuid_keyfile();
-            let bytes = match tasks::card_write::cuid_keyfile_bytes(&uid_hex[..8]) {
+            let bytes = match tasks::card_write::cuid_keyfile_bytes(tasks::card_write::uid_prefix(
+                &uid_hex,
+            )) {
                 Some(b) => b,
                 None => {
                     state.apply(Event::Log(format!(
@@ -1247,6 +1249,7 @@ impl Engine {
                 });
                 return Ok(());
             }
+            crate::paths::restrict_owner(&keyfile);
             state.apply(Event::Log(format!(
                 "\n{}\n",
                 crate::i18n::t("log_msg_cuid_key_built")
@@ -1597,7 +1600,7 @@ impl Engine {
                             state.phw.block0 = Some(hex.clone());
                             state.apply(Event::EventItem {
                                 kind: EventKind::Success,
-                                text: format!("卡号: {}", &hex[..8]),
+                                text: format!("卡号: {}", tasks::card_write::uid_prefix(&hex)),
                             });
                         }
                         _ => {

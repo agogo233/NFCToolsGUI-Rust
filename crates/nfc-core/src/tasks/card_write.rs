@@ -69,9 +69,21 @@ pub fn read_block0_hex(path: &Path) -> std::io::Result<String> {
     Ok(crate::model::hex::hex_encode_upper(&data[..n]))
 }
 
-/// block0 是否足够写 UFUID（需满 16 字节 = 32 hex）。
+/// block0 是否足够写 UFUID（需满 16 字节 = 32 hex，且全为 hex 字符）。
+///
+/// 显式校验字符集：`read_block0_hex` 的输出天然是 ASCII hex，但调用方的
+/// 后续用法（`uid_prefix` 取前 8 位）靠该不变量成立，此处让它在函数内
+/// 自证，换数据源时不会静默失效。
 pub fn block0_is_valid(hex: &str) -> bool {
-    hex.len() == 32
+    hex.len() == 32 && hex.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// 从 block0 hex 取前 8 位（UID 段），供事件条展示与 CUID 密钥文件用。
+///
+/// 用 `get` 而非下标切片：长度不足时退化为整串，不因字节边界 panic。
+/// `block0_is_valid` 通过时此函数恒返回前 8 位。
+pub fn uid_prefix(hex: &str) -> &str {
+    hex.get(..8).unwrap_or(hex)
 }
 
 /// 危险确认框的通用构造，对标 `command.js:111-116` / `command.js:214-219`。
@@ -487,6 +499,24 @@ mod tests {
         assert!(!block0_is_valid(&"A".repeat(31)));
         assert!(!block0_is_valid(&"A".repeat(33)));
         assert!(block0_is_valid(&"A".repeat(32)));
+    }
+
+    #[test]
+    fn block0_is_valid_rejects_non_hex() {
+        // 长度够但含非 hex 字符：后续 uid_prefix 按字符取前 8 位，
+        // 非 hex 数据在此被拦下，不把脏数据放行到事件条 / 密钥文件。
+        assert!(!block0_is_valid(&"G".repeat(32)));
+        assert!(!block0_is_valid("AABBCCDD0011223344556677889900ZZ"));
+        // 小写同样合法（真实输出是大写，但判定不该把合法的 hex 误杀）
+        assert!(block0_is_valid(&"a".repeat(32)));
+    }
+
+    #[test]
+    fn uid_prefix_takes_first_eight_or_degrades() {
+        assert_eq!(uid_prefix("AABBCCDD11223344AABBCCDDEEFF0011"), "AABBCCDD");
+        // 不足 8 位：退化整串而非按字节切片 panic
+        assert_eq!(uid_prefix("AABB"), "AABB");
+        assert_eq!(uid_prefix(""), "");
     }
 
     // ---------------------------------------------------------- 确认框

@@ -835,7 +835,7 @@ def s4_model() -> None:
     # 测试数
     s6s7_units = sum(rd(CORE / f"src/{f}").count("#[test]")
                      for f in ["tasks/card_write.rs", "tasks/hard_nested.rs", "tasks/dict_test.rs"])
-    check(s6s7_units == 74, "S6/S7 新增 74 个单测（含 S17/S18 增量）", f"实际 {s6s7_units}")
+    check(s6s7_units == 76, "S6/S7 新增 76 个单测（含 S17/S18 增量 + S19 的 uid_prefix/非hex 判定）", f"实际 {s6s7_units}")
     ints2 = rd(CORE / "tests/integration.rs")
     check(ints2.count("#[test]") == 58, "S6/S7 后集成测试 58", f"实际 {ints2.count('#[test]')}")
     check(ints2.count("fn s6_") == 7 and ints2.count("fn s7_") == 4, "S6/S7 新增 11 个集成测试",
@@ -981,7 +981,7 @@ def s4_model() -> None:
     # 数 `("` 会漏。每项都以 `c_xxx,` 结尾。
     _vec = stf9[stf9.index("vec![") : stf9.index("];", stf9.index("vec!["))]
     n_cases = len(re.findall(r'\bc_[a-z0-9_]+\b', _vec))
-    check(n_cases == 84, "S9-S18 UI selftest 84 项（79 原有 + S18 增 5）", f"实际 {n_cases}")
+    check(n_cases == 87, "S9-S18 UI selftest 87 项（79 原有 + S18 增 5 + 字典接线/引导直达/路径穿越 3）", f"实际 {n_cases}")
 
     # ── S10 dump 三面板 ──────────────────────────────────────────
     de = rd(ORIG / "src/renderer/html/dumpEditor.html")
@@ -1027,8 +1027,18 @@ def s4_model() -> None:
     # dumpfiles 安全加固
     check("pub fn list" in dfs and "pub fn delete" in dfs and "pub fn rename" in dfs,
           "S10 dumpfiles 有 list/delete/rename")
-    check("fn is_plain_name" in dfs and "DUMP_EXT" in dfs,
+    check("pub fn is_plain_name" in dfs and "DUMP_EXT" in dfs,
           "S10 dumpfiles 有路径白名单 + 只列 .mfd")
+    # S19：文件名防线作为统一入口。app 侧所有把用户可见文件名 join 到
+    # dumpfiles 的地方（编辑器载入 / 比较器两侧 / 写卡带参 / 编辑器保存）
+    # 都必须过这道校验——曾出现过防线只覆盖 delete/rename 的缺口。
+    for site, label in (
+        ("load_dump_into_editor", "编辑器载入"),
+        ("open-dump-comparator", "比较器两侧"),
+        ("dump-editor-save", "编辑器保存"),
+    ):
+        check(site in ap and "is_plain_name" in ap,
+              f"S19 {label} 入口过 is_plain_name 防线")
     check_orig(".endsWith('.mfd')" in rd(ORIG / "src/command.js"),
           "S10 原版只列 .mfd（command.js:500）")
     # Action 新变体
@@ -1100,7 +1110,7 @@ def s4_model() -> None:
     # selftest
     _vec2 = stf9[stf9.index("vec![") : stf9.index("];", stf9.index("vec!["))]
     n11 = len(re.findall(r"\bc_[a-z0-9_]+\b", _vec2))
-    check(n11 == 84, "S11-S18 UI selftest 84 项（含 S18 新增 5 项）", f"实际 {n11}")
+    check(n11 == 87, "S11-S18 UI selftest 87 项（含 S18 新增 5 项 + 字典接线/引导直达/路径穿越 3）", f"实际 {n11}")
 
     # ── S11-2 系统文件对话框 + 写卡接线 ───────────────────────────
     dh = rd(APP / "src/dialogs_host.rs")

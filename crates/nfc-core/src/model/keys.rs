@@ -177,6 +177,9 @@ pub fn save_keys(paths: &Paths, incoming: &[String]) -> Result<Vec<String>, Keys
         path: tmp.clone(),
         source,
     })?;
+    // rename 保留 mode：必须在 rename **之前**收紧 tmp，否则 rename 之后的
+    // keys.txt 仍是 0644（常见 umask 下同机其他用户可读）。
+    crate::paths::restrict_owner(&tmp);
     fs::rename(&tmp, &path).map_err(|source| KeysError::Io { path, source })?;
 
     Ok(merged

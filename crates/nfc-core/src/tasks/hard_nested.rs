@@ -320,7 +320,9 @@ pub fn clear_nonces(paths: &Paths) -> std::io::Result<()> {
     if let Some(parent) = paths.nonces_file().parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(paths.nonces_file(), b"")
+    std::fs::write(paths.nonces_file(), b"")?;
+    crate::paths::restrict_owner(&paths.nonces_file());
+    Ok(())
 }
 
 /// 采集到的 nonce 文件是否为空（collectOnly 的判定依据，`command.js:297`）。

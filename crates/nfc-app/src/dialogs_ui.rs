@@ -174,12 +174,20 @@ pub fn show(ctx: &Context, m: &ConfirmModal, danger_color: egui::Color32) -> Opt
                         .unwrap_or_default();
                     let ok = cur.trim().eq_ignore_ascii_case(want);
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(t("html_confirm_code")).strong());
+                        // 确认码随标签明示（独立于输入框，始终可见）：此前把
+                        // 码塞进输入框的占位提示，输入后即消失、且与占位提示
+                        // 同一视觉层级，用户容易忽略；改标签后码一直在场，
+                        // 输入框只留字段名提示。
+                        ui.label(
+                            RichText::new(format!("{}：{}", t("html_confirm_code"), want))
+                                .strong()
+                                .monospace(),
+                        );
                         let mut buf = cur.clone();
                         let resp = ui.add(
                             egui::TextEdit::singleline(&mut buf)
                                 .desired_width(120.0)
-                                .hint_text(format!("输入 {} 以放行", want)),
+                                .hint_text(t("html_confirm_code")),
                         );
                         if resp.changed() {
                             ctx.data_mut(|d| d.insert_persisted(code_id, buf));
@@ -193,16 +201,27 @@ pub fn show(ctx: &Context, m: &ConfirmModal, danger_color: egui::Color32) -> Opt
             ui.horizontal(|ui| {
                 // 原版按钮序为 `[确定, 取消]`（command.js:509），此处保持
                 // 「取消」在左、「确定」在右：确定是危险动作，放右侧不易误点。
+                //
+                // 点击后必须显式关闭本 Modal：`should_close()` 只由遮罩
+                // 点击 / Esc / `ui.close()` 触发，若不关，按钮帧会被判为
+                // 「尚未关闭」而丢掉结果（弹窗不消失、确认/取消无响应）。
                 if ui.button(t("dialog_button_cancel")).clicked() {
                     out = Some(false);
+                    ui.close();
                 }
                 let ok_btn = RichText::new(t("dialog_button_ok")).color(danger_color);
                 if ui.add_enabled(code_ok, egui::Button::new(ok_btn)).clicked() {
                     out = Some(true);
+                    ui.close();
                 }
             });
         });
-    if r.should_close() {
+    // 出结果就返回：按钮路径本帧 `out` 已置位（配合 `ui.close()`），
+    // 遮罩 / Esc 路径则由 `should_close()` 收尾。
+    if out.is_some() || r.should_close() {
+        // 关闭即清残留：否则下次弹新码时输入框带着上次的内容，
+        // 占位提示又只在空输入时显示，用户看不到新码。
+        ctx.data_mut(|d| d.insert_persisted(code_id, String::new()));
         out
     } else {
         None

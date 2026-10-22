@@ -119,6 +119,9 @@ pub fn run() -> eframe::Result {
         ("手输卡号合法输入进确认框", c_uid_input_valid),
         ("编辑器导出密钥落盘", c_export_keys_flow),
         ("全加密爆破启动 mfcuk", c_run_mfcuk_flow),
+        ("默认字典路径可用", c_default_dict_path),
+        ("dump 保存后引导直达确认", c_dump_saved_guidance_carries_dump_id),
+        ("编辑器入口拒绝路径穿越", c_editor_rejects_traversal),
     ];
 
     let total = cases.len();
@@ -411,6 +414,71 @@ fn c_dump_saved_guidance() -> Result<(), String> {
     // 并追加一条 success 事件
     if app.state.events.is_empty() {
         return Err("未追加 success 事件".into());
+    }
+    Ok(())
+}
+
+fn c_dump_saved_guidance_carries_dump_id() -> Result<(), String> {
+    use nfc_core::state::Event;
+    let mut app = NfcApp::new(nfc_core::state::AppState::new());
+    app.apply(Event::DumpSaved(std::path::PathBuf::from(
+        "/tmp/dumpfiles/aa.mfd",
+    )));
+    let (_, btns) = app.guidance.as_ref().ok_or("dump 已保存后未出引导")?;
+    // 「写这张卡」必须带 dumpId：点击后直达确认框，不再弹一次文件框
+    // （对标 command.js:127-130 的带参跳确认框）
+    let write = btns
+        .iter()
+        .find(|(action, _, _)| *action == "write-IC")
+        .ok_or("引导缺少 write-IC")?;
+    if write.2.as_deref() != Some("aa.mfd") {
+        return Err(format!("write-IC 未带 dumpId: {:?}", write.2));
+    }
+    // 「打开 dump 目录」不需要参数
+    let open = btns
+        .iter()
+        .find(|(action, _, _)| *action == "open-dump-folder")
+        .ok_or("引导缺少 open-dump-folder")?;
+    if open.2.is_some() {
+        return Err("open-dump-folder 不应带参数".into());
+    }
+    Ok(())
+}
+
+fn c_default_dict_path() -> Result<(), String> {
+    // 冷启动即解析出内置字典（打包=exe 旁，开发=仓库根）：此前默认为空，
+    // 字典测试面板显示「内置字典」却实际传空路径给 nfc-mfdict，开箱即败。
+    let app = NfcApp::new(nfc_core::state::AppState::new());
+    let p = app.state.dict_path.clone();
+    if p.as_os_str().is_empty() {
+        return Err("dict_path 默认为空".into());
+    }
+    if p.file_name().and_then(|n| n.to_str()) != Some("dict.dic") {
+        return Err(format!("默认字典路径异常: {}", p.display()));
+    }
+    Ok(())
+}
+
+fn c_editor_rejects_traversal() -> Result<(), String> {
+    let (d, mut app) = app_with_temp_dumps("editor-traversal");
+    let dir = d.0.join("dumpfiles");
+    std::fs::write(dir.join("ok.mfd"), vec![0u8; 16]).unwrap();
+    // 带 `..` / 分隔符的名字一律拒绝（与 dumpfiles::delete/rename 同防线），
+    // 且拒绝与「文件是否存在」无关——先校验、后拼路径。
+    if app.load_dump_into_editor("../escape.mfd") {
+        return Err("路径穿越名竟被接受".into());
+    }
+    if app.load_dump_into_editor("sub\\x.mfd") {
+        return Err("带分隔符名竟被接受".into());
+    }
+    // 裸名合法文件照常载入（防线不误伤正常路径）
+    if !app.load_dump_into_editor("ok.mfd") {
+        return Err("裸名合法文件竟被拒绝".into());
+    }
+    // 目录随注入的 paths 走：临时目录里的文件能列出（真实用户目录不得被读）
+    let listed = nfc_core::dumpfiles::list(&app.paths.dumpfiles_dir());
+    if !listed.contains(&"ok.mfd".to_owned()) {
+        return Err(format!("临时目录文件未列出: {listed:?}"));
     }
     Ok(())
 }

@@ -148,17 +148,20 @@ fn load_title_logo(ctx: &egui::Context) -> Option<egui::TextureHandle> {
 fn setup_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
 
-    if let Ok(bytes) = std::fs::read("assets/fonts/SourceCodePro-Regular.ttf") {
-        fonts.font_data.insert(
-            "SourceCodePro".to_owned(),
-            std::sync::Arc::new(egui::FontData::from_owned(bytes)),
-        );
-        fonts
-            .families
-            .entry(egui::FontFamily::Monospace)
-            .or_default()
-            .insert(0, "SourceCodePro".to_owned());
-    }
+    // 编译期内嵌（与 zh-CN.json / 图标同一策略）：此前按 CWD 相对路径读
+    // 文件，从快捷方式 / 文件管理器启动（工作目录任意）时静默失败、日志区
+    // 丢等宽，且打包脚本不含 assets/fonts，发布版必然缺失。
+    fonts.font_data.insert(
+        "SourceCodePro".to_owned(),
+        std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
+            "../../../assets/fonts/SourceCodePro-Regular.ttf"
+        ))),
+    );
+    fonts
+        .families
+        .entry(egui::FontFamily::Monospace)
+        .or_default()
+        .insert(0, "SourceCodePro".to_owned());
 
     // 缺 CJK 字体时中文会显示为方块。找不到不算致命——英文界面仍可用。
     if let Some((name, bytes)) = probe_cjk_font() {

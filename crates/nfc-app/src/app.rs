@@ -88,8 +88,12 @@ impl ThemeMode {
 /// 应用的全部 UI 状态。
 pub struct NfcApp {
     pub state: AppState,
-    /// 引导条（`(文案, [(action, 按钮文案)])`），`None` 为隐藏。
-    pub guidance: Option<(String, Vec<(&'static str, String)>)>,
+    /// 引导条（`(文案, [(action, 按钮文案, 动作参数)])`），`None` 为隐藏。
+    ///
+    /// 第三元素为动作入参：`DumpSaved` 引导「写这张卡」直接带 dumpId
+    /// （对标 `command.js:127-130` 的带参跳确认框）；其余引导不传参（`None`，`
+    /// 等同旧行为——弹文件框选择）。
+    pub guidance: Option<(String, Vec<(&'static str, String, Option<String>)>)>,
     /// S15：冷启动引导已展示过（一次性，避免每帧刷屏 / 连接后反复弹）。
     pub cold_guided: bool,
     /// 锁滚动（`index.js:3` `isLockScroll`）。
@@ -159,11 +163,15 @@ pub struct NfcApp {
 }
 
 impl NfcApp {
-    pub fn new(state: AppState) -> Self {
+    pub fn new(mut state: AppState) -> Self {
         let now = Instant::now();
         // 原版 main.js 启动时 `nativeTheme.themeSource` 未经设置，
         // Electron 默认 'system'，故这里也默认 System。
         let theme_mode = ThemeMode::default();
+        // 内置字典兜底：原版模块级 `dictPath` 指向打包资源，此处置解析值
+        // （打包=exe 旁，开发=仓库根），让「字典测试」开箱可用；用户选过
+        // 字典后由 `apply_dict_choice` 覆盖。
+        state.dict_path = nfc_core::paths::dict_file();
         Self {
             state,
             guidance: None,
@@ -561,7 +569,13 @@ impl NfcApp {
     pub fn apply(&mut self, e: Event) {
         match e {
             Event::Guidance { text, buttons } => {
-                self.guidance = Some((text, buttons.into_iter().collect()));
+                self.guidance = Some((
+                    text,
+                    buttons
+                        .into_iter()
+                        .map(|(action, label)| (action, label, None))
+                        .collect(),
+                ));
             }
             Event::DumpSaved(path) => {
                 let name = path
@@ -569,11 +583,19 @@ impl NfcApp {
                     .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or_default();
                 self.push_event(EventKind::Success, &name.to_string());
+                // 「写这张卡」直接带 dumpId（对标 command.js:127-130）：保存的是
+                // 裸文件名，engine 的 `resolve_dump_id` 会拼 `dumpfiles/`。
+                // 名为空（无 file_name 的极端路径）时退回 None，仍走选文件框。
+                let dump_arg = if name.is_empty() {
+                    None
+                } else {
+                    Some(name.clone())
+                };
                 self.guidance = Some((
                     name.to_string(),
                     vec![
-                        ("write-IC", t("html_write_this_dump")),
-                        ("open-dump-folder", t("html_open_dump_folder")),
+                        ("write-IC", t("html_write_this_dump"), dump_arg),
+                        ("open-dump-folder", t("html_open_dump_folder"), None),
                     ],
                 ));
             }
@@ -727,7 +749,13 @@ impl NfcApp {
     /// 一扇区。读失败不 panic：原版是 `if (err) throw err`（整个窗口崩），
     /// 此处只把错误记成事件，让 UI 继续可用。
     pub fn load_dump_into_editor(&mut self, file_name: &str) -> bool {
-        let dir = nfc_core::paths::Paths::from_app_data().dumpfiles_dir();
+        // 只接受裸文件名——与 `dumpfiles::delete/rename` 同一道防线；
+        // 名字含分隔符（或 `..`）时直接拒绝，不拼任何路径。
+        if !nfc_core::dumpfiles::is_plain_name(file_name) {
+            self.push_event(EventKind::Error, &format!("{file_name}: 非法的转储文件名"));
+            return false;
+        }
+        let dir = self.paths.dumpfiles_dir();
         let path = dir.join(file_name);
         match std::fs::read(&path) {
             Ok(bytes) => {
@@ -837,12 +865,14 @@ impl NfcApp {
                 nfc_core::tasks::card_write::open_dump_request(&self.paths.dumpfiles_dir())
             }
             // command.js:416-422 / command.js:470-476：原版这里把
-            // `defaultPath` 写成 `dictPath`（笔误），此处沿用以便对照。
+            // `defaultPath` 写成 `dictPath`（笔误），选转储的框会默认停在
+            // 字典文件上。此处修正为 dumpfiles 目录（与写卡选文件同款），
+            // 偏离登记于 docs/02 §6.30。
             dialogs_host::FilePurpose::EditorFile
             | dialogs_host::FilePurpose::ComparatorA
             | dialogs_host::FilePurpose::ComparatorB => nfc_core::dialogs::OpenDialogRequest {
                 title: t("dialog_title_choose_dump_file"),
-                default_path: self.state.dict_path.clone(),
+                default_path: self.paths.dumpfiles_dir(),
                 button_label: t("dialog_button_open"),
                 filters: vec![nfc_core::dialogs::dump_filter("Dump Files")],
                 message: t("dialog_msg_choose_dump_file"),
@@ -959,9 +989,18 @@ impl NfcApp {
                 self.forms.comparator = panels::ComparatorForm::default();
                 if let Some(pair) = arg {
                     if let Some((a, b)) = pair.split_once('\u{1}') {
-                        let dir = self.paths.dumpfiles_dir();
-                        self.load_comparator_side(true, &dir.join(a));
-                        self.load_comparator_side(false, &dir.join(b));
+                        // 两侧都只接受裸文件名（同 `dumpfiles::delete/rename` 的防线）。
+                        // 非法名时记错误但仍开面板——与 dump-editor「载入失败也开面板」
+                        // 的行为保持一致；空面板 + 一条错误，用户自己再选。
+                        if !nfc_core::dumpfiles::is_plain_name(a)
+                            || !nfc_core::dumpfiles::is_plain_name(b)
+                        {
+                            self.push_event(EventKind::Error, "非法的转储文件名");
+                        } else {
+                            let dir = self.paths.dumpfiles_dir();
+                            self.load_comparator_side(true, &dir.join(a));
+                            self.load_comparator_side(false, &dir.join(b));
+                        }
                     }
                 }
                 panels::open(&mut self.state.panels, panels::Panel::DumpComparator);
@@ -985,11 +1024,17 @@ impl NfcApp {
                 // 引导条「写这张卡」带 dumpId：原版直接跳到确认框
                 // （command.js:127-130），故不弹文件框。
                 Some(dump) => {
-                    self.confirm = Some(dialogs_ui::ConfirmModal::new(
-                        dialogs_ui::ConfirmKind::WriteDump { dump },
-                        &dialogs_ui::danger_title(),
-                        t("dialog_msg_confirm_write_dump"),
-                    ));
+                    // 与 comparator 同一道防线：dumpId 是裸文件名
+                    // （engine 会拼 dumpfiles/），带分隔符的一律拒绝。
+                    if !nfc_core::dumpfiles::is_plain_name(&dump) {
+                        self.push_event(EventKind::Error, "非法的转储文件名");
+                    } else {
+                        self.confirm = Some(dialogs_ui::ConfirmModal::new(
+                            dialogs_ui::ConfirmKind::WriteDump { dump },
+                            &dialogs_ui::danger_title(),
+                            t("dialog_msg_confirm_write_dump"),
+                        ));
+                    }
                 }
                 None => self.open_file_for(dialogs_host::FilePurpose::WriteDump),
             },
@@ -1092,6 +1137,10 @@ impl NfcApp {
                     );
                 } else {
                     // 非另存为：原版直接写回 `data.url`（编辑器当前文件名）
+                    if !nfc_core::dumpfiles::is_plain_name(&current) {
+                        self.push_event(EventKind::Error, "非法的转储文件名");
+                        return;
+                    }
                     self.write_editor_to(&self.paths.dumpfiles_dir().join(&current));
                 }
             }
@@ -1554,7 +1603,7 @@ impl NfcApp {
         let is_cold_hint = self
             .guidance
             .as_ref()
-            .is_some_and(|(_, btns)| btns.iter().any(|(a, _)| *a == "scan-usb-devices"));
+            .is_some_and(|(_, btns)| btns.iter().any(|(a, _, _)| *a == "scan-usb-devices"));
         if is_cold_hint && !none {
             self.guidance = None;
             self.cold_guided = true;
@@ -1564,7 +1613,7 @@ impl NfcApp {
             self.cold_guided = true;
             self.guidance = Some((
                 t("html_guidance_connect_first"),
-                vec![("scan-usb-devices", t("html_refresh_device_list"))],
+                vec![("scan-usb-devices", t("html_refresh_device_list"), None)],
             ));
         }
     }
@@ -1582,9 +1631,9 @@ impl NfcApp {
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new(text).size(nfc_core::theme::FONT_SIZE[1]));
-                    for (action, label) in buttons {
+                    for (action, label, arg) in buttons {
                         if ui.button(label).clicked() {
-                            self.exec(action, None);
+                            self.exec(action, arg.clone());
                             self.guidance = None;
                         }
                     }

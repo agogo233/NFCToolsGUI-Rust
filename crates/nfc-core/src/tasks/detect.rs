@@ -204,15 +204,21 @@ pub fn detect_status(is_save_dump_file: bool) -> String {
 }
 
 /// 确保密钥文件存在，不存在则建空文件，对标 `command.js:747-750`。
+///
+/// 文件已存在时也过一遍 `restrict_owner`：老版本留下 0644 的 keys.txt
+/// 不会因为「已存在」而永远松着。
 pub fn check_key_file_exists(paths: &Paths) -> std::io::Result<()> {
     let p = paths.keys_file();
     if p.exists() {
+        crate::paths::restrict_owner(&p);
         return Ok(());
     }
     if let Some(parent) = p.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&p, b"")
+    std::fs::write(&p, b"")?;
+    crate::paths::restrict_owner(&p);
+    Ok(())
 }
 
 /// 读卡失败时是否应删除残留的 temp dump，对标 `command.js:595-597`。

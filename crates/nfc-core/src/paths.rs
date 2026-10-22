@@ -116,6 +116,26 @@ pub fn dict_file_from(exe_dir: Option<&Path>, repo_root: &Path) -> PathBuf {
     exe_dir.map(|d| d.join("dict.dic")).unwrap_or(repo)
 }
 
+/// 把敏感产物（密钥表 / nonce / CUID 密钥文件）收紧为「仅本人可读」。
+///
+/// Unix 上置 `0o600`：`fs::write` 的默认 mode 是 `0666 & ~umask`（常见
+/// umask 022 → 0644，同机其他用户可读），密码学产物不应如此。
+/// **注意**：`rename` 会保留 mode，所以 keys.rs 的「写 tmp 再 rename」路径
+/// 必须在 rename **之前**对 tmp 调用本函数。
+///
+/// Windows 上为空操作：无 umask 概念，标准库的 `set_permissions` 只映射
+/// 只读位、无法表达 `rw-------`；而 `%APPDATA%` 默认 ACL 本就仅限当前用户
+/// 与管理员，实际暴露面小于 Unix 多用户机器。该语义差异登记于 docs/02
+/// §6.31；若将来要真正收紧需 NTFS ACL（外部 crate），不在本仓范围内。
+#[cfg(unix)]
+pub fn restrict_owner(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+}
+
+#[cfg(not(unix))]
+pub fn restrict_owner(_path: &Path) {}
+
 /// 当前时间戳 `yyyy_MM_dd_HH_mm_ss`（**本地时区**）。
 ///
 /// 对标 `command.js::getTimeList()` 的本地时区语义。S18（F3）修正：
@@ -462,5 +482,35 @@ mod tests {
         // 仅验证当前运行形态下不 panic、路径以 dict.dic 结尾
         let p = dict_file();
         assert!(p.ends_with("dict.dic"), "实际: {p:?}");
+    }
+
+    // -------------------------------------------------- restrict_owner
+
+    #[cfg(unix)]
+    #[test]
+    fn restrict_owner_sets_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = std::env::temp_dir().join("nfc-core-restrict-test");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let f = tmp.join("keys.txt");
+        std::fs::write(&f, b"a0a1a2a3a4a5\n").unwrap();
+        // 写前先放宽到 0644（umask 未必是这个值，这里模拟最坏情况）
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        restrict_owner(&f);
+
+        let mode = std::fs::metadata(&f).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "实际 mode: {mode:o}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restrict_owner_missing_file_is_noop() {
+        // 文件不存在时不 panic（调用方写入失败分支不会调它，但库函数要稳）
+        let tmp = std::env::temp_dir().join("nfc-core-restrict-missing");
+        let _ = std::fs::remove_dir_all(&tmp);
+        restrict_owner(&tmp.join("nope"));
     }
 }
