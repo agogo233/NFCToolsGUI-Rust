@@ -465,7 +465,9 @@ fn c_default_dict_path() -> Result<(), String> {
 fn c_editor_rejects_traversal() -> Result<(), String> {
     let (d, mut app) = app_with_temp_dumps("editor-traversal");
     let dir = d.0.join("dumpfiles");
-    std::fs::write(dir.join("ok.mfd"), vec![0u8; 16]).unwrap();
+    // 合法尺寸（1024 = 1K 卡）才能过编辑器自身的 dump 校验——否则「拒绝」
+    // 与「文件不合法」混在一起，测不出防线本身。
+    std::fs::write(dir.join("ok.mfd"), vec![0u8; 1024]).unwrap();
     // 带 `..` / 分隔符的名字一律拒绝（与 dumpfiles::delete/rename 同防线），
     // 且拒绝与「文件是否存在」无关——先校验、后拼路径。
     if app.load_dump_into_editor("../escape.mfd") {
