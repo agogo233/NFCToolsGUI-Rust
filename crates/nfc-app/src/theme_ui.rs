@@ -10,7 +10,7 @@ use egui::{
     Color32, Context, CornerRadius, FontFamily, FontId, Margin, Stroke, TextStyle, Vec2, Visuals,
 };
 
-use nfc_core::theme::{Rgb, Theme, FONT_SIZE, RADIUS, SPACING};
+use nfc_core::theme::{dark, light, Rgb, Theme, FONT_SIZE, RADIUS, SPACING};
 
 /// `Theme` / `Rgb` 属 `nfc-core`，`Color32` 属 `egui`，两侧都是外部 crate——
 /// 不能直接 `impl From<Rgb> for Color32`（违反孤儿规则）。故用本 crate 的
@@ -44,7 +44,7 @@ impl Paint {
 
 /// S16：把 `nfc_core::theme` 的字号/间距 token 同步到 egui 全局 style。
 ///
-/// 颜色由 [`Paint::to_visuals`] 管，这里只动排版节奏；同时写 dark/light
+/// 颜色由 [`apply_visuals`] 管，这里只动排版节奏；同时写 dark/light
 /// 两套 style，避免 `ThemeMode::System` 切换时留出一套旧 style。
 pub fn apply_style(ctx: &Context) {
     ctx.all_styles_mut(|style| {
@@ -74,6 +74,18 @@ pub fn apply_style(ctx: &Context) {
         style.spacing.interact_size = Vec2::new(40.0, 24.0);
         style.spacing.window_margin = Margin::symmetric(SPACING[2] as i8, SPACING[1] as i8);
     });
+}
+
+/// 把深浅两套自建调色板都刷进 egui 的 style 桶。
+///
+/// **两个桶都必须写**：egui 按当前活动桶（`ctx.theme()`）取 `Visuals`，
+/// 而 `ctx.set_visuals` 只写活动桶。切换主题那帧若只写活动桶，未被覆盖的
+/// 那个桶就永远是 egui 出厂的 `Visuals::dark()/light()`——自建 token 的
+/// 映射全部丢失，整窗退回 egui 原生灰。此处用 `set_visuals_of` 按桶显式
+/// 写入，故与 `set_theme` 的调用顺序无关，且可安全重复调用。
+pub fn apply_visuals(ctx: &Context) {
+    ctx.set_visuals_of(egui::Theme::Dark, Paint(dark()).to_visuals());
+    ctx.set_visuals_of(egui::Theme::Light, Paint(light()).to_visuals());
 }
 
 impl Paint {

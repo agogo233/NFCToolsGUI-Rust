@@ -42,6 +42,7 @@ pub fn run() -> eframe::Result {
         ("settings 三态主题", c_theme_mode_three_states),
         ("settings 主题解析到调色板", c_theme_resolve),
         ("主题循环切换", c_theme_cycle),
+        ("主题调色板写入两个 style 桶", c_theme_visuals_both_buckets),
         ("inputKeys 默认值 ffffffff…,", c_input_keys_default),
         ("inputKeys 确定 → -k 参数", c_input_keys_emit_keys),
         ("hardNested 预填检测结果", c_hard_nested_prefill),
@@ -155,8 +156,9 @@ pub fn run() -> eframe::Result {
 /// 建一个跑过一帧的测试宿主。
 fn harness(app: &mut NfcApp) -> Context {
     let ctx = Context::default();
-    // S16：让自检上下文也吃到全局排版 token，行为与 `main.rs` 保持一致。
+    // S16：让自检上下文也吃到全局排版 token 与自建调色板，行为与 `main.rs` 一致。
     crate::theme_ui::apply_style(&ctx);
+    crate::theme_ui::apply_visuals(&ctx);
     // `run_ui` 的闭包直接拿根 `Ui`，无需自建面板。
     // 必须取走纹理增量再丢 `FullOutput`，否则 egui panic
     // （"Dropped TexturesDelta with N unapplied deltas"）：
@@ -515,6 +517,7 @@ fn panel_harness(app: &mut NfcApp, p: Panel) -> Result<Context, String> {
     panels::open(&mut app.state.panels, p);
     let ctx = Context::default();
     crate::theme_ui::apply_style(&ctx);
+    crate::theme_ui::apply_visuals(&ctx);
     let mut out = ctx.run_ui(Default::default(), |ui| {
         panels::show(ui.ctx(), app);
     });
@@ -653,6 +656,55 @@ fn c_theme_resolve() -> Result<(), String> {
     // egui 侧也要同步，否则 ComboBox 弹层仍是旧底色
     if ThemeMode::Light.egui_preference() != egui::ThemePreference::Light {
         return Err("Light 未映射到 egui::ThemePreference::Light".into());
+    }
+    Ok(())
+}
+
+/// 回归：egui 的 `set_visuals` 只写 `ctx.theme()` 当前活动桶，`set_theme` 只改
+/// `theme_preference`、完全不碰 visuals。旧实现先写后切桶，调色板落进旧桶；
+/// 调用方的 `resolved != theme` 守卫随后不再触发，未被覆盖的那个桶就永远是
+/// egui 出厂的 `Visuals::dark()/light()`——切主题后整窗退回 egui 原生灰。
+fn c_theme_visuals_both_buckets() -> Result<(), String> {
+    let hex = |c: egui::Color32| format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b());
+    let ctx = Context::default();
+    let mut app = NfcApp::new(nfc_core::state::AppState::new());
+    // 模拟「上一帧还是深色」：`self.theme` 与目标模式不一致，触发写入分支
+    app.theme_mode = ThemeMode::Light;
+    app.theme = nfc_core::theme::dark();
+    app.sync_theme(&ctx);
+
+    let light_bg = egui::Color32::from_rgb(0xf7, 0xf8, 0xfa);
+    let dark_bg = egui::Color32::from_rgb(0x1b, 0x20, 0x2b);
+    let panel_fill = |t: egui::Theme| ctx.style_of(t).visuals.panel_fill;
+
+    // 活动桶必须切过去，否则主窗 / ComboBox 弹层仍读旧桶
+    if ctx.theme() != egui::Theme::Light {
+        return Err(format!("切浅色后活动桶仍为 {:?}，应为 Light", ctx.theme()));
+    }
+    if panel_fill(egui::Theme::Light) != light_bg {
+        return Err(format!(
+            "light 桶 panel_fill={}，应为 #f7f8fa（egui 出厂色）",
+            hex(panel_fill(egui::Theme::Light))
+        ));
+    }
+    if panel_fill(egui::Theme::Dark) != dark_bg {
+        return Err(format!(
+            "dark 桶 panel_fill={}，应为 #1b202b",
+            hex(panel_fill(egui::Theme::Dark))
+        ));
+    }
+
+    // 再切回深色：反向切换同样不能漏写，且不能污染另一桶
+    app.theme_mode = ThemeMode::Dark;
+    app.sync_theme(&ctx);
+    if ctx.theme() != egui::Theme::Dark {
+        return Err("切回 Dark 后活动桶未切到 Dark".into());
+    }
+    if panel_fill(egui::Theme::Light) != light_bg {
+        return Err(format!(
+            "切回 Dark 后 light 桶被污染为 {}",
+            hex(panel_fill(egui::Theme::Light))
+        ));
     }
     Ok(())
 }

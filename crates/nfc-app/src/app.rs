@@ -554,12 +554,15 @@ impl NfcApp {
         // 拿不到时（首帧 / 某些平台）退回深色，与 `Paint::is_dark` 的判定一致。
         let system_dark = ctx.system_theme().is_none_or(|t| t == egui::Theme::Dark);
         let resolved = self.theme_mode.resolve(system_dark);
+        // 同步给 egui，让 `ComboBox` 弹层 / tooltip 跟着换底色
+        ctx.set_theme(self.theme_mode.egui_preference());
         if resolved != self.theme {
             self.theme = resolved;
-            ctx.set_visuals(theme_ui::Paint(resolved).to_visuals());
+            // 两桶都写：egui 按活动桶取 `Visuals`，只写活动桶会让另一桶永远是
+            // 出厂色。本写入幂等且与 `resolved` 无关，故首次写入靠 `main.rs`
+            // 的启动钩子补上——首帧守卫可能不触发。
+            theme_ui::apply_visuals(ctx);
         }
-        // 同步给 egui，否则 `ComboBox` 弹层 / tooltip 仍用旧底色
-        ctx.set_theme(self.theme_mode.egui_preference());
     }
 
     /// 当前调色板的 newtype（供 theme_ui 转换用）。

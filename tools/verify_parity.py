@@ -917,8 +917,20 @@ def s4_model() -> None:
     check("enum ThemeMode" in ap and "ThemePreference::System" in ap,
           "S9 主题三态（main.js:31-39 的 dark/light/system）")
     check("ctx.system_theme()" in ap, "S9 System 态每帧问 egui 系统主题")
-    check("ctx.set_theme(" in ap and "ctx.set_visuals(" in ap,
-          "S9 同时刷 set_visuals（自建 token）与 set_theme（弹层底色）")
+    check("ctx.set_theme(" in ap, "S9 set_theme 同步弹层 / tooltip 的底色")
+    # egui 的 `set_visuals` 只写 `ctx.theme()` 当前活动桶，`set_theme` 只改
+    # theme_preference、不碰 visuals。故调色板必须用 `set_visuals_of` 两个桶都写。
+    # 曾漏写 light 桶：切浅色后整窗退回 egui 出厂灰，而 `resolved != theme`
+    # 守卫不补写（P1 回归）。写入必须走统一入口，故同时禁掉单桶 set_visuals；
+    # 顺序无关（set_visuals_of 显式指定桶），故不守顺序。
+    check("ctx.set_visuals_of(egui::Theme::Dark" in tui
+          and "ctx.set_visuals_of(egui::Theme::Light" in tui,
+          "S9 自建 token 用 set_visuals_of 写入深浅两个 style 桶")
+    check("theme_ui::apply_visuals(ctx)" in ap,
+          "S9 sync_theme 按 resolve 值写两个桶")
+    check("theme_ui::apply_visuals(" in main, "S9 启动首帧也写两个桶（首帧守卫不触发）")
+    check("ctx.set_visuals(" not in ap + tui + main,
+          "S9 不得用单桶 set_visuals（只写活动桶，另一桶永远留出厂色）")
     check("ThemePreference::Dark" in ap and "ThemePreference::Light" in ap,
           "S9 三态都映射到 egui::ThemePreference")
     # 工具菜单：原版 5 项 + settings（偏离，原版入口被注释）
@@ -986,7 +998,9 @@ def s4_model() -> None:
     # 数 `("` 会漏。每项都以 `c_xxx,` 结尾。
     _vec = stf9[stf9.index("vec![") : stf9.index("];", stf9.index("vec!["))]
     n_cases = len(re.findall(r'\bc_[a-z0-9_]+\b', _vec))
-    check(n_cases == 87, "S9-S18 UI selftest 87 项（79 原有 + S18 增 5 + 字典接线/引导直达/路径穿越 3）", f"实际 {n_cases}")
+    check(n_cases == 88,
+          "S9-S18 UI selftest 88 项（79 原有 + S18 增 5 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1）",
+          f"实际 {n_cases}")
 
     # ── S10 dump 三面板 ──────────────────────────────────────────
     de = rd(ORIG / "src/renderer/html/dumpEditor.html")
@@ -1115,7 +1129,9 @@ def s4_model() -> None:
     # selftest
     _vec2 = stf9[stf9.index("vec![") : stf9.index("];", stf9.index("vec!["))]
     n11 = len(re.findall(r"\bc_[a-z0-9_]+\b", _vec2))
-    check(n11 == 87, "S11-S18 UI selftest 87 项（含 S18 新增 5 项 + 字典接线/引导直达/路径穿越 3）", f"实际 {n11}")
+    check(n11 == 88,
+          "S11-S18 UI selftest 88 项（含 S18 新增 5 项 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1）",
+          f"实际 {n11}")
 
     # ── S11-2 系统文件对话框 + 写卡接线 ───────────────────────────
     dh = rd(APP / "src/dialogs_host.rs")

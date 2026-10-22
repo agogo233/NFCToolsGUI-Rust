@@ -108,8 +108,10 @@ fn main() -> eframe::Result {
         options,
         Box::new(|cc| {
             setup_fonts(&cc.egui_ctx);
-            let paint = theme_ui::Paint(nfc_core::theme::dark());
-            cc.egui_ctx.set_visuals(paint.to_visuals());
+            // 首帧可能不触发 `sync_theme` 的守卫（`app.theme` 初值与 resolve
+            // 值可能相等），故这里无条件先写一遍两桶，否则未被覆盖的那个
+            // 桶会留 egui 出厂色。
+            theme_ui::apply_visuals(&cc.egui_ctx);
 
             // S11：接上真工具。`framework/bin` 的定位规则见
             // `runner::framework_bin`（打包时 = exe 旁，开发时 = 仓库根下），

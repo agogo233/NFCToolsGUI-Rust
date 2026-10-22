@@ -23,14 +23,14 @@ NFCToolsGUI 的 Rust 重写版（AGPL-3.0）。与 PN532 交互的跨平台桌�
 cargo build --release              # → target/release/nfc-app(.exe)
 cargo run -p nfc-app --release     # 运行 GUI
 cargo run -p nfc-core -- --selftest   # 14 项核心行为（不开窗口）
-cargo run -p nfc-app  -- --selftest   # 87 项界面 + 接线
+cargo run -p nfc-app  -- --selftest   # 88 项界面 + 接线
 
 cargo test --workspace             # 539 项
 cargo test -p nfc-core --test real_tools --test tool_cli   # 需要 framework/bin（否则自动跳过）
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --workspace --all-targets --features real-serial -- -D warnings   # CI 额外跑一次：RealSerial 平时不参与编译
 cargo fmt --all --check
-python3 tools/verify_parity.py     # 799 项静态门禁（39 action parity 表 + 接线守卫）
+python3 tools/verify_parity.py     # 808 项静态门禁（39 action parity 表 + 接线守卫）
 ./scripts/package.sh               # 构建 + 打包 out/NFCToolsGUI-win-x64.zip
 ./scripts/package.sh --check       # 只跑门禁与检测
 ```
