@@ -55,9 +55,8 @@ else:
 #   上面已经 sys.exit(3)，不会落到这里。）
 ORIG_MISSING = not ORIG.is_dir()
 ZH = REPO / "assets/locales/zh-CN.json"
-# S16 UI 体验优化本地补的 21 个 key（docs/02 §6.25 续 / §6.28 偏离登记；
-# 含 S18 后续补的 `html_detect_known` / `html_detect_unknown` / `html_rename`，
-# 以及 §6.28 P1 补的控制台悬停说明 5 个）。
+# S16 UI 体验优化本地补的 24 个 key（docs/02 §6.25 续 / §6.28 偏离登记；
+# 含 §6.28/§6.29 补的控制台悬停说明、快捷键可见性等）。
 S16_EXTRA = {
     "html_console",
     "html_events",
@@ -69,6 +68,9 @@ S16_EXTRA = {
     "html_tip_stop_task",
     "html_tip_stop_idle",
     "html_tip_autoscroll",
+    "html_shortcuts",
+    "html_shortcut_close_panel",
+    "html_shortcut_save_dump",
     "html_waiting_file",
     "html_workflow_group",
     "html_detect_summary",
@@ -972,6 +974,8 @@ def s4_model() -> None:
           "P1 长按钮行自动换行", f"实际 {pa.count('horizontal_wrapped')}")
     check(".max_height(360.0)" not in pa and "list_h" in pa,
           "P1 历史列表高度随窗口自适应（不再写死 360）")
+    check("html_shortcut_close_panel" in pa and "html_shortcut_save_dump" in pa,
+          "P1 「关于」面板登记快捷键（用户能发现 Esc / Ctrl+S）")
     # body() 的返回值必须被 show() 认（回归：早期版本丢弃了，点取消不关面板）
     check("keep = body(p, ui, app)" in pa and "if !open || !keep" in pa,
           "S9 show() 认 body() 的关闭请求（点取消/确定能关面板）")
@@ -1606,7 +1610,7 @@ def s4_model() -> None:
     check(S8_EXTRA <= set(i18n_asset), "R S8 补的 3 个 settings 按钮文案在表内")
     check(S11_EXTRA <= set(i18n_asset), "R S11 补的无进展兜底文案在表内")
     check(S15_EXTRA <= set(i18n_asset), "R S15 补的 6 个 UI 文案在表内")
-    check(S16_EXTRA <= set(i18n_asset), "R S16 补的 21 个 UI 文案在表内")
+    check(S16_EXTRA <= set(i18n_asset), "R S16 补的 24 个 UI 文案在表内")
     check_orig(LOCAL_EXTRA.isdisjoint(orig_zh),
           f"R 本地补的 {len(LOCAL_EXTRA)} 个 key 确认原版不存在")
     check(UPSTREAM_ONLY.isdisjoint(set(i18n_asset)),
@@ -1621,7 +1625,7 @@ def s4_model() -> None:
           f"{[k for k in i18n_asset if k[-1:] in {':', '.', ',', ' ', '-', '_'}]}")
     # 本地补的 key 数量原本写死在 Rust 测试与此处两处，已漂移过一次。双向钉死。
     check(len(LOCAL_EXTRA) == 14 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA),
-          "R 本地补的 i18n key 恰为 52 个", f"实际 {len(LOCAL_EXTRA)}")
+          "R 本地补的 i18n key 恰为 55 个", f"实际 {len(LOCAL_EXTRA)}")
     cd = rd(CORE / "src/command.rs")
     # rustfmt 会把字段拆成多行，故用 DOTALL 匹配整个结构体字面量
     specs = re.findall(

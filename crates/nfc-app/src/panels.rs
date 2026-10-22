@@ -982,6 +982,13 @@ fn about(ui: &mut Ui) -> bool {
         ui.hyperlink_to("AGPL-3.0", LICENSE_URL);
 
         ui.separator();
+        // §6.29：快捷键在 UI 里没有别的入口，放在「关于」里登记一份，
+        // 否则用户根本不会想到有 Esc / Ctrl+S。
+        ui.label(RichText::new(t("html_shortcuts")).strong());
+        ui.label(t("html_shortcut_close_panel"));
+        ui.label(t("html_shortcut_save_dump"));
+
+        ui.separator();
         ui.label(t("html_this_program_use_following_open_source_project"));
         for (name, url, license) in OPEN_SOURCE {
             ui.horizontal(|ui| {
