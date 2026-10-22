@@ -427,12 +427,11 @@ impl NfcApp {
                     }
                 }
             }
-            // command.js:423-432：读进来按 32 hex 切块、每 4 块一扇区
+            // command.js:423-432：读进来按 32 hex 切块、每 4 块一扇区。
+            // 传**完整路径**：用户在文件框选的 dump 可能在 dumpfiles 之外，
+            // 「保存」须写回原文件（P2-4）。
             dialogs_host::FilePurpose::EditorFile => {
-                if let Some(name) = path.file_name() {
-                    let name = name.to_string_lossy().into_owned();
-                    self.load_dump_into_editor(&name);
-                }
+                self.load_dump_from_path(&path);
             }
             // command.js:449-458：另存为
             dialogs_host::FilePurpose::EditorSaveAs => {
@@ -446,13 +445,16 @@ impl NfcApp {
             dialogs_host::FilePurpose::ReadIcSave | dialogs_host::FilePurpose::NoncesSave => {}
             // S18：CUID 空卡写入——选好源 dump 后进确认窗（engine 再过一道闸）。
             dialogs_host::FilePurpose::CuidDump => {
-                self.confirm = Some(dialogs_ui::ConfirmModal::new(
-                    dialogs_ui::ConfirmKind::CuidWrite {
-                        dump: path.to_string_lossy().into_owned(),
-                    },
-                    &dialogs_ui::danger_title(),
-                    t("dialog_msg_confirm_cuid_write"),
-                ));
+                self.confirm = Some(
+                    dialogs_ui::ConfirmModal::new(
+                        dialogs_ui::ConfirmKind::CuidWrite {
+                            dump: path.to_string_lossy().into_owned(),
+                        },
+                        &dialogs_ui::danger_title(),
+                        t("dialog_msg_confirm_cuid_write"),
+                    )
+                    .with_code(dialogs_ui::random_code()),
+                );
             }
             // S18：编辑器导出密钥字典——把当前编辑器内容的密钥写进用户选的文件。
             dialogs_host::FilePurpose::ExportKeys => {
@@ -764,7 +766,11 @@ impl NfcApp {
             Ok(bytes) => {
                 let name = nfc_core::tasks::dict_test::dict_file_name(file_name).to_owned();
                 match self.forms.editor.load(Some(name), &bytes) {
-                    Ok(()) => true,
+                    Ok(()) => {
+                        // 记住完整路径：「保存」要写回这个 dumpfiles 里的文件。
+                        self.forms.editor.origin = Some(path);
+                        true
+                    }
                     Err(e) => {
                         self.push_event(EventKind::Error, &e);
                         false
@@ -773,6 +779,33 @@ impl NfcApp {
             }
             Err(e) => {
                 self.push_event(EventKind::Error, &format!("{file_name}: {e}"));
+                false
+            }
+        }
+    }
+
+    /// 从**完整路径**载入 dump 进编辑器（系统文件框 / `dump-editor-choose-file`
+    /// 带参）。
+    ///
+    /// 与 [`Self::load_dump_into_editor`]（历史列表的裸名 → dumpfiles）不同：
+    /// 这里路径由用户在文件框选定或作为参数传入，是外部绝对路径，**不过**
+    /// `is_plain_name` 校验，直接读该路径并记住 `origin`——否则外部 dump 打开后
+    /// 「保存」会被写回 dumpfiles 下的同名副本（P2-4 修复前的缺陷）。
+    pub fn load_dump_from_path(&mut self, path: &std::path::Path) -> bool {
+        let name = nfc_core::tasks::dict_test::dict_file_name(&path.to_string_lossy()).to_owned();
+        match std::fs::read(path) {
+            Ok(bytes) => match self.forms.editor.load(Some(name), &bytes) {
+                Ok(()) => {
+                    self.forms.editor.origin = Some(path.to_path_buf());
+                    true
+                }
+                Err(e) => {
+                    self.push_event(EventKind::Error, &e);
+                    false
+                }
+            },
+            Err(e) => {
+                self.push_event(EventKind::Error, &format!("{e}"));
                 false
             }
         }
@@ -799,6 +832,8 @@ impl NfcApp {
                 if let Some(name) = path.file_name() {
                     self.forms.editor.file_name = Some(name.to_string_lossy().into_owned());
                 }
+                // 记住落点：后续「保存」继续写回这里（另存为尤其重要）。
+                self.forms.editor.origin = Some(path.to_path_buf());
                 self.forms.editor.dirty = false;
                 let name = path.to_string_lossy().into_owned();
                 self.push_event(EventKind::Success, &name);
@@ -905,10 +940,10 @@ impl NfcApp {
 
     /// 投递一个「保存到」请求。
     ///
-    /// `default_path` 传**裸文件名**（原版的 `defaultPath` 就是裸名，不含
-    /// 目录——`command.js:541` 与 `:450` 都没有 `path.join`），此时
-    /// `dialogs_host::run_save` 取不到 `parent()`，保存框就停在系统上次使用
-    /// 目录 / 进程 CWD，与原版一致。
+    /// `default_path` 可为**裸文件名**（原版 `defaultPath` 就是裸名，`command.js:541` /
+    /// `:450`），此时 `dialogs_host::run_save` 取不到 `parent()`，保存框停在系统
+    /// 上次使用目录 / 进程 CWD；也可为**完整路径**（如编辑器另存时传 origin），
+    /// 此时 `run_save` 拆出文件名与目录，并把目录设为保存框起始目录。
     pub fn save_file_for(
         &mut self,
         purpose: dialogs_host::FilePurpose,
@@ -1119,7 +1154,9 @@ impl NfcApp {
             // command.js:415-422：带路径则直接读，不弹框
             "dump-editor-choose-file" => match arg {
                 Some(p) => {
-                    self.load_dump_into_editor(&p);
+                    // 带参数进来的是完整路径（面板内触发选文件的回调直接塞路径），
+                    // 按路径载入而非 basename——否则外部 dump 会被 is_plain_name 拒。
+                    self.load_dump_from_path(std::path::Path::new(&p));
                 }
                 None => self.open_file_for(dialogs_host::FilePurpose::EditorFile),
             },
@@ -1133,13 +1170,28 @@ impl NfcApp {
                     .clone()
                     .unwrap_or_else(|| "dump.mfd".to_owned());
                 if save_as {
+                    // 另存对话框默认落在 origin（打开时的目录/文件名），
+                    // 未载入过文件才退回 dumpfiles/<current>。
+                    let default = self
+                        .forms
+                        .editor
+                        .origin
+                        .clone()
+                        .unwrap_or_else(|| self.paths.dumpfiles_dir().join(&current));
                     self.save_file_for(
                         dialogs_host::FilePurpose::EditorSaveAs,
-                        PathBuf::from(&current),
+                        default,
                         vec![nfc_core::dialogs::dump_filter(&t("file_type_dump"))],
                     );
+                } else if let Some(origin) =
+                    self.forms.editor.origin.clone().filter(|o| o.is_file())
+                {
+                    // 有完整来源（外部文件或 dumpfiles 内文件）且仍存在 → 写回原处。
+                    // origin 被外部删除/改名（`!is_file`）时落到下方 dumpfiles 回落，
+                    // 避免在已失效的旧路径上悄悄重建文件。
+                    self.write_editor_to(&origin);
                 } else {
-                    // 非另存为：原版直接写回 `data.url`（编辑器当前文件名）
+                    // 无 origin（从未载入）或 origin 已失效：回落 dumpfiles/<file_name>。
                     if !nfc_core::dumpfiles::is_plain_name(&current) {
                         self.push_event(EventKind::Error, "非法的转储文件名");
                         return;
@@ -1179,11 +1231,14 @@ impl NfcApp {
             // 不带则弹文件框选源 dump。
             "cuid-write" => match arg {
                 Some(dump) => {
-                    self.confirm = Some(dialogs_ui::ConfirmModal::new(
-                        dialogs_ui::ConfirmKind::CuidWrite { dump },
-                        &dialogs_ui::danger_title(),
-                        t("dialog_msg_confirm_cuid_write"),
-                    ));
+                    self.confirm = Some(
+                        dialogs_ui::ConfirmModal::new(
+                            dialogs_ui::ConfirmKind::CuidWrite { dump },
+                            &dialogs_ui::danger_title(),
+                            t("dialog_msg_confirm_cuid_write"),
+                        )
+                        .with_code(dialogs_ui::random_code()),
+                    );
                 }
                 None => self.open_file_for(dialogs_host::FilePurpose::CuidDump),
             },

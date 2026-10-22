@@ -15,6 +15,7 @@
 //! 不会静默无反应。
 
 use std::path::PathBuf;
+use std::time::Instant;
 
 use crate::dialogs::DialogProvider;
 use crate::model::keys::DEFAULT_KEYS;
@@ -150,6 +151,9 @@ struct Running {
     cuid: bool,
     /// S18 全加密爆破：`run-mfcuk` 的密钥解析器（一轮可能出多把）。
     mfcuk: Option<crate::model::parse::MfcukKeyParser>,
+    /// `dict-test-config-done` 的目标扇区与类型：命中密钥后据此从
+    /// `unknown_key_info` 移除对应项（`command.js:396-399`）。
+    dict_target: Option<(u8, crate::model::keys::KeyType)>,
 }
 
 /// 动作编排器。
@@ -186,6 +190,11 @@ pub struct Engine {
     pending_save: Option<crate::dialogs::PendingSave>,
     /// 挂起的保存框是不是 HardNested 的 nonce（决定续接走哪条路径）。
     hn_saving: bool,
+    /// 当前任务的启动时刻（单调时钟），ETA 进度据此算已用时长 / 节流。
+    ///
+    /// `EtaTracker` 的 `start_ms`/`last_update_ms` 都以它为零点；不用墙钟——
+    /// 系统时间前跳会算出负的剩余时间。未启动任务时为 `None`。
+    eta_epoch: Option<Instant>,
 }
 
 impl Engine {
@@ -205,6 +214,7 @@ impl Engine {
             hn_round: tasks::hard_nested::RoundContext::default(),
             pending_save: None,
             hn_saving: false,
+            eta_epoch: None,
         }
     }
 
@@ -392,6 +402,7 @@ impl Engine {
             text: crate::i18n::t(status_key),
             indicator: Indicator::Running,
         });
+        self.eta_epoch = Some(Instant::now());
         self.running = Some(run);
         Ok(())
     }
@@ -419,6 +430,7 @@ impl Engine {
             text: status_text,
             indicator: Indicator::Running,
         });
+        self.eta_epoch = Some(Instant::now());
         self.running = Some(run);
         Ok(())
     }
@@ -437,7 +449,7 @@ impl Engine {
             }
             Ok(None) => Ok(()),
             Err(e) => {
-                let msg = format!("串口枚举失败：{e}");
+                let msg = format!("{}：{e}", crate::i18n::t("log_msg_serial_enum_failed"));
                 if self.scan_err.as_deref() != Some(msg.as_str()) {
                     state.apply(Event::Log(format!("\n{msg}\n")));
                     self.scan_err = Some(msg);
@@ -534,6 +546,15 @@ impl Engine {
                 self.running = None;
                 state.is_running_task = false;
                 state.progress = None;
+                // 复位 HardNested 状态机与本轮上下文：否则取消后
+                // `hard_nested_task.phase` 残留 `Collecting`/`Cracking`，与「空闲」
+                // 相悖。虽下次 begin 会重置，但取消当刻的 UI 快照不该显示「破解中」。
+                self.hn = tasks::hard_nested::HardNestedRunner::new();
+                self.hn.sync(state);
+                self.hn_cfg = None;
+                self.hn_round = tasks::hard_nested::RoundContext::default();
+                self.hn_saving = false;
+                self.pending_save = None;
                 state.apply(Event::Status {
                     text: crate::i18n::t("indicator_free"),
                     indicator: Indicator::Free,
@@ -713,9 +734,13 @@ impl Engine {
         paths: &Paths,
     ) -> Result<(), ToolError> {
         let args = tasks::mfoc::mfoc_args(paths, &extra);
-        // ETA 分母 = 默认密钥 + keys 文件里的 + 命令行传的
-        // （`mfoc_keys_total`；keys 文件条数按 0 估，因为读文件不在本函数职责内）
-        let total = tasks::mfoc::mfoc_keys_total(0, &extra);
+        // ETA 分母 = 默认密钥 + keys 文件里的 + 命令行传的（docs/01 §4.1：
+        // 13 默认 + keys.txt 条数 + -k 条数）。此前把 keys.txt 条数按 0 估，
+        // 分母偏小会让进度过早跳到 100%。
+        let file_keys = std::fs::read_to_string(paths.keys_file())
+            .map(|s| crate::model::keys::parse_12hex(&s).len())
+            .unwrap_or(0);
+        let total = tasks::mfoc::mfoc_keys_total(file_keys, &extra);
         self.launch(
             "mfoc",
             &args,
@@ -1151,7 +1176,12 @@ impl Engine {
             "log_msg_start_test_dictionary",
             Running {
                 name: "dict-test-config-done",
-                eta: Some(tasks::mfoc::EtaTracker::new(cfg.start_position as usize, 0)),
+                // 命中行是 `Found Key: `（不是 mfoc 的 `[Key: `），改由
+                // `SingleKeyParser::mfdict()` 收。曾误挂 mfoc 的 `EtaTracker`：
+                // 它的进度信号是 `[Key: `，字典测试永不产出，ETA 恒不更新、
+                // 分母还拿 start_position 当字典总长——此处一并移除（见 docs/02 §6）。
+                crypto: Some(crate::model::parse::SingleKeyParser::mfdict()),
+                dict_target: Some((cfg.sector, cfg.key_type)),
                 ..Running::default()
             },
         )
@@ -1338,6 +1368,11 @@ impl Engine {
 
     /// 把一段输出喂给当前任务的解析器。
     fn feed(&mut self, text: &str, state: &mut AppState) {
+        // ETA 用单调时钟的已用时长；epoch 未设（无带 ETA 的任务启动过）时回落 0。
+        let now_ms = self
+            .eta_epoch
+            .map(|t| t.elapsed().as_millis() as u64)
+            .unwrap_or(0);
         let Some(run) = self.running.as_mut() else {
             return;
         };
@@ -1345,7 +1380,7 @@ impl Engine {
             p.push(text);
         }
         if let Some(eta) = run.eta.as_mut() {
-            if let Some(u) = eta.push(text, 0) {
+            if let Some(u) = eta.push(text, now_ms) {
                 tasks::mfoc::apply_eta(state, &u);
             }
         }
@@ -1553,8 +1588,12 @@ impl Engine {
             p.flush();
             match tasks::detect::after_detect(state, &p, paths, run.detect_saves_dump) {
                 Ok(_) => {
-                    // 有未知密钥就给引导（`command.js:175-177`）
-                    if !state.unknown_key_info.is_empty() {
+                    // 有未知密钥**且是检测动作**才给引导（`command.js:175-177`）。
+                    // 备份段（写卡/格式化/CUID 的第一段）与 autoRun 前置探测也
+                    // 复用 detect 解析更新 known/unknown，但**不得**推 Guidance：
+                    // 否则写卡途中顶部会冒出「破解/字典」引导，与 docs/01 §3.4
+                    // 「autoRun 复用 detect 解析但不推送 Guidance」相反。
+                    if run.name == "detect-card-type" && !state.unknown_key_info.is_empty() {
                         let n = state.unknown_key_info.len();
                         state.apply(Event::Guidance {
                             text: tasks::detect::unknown_guidance_text(n),
@@ -1564,6 +1603,25 @@ impl Engine {
                 }
                 Err(msg) => {
                     state.apply(Event::Log(format!("\n{msg}\n")));
+                }
+            }
+        }
+
+        // 字典测试收尾：`Found Key: ` 命中 → 落盘密钥 → 从 unknown 移除对应项
+        //（`command.js:396-399`：逐行命中即 saveKeys + 移除匹配 unknown）。
+        if run.name == "dict-test-config-done" {
+            if let Some(mut c) = run.crypto.take() {
+                c.flush();
+                if let Some(key) = c.take() {
+                    let _ = tasks::dict_test::report_found_key(state, &key, paths);
+                    // 按 (扇区, 类型) 在 unknown 任意位置移除（S18 F1 同款语义）
+                    if let Some((sector, kt)) = run.dict_target {
+                        let mut list = to_unknown(&state.unknown_key_info);
+                        if tasks::hard_nested::remove_unknown(&mut list, sector, kt) {
+                            state.unknown_key_info =
+                                list.iter().map(|u| (u.sector, u.key_type)).collect();
+                        }
+                    }
                 }
             }
         }
@@ -1648,9 +1706,19 @@ impl Engine {
                 // 判定是否**全部**块写入成功——成功才删备份并报「写卡成功」；
                 // 部分写入 / 工具中途失败则保留备份以便恢复，并报失败。
                 if run.report {
+                    // 结算末行（末行无换行时 `Done, X of Y` 不能丢），再据以判定。
+                    if let Some(p) = run.block_stats.as_mut() {
+                        p.flush();
+                    }
                     let stats = run.block_stats.as_ref().and_then(|p| p.take());
+                    // CUID 走大写 `W`（解锁写）会写 block0，工具打印 `64/64`
+                    // （含 block0）；普通写/格式化走小写 `w`/`f` 跳过 block0。
+                    // 判据唯一实现在 `BlockStatsParser::is_write_complete`；
+                    // 无完成行（None）时按退出码兜底。
                     let complete = match stats {
-                        Some((w, t)) if t >= 1 => w == t - 1,
+                        Some((w, t)) if t >= 1 => {
+                            BlockStatsParser::is_write_complete((w, t), run.cuid)
+                        }
                         _ => exit.code == Some(0),
                     };
                     if complete {
@@ -1699,6 +1767,10 @@ impl Engine {
                         // 用户在保存框里选好的路径就指到另一张卡的数据上。
                         state.is_running_task = true;
                     }
+                }
+                // PLAN v1：读到卡号就把这张卡追加进 registry（可查表）。
+                if let Some(uid) = run.uid.as_deref() {
+                    registry_append(state, paths, uid);
                 }
                 // 任何成功退出都要把状态落回「空闲」。
                 // `printExitLog(0)`（`execUtils.js:75-78`）对**所有**工具
@@ -1771,6 +1843,35 @@ fn to_unknown(
 
 /// 默认密钥条数，供 ETA 分母用（`mfoc_keys_total` 的其中一项）。
 pub const DEFAULT_KEY_COUNT: usize = DEFAULT_KEYS.len();
+
+/// 读卡成功后把这张卡追加进 `registry.json`（PLAN v1「自动追加新卡」，docs/01
+/// 决策 #8 的可查表）。
+///
+/// 失败一律静默：registry 是旁路可查表，写不进也不该让读卡显示失败。重复 UID
+/// 由 `Registry::append` 去重。`key_a`/`key_b` 取本卡已解出的首条 A/B 密钥
+/// （`state.known_key_info`）。
+fn registry_append(state: &AppState, paths: &Paths, uid: &str) {
+    if uid.is_empty() {
+        return;
+    }
+    let (mut key_a, mut key_b) = (String::new(), String::new());
+    for (k, _sector, kt) in &state.known_key_info {
+        match kt {
+            crate::model::keys::KeyType::A if key_a.is_empty() => key_a = k.clone(),
+            crate::model::keys::KeyType::B if key_b.is_empty() => key_b = k.clone(),
+            _ => {}
+        }
+    }
+    let record = crate::data::CardRecord {
+        uid: uid.to_owned(),
+        key_a,
+        key_b,
+        date: crate::paths::timestamp(),
+        ..crate::data::CardRecord::default()
+    };
+    let mut registry = crate::data::Registry::load(&paths.registry_file()).unwrap_or_default();
+    let _ = registry.append_and_save(record, paths);
+}
 
 #[cfg(test)]
 mod tests {
@@ -2104,6 +2205,60 @@ mod tests {
         for want in ["-s5", "-tB", "-l100", "-d/tmp/my.dic"] {
             assert!(args.contains(&want.to_owned()), "缺 {want}: {args:?}");
         }
+    }
+
+    /// P1-1 字典命中：`Found Key: ` → 密钥落盘 + 从 unknown 移除对应项。
+    /// 修复前 dict 未挂解析器，命中既不落盘也不收 unknown，破解形同虚设。
+    #[test]
+    fn dict_hit_saves_key_and_removes_unknown() {
+        let (_d, p) = paths("dict-hit");
+        let mut e = Engine::new(Box::new(
+            MockToolRunner::new(vec![Chunk::stdout("Found Key: deadbeef1234\n")])
+                .with_exit(Some(0)),
+        ));
+        let mut st = connected();
+        // 预置一条 unknown：扇区 5 / KeyB（与配置目标一致）
+        st.unknown_key_info = vec![(5, crate::state::KeyType::B)];
+        let mut dlg = MockDialog::new();
+        let cfg = DictTestConfig {
+            sector: 5,
+            key_type: crate::state::KeyType::B,
+            start_position: 0,
+        };
+        e.dispatch(Action::DictTestConfig(Box::new(cfg)), &mut st, &p, &mut dlg)
+            .unwrap();
+        run_to_end(&mut e, &mut st, &p, 6);
+        // 命中密钥应落盘（刻意避开 DEFAULT_KEYS，否则被 save_keys 正确过滤）
+        let keys = std::fs::read_to_string(p.keys_file()).unwrap_or_default();
+        assert!(keys.contains("deadbeef1234"), "命中密钥未落盘: {keys:?}");
+        // 对应 unknown 应被移除
+        assert!(
+            !st.unknown_key_info.contains(&(5, crate::state::KeyType::B)),
+            "命中后 unknown 仍在: {:?}",
+            st.unknown_key_info
+        );
+    }
+
+    /// P3-8 PLAN v1：读卡读到卡号后自动追加进 `registry.json`（可查表）。
+    #[test]
+    fn read_ic_appends_uid_to_registry() {
+        let (_d, p) = paths("reg-append");
+        let mut e = Engine::new(Box::new(
+            MockToolRunner::new(vec![Chunk::stdout("UID (NFCID1): AA BB CC DD\n")])
+                .with_exit(Some(0)),
+        ));
+        let mut st = connected();
+        let mut dlg = MockDialog::new();
+        e.dispatch(Action::Plain("read-IC"), &mut st, &p, &mut dlg)
+            .unwrap();
+        run_to_end(&mut e, &mut st, &p, 6);
+        let reg = crate::data::Registry::load(&p.registry_file()).unwrap();
+        assert_eq!(reg.len(), 1, "registry 应追加 1 条，实际 {}", reg.len());
+        assert!(
+            reg.find("AABBCCDD").is_some(),
+            "追加的 UID 不对: {:?}",
+            reg.uids()
+        );
     }
 
     // ── 输出回流与收尾 ──
@@ -2967,6 +3122,41 @@ mod tests {
             st.log_buffer
         );
         assert!(p.temp_mfd().exists(), "工具失败应保留备份");
+    }
+
+    /// S18 CUID：大写 `W` 解锁写会写 block0，工具打印 `64/64`（含 block0），
+    /// 全部成功 = `w == t`。修复前第二段用 `w == t - 1` 判据（按小写 `w` 的
+    /// 「跳过 block0」假设），会把 CUID 的 64/64 误判为写入不完整。
+    #[test]
+    fn cuid_write_full_64_of_64_reports_success() {
+        let (_d, p) = paths("cuid-complete");
+        std::fs::write(p.dumpfiles_dir().join("a.mfd"), vec![0x5a; 32]).unwrap();
+        let mut e = Engine::new(Box::new(
+            MockToolRunner::new(vec![])
+                .with_scripts(vec![
+                    vec![],
+                    vec![Chunk::stdout("Done, 64 of 64 blocks written.\n")],
+                ])
+                .with_exits(vec![Some(0), Some(0)]),
+        ));
+        let mut st = connected();
+        let mut dlg = MockDialog::new().with_confirm(true);
+        e.dispatch(
+            Action::WithArg("cuid-write", "a.mfd".into()),
+            &mut st,
+            &p,
+            &mut dlg,
+        )
+        .unwrap();
+        // 造出含合法 block0 的备份：CUID 密钥文件要从这里取卡号，第二段才接得上。
+        std::fs::write(p.temp_mfd(), vec![0x5a; 64]).unwrap();
+        run_to_end(&mut e, &mut st, &p, 8);
+        assert!(
+            st.log_buffer.contains("写卡成功"),
+            "CUID 64/64 应判写卡成功，实际: {}",
+            st.log_buffer
+        );
+        assert!(!p.temp_mfd().exists(), "成功后应删除 temp 备份");
     }
 
     /// `format-card` S17：补确认框（原版 `command.js:144-149` 直接开跑，误点即清空）。

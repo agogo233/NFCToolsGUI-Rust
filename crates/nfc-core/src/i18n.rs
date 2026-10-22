@@ -34,7 +34,7 @@ pub fn len() -> usize {
 mod tests {
     use super::*;
 
-    /// 不断言绝对数量——那个数字在 Rust 测���与 verify_parity.py 里各写了一份，
+    /// 不断言绝对数量——那个数字在 Rust 测试与 verify_parity.py 里各写了一份，
     /// 已经漂移过一次（凭空的 `html_license:` 被当成「原版拼写错误」保留）。
     /// 改为断言**构成**：本地补的 14 个必须都在，且不重名。
     #[test]

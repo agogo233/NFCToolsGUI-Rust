@@ -101,6 +101,10 @@ impl Registry {
             path: tmp.clone(),
             source,
         })?;
+        // registry 记录含 key_a/key_b 明文，落盘前把 tmp 收紧为 0600——
+        // rename 保留 mode，必须在 rename 之前收紧（与 model/keys.rs::save_keys
+        // 同一理由：常见 umask 022 下的 0644 会同机其他用户可读跨卡密钥）。
+        crate::paths::restrict_owner(&tmp);
         std::fs::rename(&tmp, path).map_err(|source| RegistryError::Io {
             path: path.into(),
             source,
@@ -311,6 +315,24 @@ mod tests {
             .collect();
         assert!(leftovers.is_empty(), "残留临时文件: {leftovers:?}");
         assert!(p.exists(), "目标文件应存在");
+    }
+
+    /// registry 记录含 key_a/key_b 明文，落盘后必须收紧为 0600。
+    ///
+    /// 常见 umask 022 下 `fs::write` 得 0644，同机其他用户可读跨卡可复用的
+    /// 密钥——与 keys.txt（`model/keys.rs`）属同一防线，此处补齐 registry。
+    #[cfg(unix)]
+    #[test]
+    fn save_restricts_registry_file_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempdir("perm");
+        let _guard = TempGuard(dir.clone());
+        let p = dir.join("registry.json");
+        let mut r = Registry::new();
+        r.append(CardRecord::new("aabbccddeeff"));
+        r.save(&p).unwrap();
+        let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "实际 mode: {mode:o}");
     }
 
     /// UID 大小写不敏感去重：mfoc 与 mfdetect 的输出大小写习惯不同，

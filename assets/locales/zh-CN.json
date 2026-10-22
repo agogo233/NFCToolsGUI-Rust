@@ -253,5 +253,6 @@
     "html_applies_after_reconnect": "任务运行中，将在重连设备后生效",
     "html_confirm_code": "确认码",
     "html_tip_cuid_write": "CUID/FUID 空卡写入：按当前卡号自动生成密钥文件",
-    "html_tip_mfcuk_run": "全加密卡的密钥爆破 (mfcuk, 不一定成功)"
+    "html_tip_mfcuk_run": "全加密卡的密钥爆破 (mfcuk, 不一定成功)",
+    "log_msg_serial_enum_failed": "串口枚举失败"
 }

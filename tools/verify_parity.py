@@ -106,6 +106,7 @@ S18_EXTRA = {
     "indicator_writing_cuid",
     "log_msg_applies_after_reconnect",
     "log_msg_cuid_key_built",
+    "log_msg_serial_enum_failed",
     "log_msg_start_mfcuk",
 }
 # S18 从「上游独有」挪回的 20 个 key：两版共有且文案逐字一致。
@@ -779,7 +780,7 @@ def s4_model() -> None:
     # S5 单测数量
     s5_units = sum(rd(CORE / f"src/{f}").count("#[test]")
                    for f in ["data.rs", "dialogs.rs", "tasks/mfoc.rs", "tasks/detect.rs"])
-    check(s5_units == 82, "S5 单测累计 82（含 S6/S11-2/S17/F4 新增）", f"实际 {s5_units}")
+    check(s5_units == 83, "S5 单测累计 83（含 S6/S11-2/S17/F4 新增 + S19 权限收紧 1）", f"实际 {s5_units}")
     ints = rd(CORE / "tests/integration.rs")
     check(ints.count("#[test]") == 58, "S5+S6/S7 集成测试累计 58", f"实际 {ints.count('#[test]')}")
     check(ints.count("fn s5_") == 14, "S5 新增 14 个集成测试", f"实际 {ints.count('fn s5_')}")
@@ -1625,7 +1626,7 @@ def s4_model() -> None:
           f"{[k for k in i18n_asset if k[-1:] in {':', '.', ',', ' ', '-', '_'}]}")
     # 本地补的 key 数量原本写死在 Rust 测试与此处两处，已漂移过一次。双向钉死。
     check(len(LOCAL_EXTRA) == 14 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA),
-          "R 本地补的 i18n key 恰为 55 个", f"实际 {len(LOCAL_EXTRA)}")
+          "R 本地补的 i18n key 恰为 56 个", f"实际 {len(LOCAL_EXTRA)}")
     cd = rd(CORE / "src/command.rs")
     # rustfmt 会把字段拆成多行，故用 DOTALL 匹配整个结构体字面量
     specs = re.findall(

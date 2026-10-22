@@ -484,10 +484,13 @@ impl MfcukKeyParser {
 
 /// `nfc-mfclassic` 的完成行解析：`Done, X of Y blocks written.` / `read.`。
 ///
-/// 用于判定写卡/读卡是否**全部**成功。关键细节：`w`/`f` 不写 block0，
+/// 用于判定写卡/读卡是否**全部**成功。关键细节：小写 `w`/`f` **不写** block0，
 /// 而工具打印的 `Y = uiBlocks + 1` 把 block0 也算进去了，故「全部成功」的
-/// 判据是 `written == total - 1`（`total >= 1` 时）。工具中途失败（tag 被
-/// 移走、auth 失败）会提前退出、**不**打印该行，此时返回 `None`。
+/// 判据是 `written == total - 1`（`total >= 1` 时）；CUID 解锁写走大写 `W`
+/// **会写** block0、打印 `64/64`，判据是 `written == total`。判据分叉见
+/// `engine.rs` 第二段收尾（`run.cuid`）；统一放宽成 `>= total - 1` 会掩盖
+/// CUID 的 block0 写入失败。工具中途失败（tag 被移走、auth 失败）会提前
+/// 退出、**不**打印该行，此时返回 `None`。
 ///
 /// 偏离：原版 `command.js` 只按退出码判成败（`code === 0`），而 `nfc-mfclassic`
 /// 大写 `A` 容忍失败仍退出 0，会把「部分块写入」误报成成功。此处解析完成行，
@@ -521,6 +524,23 @@ impl BlockStatsParser {
     /// 该行只出现一次，保留最后一次快照更便于收尾时取值。
     pub fn take(&self) -> Option<(u32, u32)> {
         self.stats
+    }
+
+    /// 完成行块数是否「全部写入成功」的**唯一**判据（engine 收尾与本模块测试共用）。
+    ///
+    /// 大写 `W`（CUID 解锁写）写 block0：`written == total`；小写 `w`/`f` 跳过
+    /// block0、`total` 仍含 block0：`written == total - 1`。`total == 0` 退化
+    /// 归为不完整（且避免 `total - 1` 下溢）。调用方自行处理「无完成行」
+    /// （`take() == None`）时按退出码兜底。
+    pub fn is_write_complete((w, t): (u32, u32), cuid: bool) -> bool {
+        if t == 0 {
+            return false;
+        }
+        if cuid {
+            w == t
+        } else {
+            w == t - 1
+        }
     }
 
     fn scan(&mut self, lines: &[String]) {
@@ -969,24 +989,22 @@ mod tests {
         assert_eq!(p.take(), Some((63, 64)));
     }
 
-    /// 完整判据：`w`/`f` 不写 block0，Y 含 block0，故全部成功 = written == total - 1。
+    /// 完整判据的唯一实现 `BlockStatsParser::is_write_complete`（engine 收尾共用）。
+    /// 钉住规则，避免回归到单一判据。
     #[test]
     fn block_stats_complete_criterion() {
-        // 63/64 → 完整（block0 未写）
-        assert!(is_complete(Some((63, 64))));
-        // 60/64 → 不完整
-        assert!(!is_complete(Some((60, 64))));
-        // 工具中途失败（无完成行）→ 不完整
-        assert!(!is_complete(None));
-        // 退化情况 total == 0 不应出现，按不完整处理
-        assert!(!is_complete(Some((0, 0))));
-    }
-
-    fn is_complete(stats: Option<(u32, u32)>) -> bool {
-        match stats {
-            Some((w, t)) if t >= 1 => w == t - 1,
-            _ => false,
-        }
+        use BlockStatsParser::is_write_complete;
+        // 普通写：63/64 → 完整（block0 未写）
+        assert!(is_write_complete((63, 64), false));
+        // 普通写：60/64 → 不完整
+        assert!(!is_write_complete((60, 64), false));
+        // CUID：64/64 → 完整（block0 已写）
+        assert!(is_write_complete((64, 64), true));
+        // CUID：63/64 → 不完整（block0 没写上）
+        assert!(!is_write_complete((63, 64), true));
+        // 退化 total == 0 → 不完整（且不触发 `total - 1` 下溢）
+        assert!(!is_write_complete((0, 0), false));
+        assert!(!is_write_complete((0, 0), true));
     }
 
     // ---------------------------------------------------------- mfcuk

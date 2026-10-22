@@ -365,6 +365,13 @@ pub struct EditorForm {
     pub sectors: Vec<Sector>,
     /// 当前文件名（`#current-file`，只取 basename）。
     pub file_name: Option<String>,
+    /// 编辑器当前文件的**完整路径**（外部绝对路径或 `dumpfiles/` 内路径）。
+    ///
+    /// 决定「保存」写回哪里：`Some(origin)` 直接写 origin，否则回落
+    /// `dumpfiles/<file_name>`。与 `file_name`（只取 basename 供展示）分离——
+    /// 原版只存 basename，导致从外部目录打开的 dump「保存」被写回 dumpfiles
+    /// 下的同名副本而非原文件（登记见 docs/02 §6）。
+    pub origin: Option<std::path::PathBuf>,
     /// 有未保存改动。
     pub dirty: bool,
     /// S18：上次「体检全卡」的结果（逐扇区问题）。空 = 未体检或无问题。
@@ -377,6 +384,9 @@ impl EditorForm {
         self.sectors = dump::to_sector_lines(bytes).map_err(|e| e.to_string())?;
         self.file_name = name;
         self.dirty = false;
+        // 载入新内容即作废旧来源：调用方按需重设 origin，避免 file_name 与
+        // origin 指向不同文件（两处 `load_dump_*` 都在成功处赋 origin）。
+        self.origin = None;
         Ok(())
     }
 

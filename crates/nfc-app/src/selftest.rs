@@ -485,6 +485,26 @@ fn c_editor_rejects_traversal() -> Result<(), String> {
     if !listed.contains(&"ok.mfd".to_owned()) {
         return Err(format!("临时目录文件未列出: {listed:?}"));
     }
+    // 外部 dump：文件框/参数进来的是**完整路径**，「保存」须写回原文件，
+    // 不得在 dumpfiles 下生成同名副本（P2-4 修复前的缺陷：路径被截断成 basename）。
+    let external = d.0.join("outside.mfd");
+    std::fs::write(&external, vec![0u8; 1024]).unwrap();
+    if !app.load_dump_from_path(&external) {
+        return Err("外部完整路径竟被拒绝".into());
+    }
+    app.exec("dump-editor-save", None);
+    if app.paths.dumpfiles_dir().join("outside.mfd").exists() {
+        return Err("外部 dump 保存却写进了 dumpfiles（路径被截断）".into());
+    }
+    if !external.exists() {
+        return Err("外部 dump 保存后原文件丢失".into());
+    }
+    // origin 被外部删除 → 「保存」应回落 dumpfiles/<name>，而非在原处重建失效路径。
+    std::fs::remove_file(&external).unwrap();
+    app.exec("dump-editor-save", None);
+    if !app.paths.dumpfiles_dir().join("outside.mfd").exists() {
+        return Err("origin 失效后保存应回落 dumpfiles".into());
+    }
     Ok(())
 }
 
@@ -2427,6 +2447,9 @@ fn c_cuid_write_flow() -> Result<(), String> {
     }
     if c.message.is_empty() {
         return Err("CUID 确认正文为空".into());
+    }
+    if c.code.is_none() {
+        return Err("CUID 写确认框应带 B6 随机码".into());
     }
     app.on_confirm_result(c, true);
     app.consume_pending();

@@ -50,7 +50,7 @@ pub fn list(dir: &Path) -> Vec<String> {
         // 但那些名字不以 .mfd 结尾，故实际被 filter 排除）
         .filter(|e| e.path().is_file())
         .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| n.ends_with(DUMP_EXT))
+        .filter(|n| n.ends_with(&format!(".{DUMP_EXT}")))
         .collect();
     names.sort();
     names
@@ -103,12 +103,17 @@ pub fn rename(dir: &Path, old: &str, new: &str) -> Result<PathBuf, DumpFileError
 /// 除本模块的 [`delete`] / [`rename`] 外，app 侧编辑器载入、比较器两侧
 /// 载入、编辑器保存写回也用它做入口防线（纵深防御：所有把用户可见文件名
 /// 拼到 dumpfiles 下的入口都过同一道校验）。
+///
+/// Windows 上还拒绝 `:`：`dir.join("C:evil.mfd")` 会变成驱动器相对路径
+/// `C:\dumpfiles\evil.mfd`（`join` 对带盘符的「相对」路径会追加而非丢弃
+/// 盘符），借重命名可逃出 dumpfiles 目录。
 pub fn is_plain_name(name: &str) -> bool {
     !name.is_empty()
         && name != "."
         && name != ".."
         && !name.contains('/')
         && !name.contains('\\')
+        && !name.contains(':')
         && !name.contains('\0')
 }
 
@@ -169,13 +174,24 @@ mod tests {
     #[test]
     fn list_only_returns_mfd_sorted() {
         let d = TempDir::new("list");
-        for n in ["b.mfd", "a.mfd", "c.dump", "notes.txt", "d.mfd"] {
+        for n in [
+            "b.mfd",
+            "a.mfd",
+            "c.dump",
+            "notes.txt",
+            "d.mfd",
+            // 不带 `.` 分隔的 `.mfd` 前缀：`ends_with("mfd")` 曾误收 `xmfd` / `no.notmfd`
+            "xmfd",
+            "no.notmfd",
+            // 隐藏文件 `.mfd` 结尾仍是 `.mfd`（与原版 `endsWith('.mfd')` 一致，保留）
+            ".mfd",
+        ] {
             d.write(n);
         }
         // 子目录即使叫 x.mfd 也不该被当成 dump（原版 readdirSync 会混进来，
         // 但本实现显式跳过目录——更安全）
         std::fs::create_dir_all(d.path().join("sub.mfd")).unwrap();
-        assert_eq!(list(d.path()), vec!["a.mfd", "b.mfd", "d.mfd"]);
+        assert_eq!(list(d.path()), vec![".mfd", "a.mfd", "b.mfd", "d.mfd"]);
     }
 
     #[test]
@@ -252,6 +268,9 @@ mod tests {
         assert!(!is_plain_name("a/b"));
         assert!(!is_plain_name("a\\b"));
         assert!(!is_plain_name("a\0b"));
+        // Windows 驱动器相对路径：借 join + rename 可逃出 dumpfiles
+        assert!(!is_plain_name("C:evil.mfd"));
+        assert!(!is_plain_name("c:x.mfd"));
         // 非 ASCII 名字允许（原版 dump 文件名含 UID，仍是 ASCII，
         // 但用户可能手动改，故不额外设限）
         assert!(is_plain_name("中文.mfd"));
