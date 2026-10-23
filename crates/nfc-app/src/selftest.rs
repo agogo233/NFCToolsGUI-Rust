@@ -1199,7 +1199,7 @@ fn c_editor_save_action() -> Result<(), String> {
     app.paths = nfc_core::paths::Paths::new(d2.0.clone());
     app.dialogs_host = DialogHost::manual();
     app.file_dialogs_ok = true;
-    let _ = std::fs::create_dir_all(&app.paths.dumpfiles_dir());
+    let _ = std::fs::create_dir_all(app.paths.dumpfiles_dir());
     let src = app.paths.dumpfiles_dir().join("a.mfd");
     std::fs::write(&src, sample_dump(2)).unwrap();
     app.forms
