@@ -1446,6 +1446,11 @@ impl NfcApp {
             .inner_margin(egui::Margin::symmetric(10, 6))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
+                    // 整行统一文字垂直基准：Button/ComboBox 按 button_padding 靠下，
+                    // Label 走 cross_align 居中，混用会让「选择设备 / 未连接设备 / 工具」
+                    // 左右台阶式下沉，故在本行范围内强制 Center（style 是 CoW，只影响
+                    // 本 horizontal 及其子控件，不污染全局 style）。
+                    ui.style_mut().override_text_valign = Some(Align::Center);
                     // 左上角 logo（20px，见 `main.rs::load_title_logo`）。
                     if let Some(tex) = &self.logo {
                         ui.add(egui::Image::new(tex).max_size(egui::vec2(20.0, 20.0)));
