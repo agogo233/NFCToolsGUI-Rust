@@ -190,6 +190,13 @@ pub struct Engine {
     pending_save: Option<crate::dialogs::PendingSave>,
     /// 挂起的保存框是不是 HardNested 的 nonce（决定续接走哪条路径）。
     hn_saving: bool,
+    /// 最近一次成功落盘的 dump 完整路径。
+    ///
+    /// `resolve_save` 续接收尾时写入，由 app 侧 [`Self::take_last_dump_saved`]
+    /// 取走——据此在保存完成那一刻弹「写这张卡」引导并打开转储编辑器。
+    /// 只记 `SaveOutcome::Saved`：失败 / 空 dump 不记，否则会把一个不存在的
+    /// 文件交给 UI 去载入。
+    last_dump_saved: Option<PathBuf>,
     /// 当前任务的启动时刻（单调时钟），ETA 进度据此算已用时长 / 节流。
     ///
     /// `EtaTracker` 的 `start_ms`/`last_update_ms` 都以它为零点；不用墙钟——
@@ -214,6 +221,7 @@ impl Engine {
             hn_round: tasks::hard_nested::RoundContext::default(),
             pending_save: None,
             hn_saving: false,
+            last_dump_saved: None,
             eta_epoch: None,
         }
     }
@@ -289,7 +297,12 @@ impl Engine {
             return true;
         }
         let refresh_history = pending.refresh_history;
-        tasks::mfoc::dump_commit(state, &pending, url);
+        let outcome = tasks::mfoc::dump_commit(state, &pending, url);
+        // 只有真正落盘成功才记下路径：app 侧据此开编辑器，失败时交一个
+        // 不存在的路径过去只会白弹一条错误。
+        if let tasks::mfoc::SaveOutcome::Saved { target, .. } = &outcome {
+            self.last_dump_saved = Some(target.clone());
+        }
         if refresh_history {
             // 存盘后立刻能在历史面板看到
             state.apply(Event::DictHistory(crate::dumpfiles::list(
@@ -297,6 +310,15 @@ impl Engine {
             )));
         }
         true
+    }
+
+    /// 最近一次成功落盘的 dump 完整路径，**取一次就清空**。
+    ///
+    /// app 每帧续接完 `resolve_save` 后取一次：非空说明这一次读盘收尾真的
+    /// 存下来了文件，该弹引导 + 开编辑器。`None` = 没存成功，或上一次已取走
+    /// （同一条路径不能在下一次解卡之后又被弹一次）。
+    pub fn take_last_dump_saved(&mut self) -> Option<PathBuf> {
+        self.last_dump_saved.take()
     }
 
     /// HardNested `collectOnly` 的续接：把 `nonces.bin` 搬到用户选的位置。
@@ -2397,6 +2419,37 @@ mod tests {
         );
         // 历史列表应刷新
         assert_eq!(st.dump_history, files);
+    }
+
+    /// 落盘成功后必须记下完整路径，且**取一次即清空**。
+    ///
+    /// app 侧靠它判断「这次解卡真的存下来了文件」，据此弹引导 + 开编辑器。
+    /// 取走即清是防串轮：上一次的路径不能在下一次解卡之后再弹一次。
+    /// 空 dump（不落盘）不记——否则会把一个不存在的路径交给 UI。
+    #[test]
+    fn resolve_save_records_last_dump_saved_once() {
+        let (_d, p) = paths("read-record");
+        let mut e = Engine::new(Box::new(MockToolRunner::new(vec![Chunk::stdout(
+            "UID (NFCID1): a1b2c3d4\n",
+        )])));
+        let mut st = connected();
+        let mut dlg = MockDialog::new();
+        assert!(e.take_last_dump_saved().is_none(), "初始应为空");
+        e.dispatch(Action::Plain("read-IC"), &mut st, &p, &mut dlg)
+            .unwrap();
+        std::fs::write(p.temp_mfd(), vec![0x5a; 64]).unwrap();
+        run_to_end(&mut e, &mut st, &p, 4);
+        e.resolve_save(None, &mut st, &p);
+        let saved = e.take_last_dump_saved().expect("落盘成功应记下路径");
+        assert!(saved.is_absolute(), "应记下完整路径: {saved:?}");
+        assert!(saved.is_file(), "记下的路径应当存在");
+        assert!(
+            e.take_last_dump_saved().is_none(),
+            "取走一次后应清空，避免下一次解卡再弹一次"
+        );
+        // 重复回调不应重新置真（没有挂起的请求）
+        assert!(!e.resolve_save(None, &mut st, &p));
+        assert!(e.take_last_dump_saved().is_none());
     }
 
     /// dump 为空时不该产出文件（原版 command.js:650-661）。

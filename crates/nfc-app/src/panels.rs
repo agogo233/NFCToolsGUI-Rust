@@ -1270,7 +1270,7 @@ fn dump_editor(ui: &mut Ui, app: &mut NfcApp) -> bool {
     ui.horizontal(|ui| {
         ui.label(format!("{}{name}", t("html_current_file")));
     });
-    // 6 个按钮在窄窗口下装不下一行，改自动换行而不是横向溢出（docs/02 §6.29）。
+    // 7 个按钮在窄窗口下装不下一行，改自动换行而不是横向溢出（docs/02 §6.29）。
     ui.horizontal_wrapped(|ui| {
         if ui.button(t("html_open_file")).clicked() {
             // 必须走 exec：engine 不认这个名字（不在纯 UI 名单里），
@@ -1292,6 +1292,23 @@ fn dump_editor(ui: &mut Ui, app: &mut NfcApp) -> bool {
         {
             // "1" = 另存为，弹系统保存框
             app.exec("dump-editor-save", Some("1".to_owned()));
+        }
+        // 写卡入口（原版 dumpEditor 没有）：先另存一份副本，再走既有 write-IC
+        // 确认链。按 `command` 门禁置灰——未连接 / 有任务在跑时悬停说明原因，
+        // 与主面板写卡按钮同一套规则。
+        let gate =
+            nfc_core::command::spec("write-IC").map(|s| nfc_core::command::gate(s, &app.state));
+        let can_write = ok && matches!(gate, Some(Ok(())) | None);
+        let write_tip = match &gate {
+            Some(Err(e)) => t(e.i18n_key()),
+            _ => t("html_write_this_dump"),
+        };
+        if ui
+            .add_enabled(can_write, egui::Button::new(t("html_write_this_dump")))
+            .on_hover_text(write_tip)
+            .clicked()
+        {
+            app.write_editor_to_card();
         }
         // S18：体检 / 修复 / 导出密钥（纯 UI 动作，不进 engine 队列）
         if ui.button(t("html_check_dump")).clicked() {

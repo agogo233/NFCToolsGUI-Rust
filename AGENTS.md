@@ -25,7 +25,7 @@ cargo run -p nfc-app --release     # 运行 GUI
 cargo run -p nfc-core -- --selftest   # 14 项核心行为（不开窗口）
 cargo run -p nfc-app  -- --selftest   # 90 项界面 + 接线
 
-cargo test --workspace             # 539 项
+cargo test --workspace             # 541 项
 cargo test -p nfc-core --test real_tools --test tool_cli   # 需要 framework/bin（否则自动跳过）
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --workspace --all-targets --features real-serial -- -D warnings   # CI 额外跑一次：RealSerial 平时不参与编译

@@ -345,6 +345,12 @@ impl NfcApp {
             dialogs_host::FilePurpose::ReadIcSave | dialogs_host::FilePurpose::NoncesSave => {
                 self.engine
                     .resolve_save(reply.path, &mut self.state, &self.paths);
+                // core 的 `DumpSaved` 只落历史列表（core 不该知道 UI 长什么样），
+                // 引导条与自动打开编辑器必须在 app 侧这个真实续接点补上。
+                // nonce 续接不落 dump，`take_last_dump_saved` 为空即跳过。
+                if let Some(path) = self.engine.take_last_dump_saved() {
+                    self.on_dump_saved_ui(path);
+                }
                 return;
             }
             _ => {}
@@ -435,7 +441,7 @@ impl NfcApp {
             }
             // command.js:449-458：另存为
             dialogs_host::FilePurpose::EditorSaveAs => {
-                self.write_editor_to(&path);
+                self.write_editor_to(&path, true);
             }
             // command.js:477-486
             dialogs_host::FilePurpose::ComparatorA => self.load_comparator_side(true, &path),
@@ -570,6 +576,35 @@ impl NfcApp {
         theme_ui::Paint(self.theme)
     }
 
+    /// 落盘成功后的 UI 收尾：弹引导条 + 自动打开转储编辑器载入该文件。
+    ///
+    /// 生产路径上 core 的 `Event::DumpSaved` 只落历史列表和一条成功事件
+    /// （core 不该知道 UI 长什么样），引导条此前因此永远不出现——现由
+    /// [`Self::on_file_reply`] 在读盘续接完成后调本方法补上。
+    ///
+    /// 同时自动载入并打开编辑器：解卡就是为了改卡，改完可直接写回
+    /// （原版的 dumpEditor 没有写卡路径，此处一并补上）。
+    ///
+    /// 引导条「写这张卡」带**完整路径**：用户在保存框选了 `dumpfiles/` 以外的
+    /// 目录时，把裸名拼回 `dumpfiles/` 会指到一个不存在的文件。
+    fn on_dump_saved_ui(&mut self, path: PathBuf) {
+        let name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let dump_arg = Some(path.to_string_lossy().into_owned());
+        self.guidance = Some((
+            name,
+            vec![
+                ("write-IC", t("html_write_this_dump"), dump_arg),
+                ("open-dump-folder", t("html_open_dump_folder"), None),
+            ],
+        ));
+        self.forms.editor = panels::EditorForm::default();
+        self.load_dump_from_path(&path);
+        panels::open(&mut self.state.panels, panels::Panel::DumpEditor);
+    }
+
     /// 把 core 事件翻译成 UI 侧状态。
     ///
     /// `Event::Guidance` / `BinaryData` 等在 `AppState::apply` 里是 no-op
@@ -590,22 +625,9 @@ impl NfcApp {
                     .file_name()
                     .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or_default();
-                self.push_event(EventKind::Success, &name.to_string());
-                // 「写这张卡」直接带 dumpId（对标 command.js:127-130）：保存的是
-                // 裸文件名，engine 的 `resolve_dump_id` 会拼 `dumpfiles/`。
-                // 名为空（无 file_name 的极端路径）时退回 None，仍走选文件框。
-                let dump_arg = if name.is_empty() {
-                    None
-                } else {
-                    Some(name.clone())
-                };
-                self.guidance = Some((
-                    name.to_string(),
-                    vec![
-                        ("write-IC", t("html_write_this_dump"), dump_arg),
-                        ("open-dump-folder", t("html_open_dump_folder"), None),
-                    ],
-                ));
+                // core 侧已落历史列表（`AppState::apply`），这里只补事件条。
+                self.push_event(EventKind::Success, &name);
+                self.on_dump_saved_ui(path);
             }
             Event::Status { indicator, .. } => {
                 // index.js:28 — running 启计时；free / error 停计时
@@ -814,42 +836,99 @@ impl NfcApp {
         }
     }
 
-    /// 把编辑器的当前内容写成二进制转储。
+    /// 把编辑器的当前内容写成二进制转储。返回是否落盘成功。
     ///
     /// 对标 `command.js:436-443`：`Buffer.from(hexData, "hex")` → 落盘 →
-    /// 通知编辑器更新当前文件名。
-    fn write_editor_to(&mut self, path: &std::path::Path) {
+    /// 通知编辑器更新当前文件名。成功与否由调用方决定下一步——「写入此转储」
+    /// 要在确认框出现前先确认文件真的写出去了。
+    fn write_editor_to(&mut self, path: &std::path::Path, update_origin: bool) -> bool {
         // `from_sector_lines` 自身就会拒绝空列表（`DumpError::Empty`）与非 hex
         // 内容，故不必另加空值检查。
+        // `update_origin` 决定「当前文件」是否切换过去：另存为要切（原版的
+        // currentFilePath 跟着走），但「写入此转储」的快照不该切换——
+        // 切换后「保存」就会写到那份快照，而原始解卡结果永远停留在旧内容。
         let bytes = match nfc_core::model::dump::from_sector_lines(&self.forms.editor.sectors) {
             Ok(b) => b,
             Err(e) => {
                 self.push_event(EventKind::Error, &e.to_string());
                 self.state
                     .apply(Event::Log(format!("\n{}\n", t("log_msh_save_failed"))));
-                return;
+                return false;
             }
         };
         match std::fs::write(path, &bytes) {
             Ok(()) => {
-                if let Some(name) = path.file_name() {
-                    self.forms.editor.file_name = Some(name.to_string_lossy().into_owned());
+                if update_origin {
+                    if let Some(name) = path.file_name() {
+                        self.forms.editor.file_name = Some(name.to_string_lossy().into_owned());
+                    }
+                    // 记住落点：后续「保存」继续写回这里（另存为尤其重要）。
+                    self.forms.editor.origin = Some(path.to_path_buf());
+                    self.forms.editor.dirty = false;
                 }
-                // 记住落点：后续「保存」继续写回这里（另存为尤其重要）。
-                self.forms.editor.origin = Some(path.to_path_buf());
-                self.forms.editor.dirty = false;
                 let name = path.to_string_lossy().into_owned();
                 self.push_event(EventKind::Success, &name);
                 self.state.apply(Event::Log(format!(
                     "\n\n{} {name}\n",
                     t("log_msg_file_already_saved_to")
                 )));
+                true
             }
             Err(e) => {
                 self.state
                     .apply(Event::Log(format!("\n{}\n", t("log_msh_save_failed"))));
                 self.push_event(EventKind::Error, &format!("{e}"));
+                false
             }
+        }
+    }
+
+    /// 编辑器「写入此转储」：先把当前编辑内容另存成副本，再走写卡确认。
+    ///
+    /// 偏离原版（原版 dumpEditor 没有任何写卡路径，写卡只能从主面板 / 历史
+    /// 列表发起）：解卡后编辑器已自动载入，用户应能「改完直接写回去」。
+    /// 保存走**另存**而非覆盖——原始解卡结果保留，写卡用的副本按
+    /// `<原名>_edit_<时间戳>.mfd` 落在 `dumpfiles/`，可从历史面板复查或删除。
+    ///
+    /// 写卡本体不新造：确认后走既有 `write-IC`（备份当前卡 →
+    /// `nfc-mfclassic w` → 完成行判定），载荷是**完整路径**，engine 的
+    /// `resolve_dump_id` 对绝对路径原样使用、不再拼 `dumpfiles/`。
+    pub fn write_editor_to_card(&mut self) {
+        // 与主面板写卡按钮同一道门禁：未连接 / 有任务在跑时在这里给出原因，
+        // 而不是点了之后才在日志里看到报错。
+        if let Some(s) = nfc_core::command::spec("write-IC") {
+            if let Err(e) = nfc_core::command::gate(s, &self.state) {
+                self.push_event(EventKind::Error, &t(e.i18n_key()));
+                return;
+            }
+        }
+        // 与「保存」同一道把关：未载入文件 / 空内容 / 校验不过都不写。
+        // UI 按钮已按 can_save 置灰，这里是防御性兜底。
+        if !self.forms.editor.can_save() {
+            self.push_event(
+                EventKind::Error,
+                &self
+                    .forms
+                    .editor
+                    .validate(true)
+                    .err()
+                    .unwrap_or_else(|| t("dialog_msg_choose_dump_file")),
+            );
+            return;
+        }
+        let name = self.forms.editor.file_name.clone().unwrap_or_default();
+        // 副本名由原 stem + `_edit_` + 时间戳拼成（stem 可为中文，但只可能是
+        // 单个文件名、不含路径分隔符），故 join `dumpfiles/` 无需再过 `is_plain_name`。
+        let copy = nfc_core::paths::Paths::edited_copy_name(&name, &nfc_core::paths::timestamp());
+        let path = self.paths.dumpfiles_dir().join(&copy);
+        if self.write_editor_to(&path, false) {
+            self.confirm = Some(dialogs_ui::ConfirmModal::new(
+                dialogs_ui::ConfirmKind::WriteDump {
+                    dump: path.to_string_lossy().into_owned(),
+                },
+                &dialogs_ui::danger_title(),
+                t("dialog_msg_confirm_write_dump"),
+            ));
         }
     }
 
@@ -1062,12 +1141,15 @@ impl NfcApp {
             // 系统弹窗投递到工作线程；结果回来后再走确认窗 → 派发。
             // 「选哪个文件」与「是否真的写」是两步，故这里只管第一步。
             "write-IC" => match arg {
-                // 引导条「写这张卡」带 dumpId：原版直接跳到确认框
-                // （command.js:127-130），故不弹文件框。
                 Some(dump) => {
-                    // 与 comparator 同一道防线：dumpId 是裸文件名
-                    // （engine 会拼 dumpfiles/），带分隔符的一律拒绝。
-                    if !nfc_core::dumpfiles::is_plain_name(&dump) {
+                    // 两种载荷：`dumpfiles/` 下的裸名（历史面板），或完整路径
+                    // （读盘引导条、编辑器「写入此转储」刚另存的副本）。裸名要过
+                    // `is_plain_name` 防线；完整路径不参与 join（engine 的
+                    // `prepare_write` → `resolve_dump_id` 对绝对路径原样使用），
+                    // 故无需该校验。
+                    let plain = nfc_core::dumpfiles::is_plain_name(&dump);
+                    let abs = std::path::Path::new(&dump).is_absolute();
+                    if !plain && !abs {
                         self.push_event(EventKind::Error, "非法的转储文件名");
                     } else {
                         self.confirm = Some(dialogs_ui::ConfirmModal::new(
@@ -1192,14 +1274,14 @@ impl NfcApp {
                     // 有完整来源（外部文件或 dumpfiles 内文件）且仍存在 → 写回原处。
                     // origin 被外部删除/改名（`!is_file`）时落到下方 dumpfiles 回落，
                     // 避免在已失效的旧路径上悄悄重建文件。
-                    self.write_editor_to(&origin);
+                    self.write_editor_to(&origin, true);
                 } else {
                     // 无 origin（从未载入）或 origin 已失效：回落 dumpfiles/<file_name>。
                     if !nfc_core::dumpfiles::is_plain_name(&current) {
                         self.push_event(EventKind::Error, "非法的转储文件名");
                         return;
                     }
-                    self.write_editor_to(&self.paths.dumpfiles_dir().join(&current));
+                    self.write_editor_to(&self.paths.dumpfiles_dir().join(&current), true);
                 }
             }
             "dump-comparator-choose-file" => {

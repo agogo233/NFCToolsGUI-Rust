@@ -78,6 +78,18 @@ impl Paths {
         format!("{uid}_{stamp}.mfd")
     }
 
+    /// 编辑器「写入此转储」的副本名：`{原 stem}_edit_{timestamp}.mfd`。
+    ///
+    /// 写卡前先另存一份，原始解卡结果不被覆盖（见 app 侧
+    /// `write_editor_to_card`）。扩展名恒为 `.mfd`：历史面板只列 `.mfd`
+    /// （`dumpfiles::list`），换个扩展名副本就会在那儿失踪、删不掉。
+    pub fn edited_copy_name(name: &str, stamp: &str) -> String {
+        let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
+        let stem = stem.trim();
+        let stem = if stem.is_empty() { "dump" } else { stem };
+        format!("{stem}_edit_{stamp}.mfd")
+    }
+
     /// 日志默认文件名：`NFCTools_log_{timestamp}.txt`。
     pub fn log_file_name(stamp: &str) -> String {
         format!("NFCTools_log_{stamp}.txt")
@@ -426,6 +438,16 @@ mod tests {
         );
         assert_eq!(Paths::dump_file_name("   ", "x"), "card_x.mfd");
         assert_eq!(Paths::dump_file_name("  AABBCCDD  ", "x"), "AABBCCDD_x.mfd");
+    }
+
+    #[test]
+    fn edited_copy_name_appends_marker() {
+        assert_eq!(
+            Paths::edited_copy_name("card_2024_01_01.mfd", "x"),
+            "card_2024_01_01_edit_x.mfd"
+        );
+        assert_eq!(Paths::edited_copy_name("dump.dump", "x"), "dump_edit_x.mfd");
+        assert_eq!(Paths::edited_copy_name(".mfd", "x"), "dump_edit_x.mfd");
     }
 
     #[test]

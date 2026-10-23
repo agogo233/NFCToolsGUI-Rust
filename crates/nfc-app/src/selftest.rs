@@ -425,24 +425,31 @@ fn c_dump_saved_guidance() -> Result<(), String> {
     if app.state.events.is_empty() {
         return Err("未追加 success 事件".into());
     }
+    // 落盘后应自动打开转储编辑器（解卡就是为了改卡；原版的 dumpEditor
+    // 没有写卡路径，此处一并补上）。文件不存在时仍开空面板，与
+    // `open-dump-editor` 载入失败也开面板的行为一致。
+    if !app.state.panels.dump_editor {
+        return Err("落盘后未自动打开转储编辑器".into());
+    }
     Ok(())
 }
 
 fn c_dump_saved_guidance_carries_dump_id() -> Result<(), String> {
     use nfc_core::state::Event;
     let mut app = NfcApp::new(nfc_core::state::AppState::new());
-    app.apply(Event::DumpSaved(std::path::PathBuf::from(
-        "/tmp/dumpfiles/aa.mfd",
-    )));
+    let path = "/tmp/dumpfiles/aa.mfd";
+    app.apply(Event::DumpSaved(std::path::PathBuf::from(path)));
     let (_, btns) = app.guidance.as_ref().ok_or("dump 已保存后未出引导")?;
     // 「写这张卡」必须带 dumpId：点击后直达确认框，不再弹一次文件框
-    // （对标 command.js:127-130 的带参跳确认框）
+    // （对标 command.js:127-130 的带参跳确认框）。带的是**完整路径**而非裸名——
+    // 用户在保存框选了 dumpfiles/ 之外的目录时，把裸名拼回 dumpfiles/
+    // 会指到一个不存在的文件。
     let write = btns
         .iter()
         .find(|(action, _, _)| *action == "write-IC")
         .ok_or("引导缺少 write-IC")?;
-    if write.2.as_deref() != Some("aa.mfd") {
-        return Err(format!("write-IC 未带 dumpId: {:?}", write.2));
+    if write.2.as_deref() != Some(path) {
+        return Err(format!("write-IC 未带完整路径: {:?}", write.2));
     }
     // 「打开 dump 目录」不需要参数
     let open = btns
@@ -1174,6 +1181,83 @@ fn c_editor_save_action() -> Result<(), String> {
         app.pending.last(),
         Some(Action::SaveDump { save_as: true, .. })
     ));
+
+    use nfc_core::state::EventKind;
+    // 「写入此转储」：未连接设备时被门禁拦下，留下可见错误且不弹确认框
+    app.write_editor_to_card();
+    if app.confirm.is_some() {
+        return Err("未连接设备竟弹出写卡确认框".into());
+    }
+    if !app.state.events.iter().any(|e| e.kind == EventKind::Error) {
+        return Err("门禁拒绝无可读反馈".into());
+    }
+
+    // 连上设备后：先另存一份 `_edit_` 副本（不覆盖原始解卡结果），再弹确认框
+    let d2 = TempDir::new("editor-write");
+    app.state.is_device_connected = true;
+    app.state.device_state = nfc_core::state::DeviceState::Connected;
+    app.paths = nfc_core::paths::Paths::new(d2.0.clone());
+    app.dialogs_host = DialogHost::manual();
+    app.file_dialogs_ok = true;
+    let _ = std::fs::create_dir_all(&app.paths.dumpfiles_dir());
+    let src = app.paths.dumpfiles_dir().join("a.mfd");
+    std::fs::write(&src, sample_dump(2)).unwrap();
+    app.forms
+        .editor
+        .load(Some("a.mfd".into()), &sample_dump(2))
+        .map_err(|e| e.to_string())?;
+    app.forms.editor.origin = Some(src.clone());
+    app.write_editor_to_card();
+
+    // 「写入此转储」不该把编辑器的「当前文件」切到那份快照——切过去之后
+    // 「保存」就写快照，而原始解卡结果会永远停在旧内容。
+    if app.forms.editor.file_name.as_deref() != Some("a.mfd") {
+        return Err(format!(
+            "写入此转储后当前文件名被切走: {:?}",
+            app.forms.editor.file_name
+        ));
+    }
+    if app.forms.editor.origin.as_ref() != Some(&src) {
+        return Err(format!(
+            "写入此转储后 origin 被切走: {:?}",
+            app.forms.editor.origin
+        ));
+    }
+
+    // dumpfiles/ 里应多出且只多出 1 份副本，名字以 `_edit_` 为标记
+    let mut files = nfc_core::dumpfiles::list(&app.paths.dumpfiles_dir());
+    files.sort();
+    if files.len() != 2 {
+        return Err(format!("应「原文件 + 1 份副本」，实际 {files:?}"));
+    }
+    let copy = files
+        .iter()
+        .find(|f| f.starts_with("a_edit_"))
+        .ok_or("未生成 _edit_ 副本")?;
+    // 历史面板只列 .mfd，副本扩展名必须仍是 .mfd 否则在那儿看不见、删不掉
+    if !copy.ends_with(".mfd") {
+        return Err(format!("副本扩展名应为 .mfd: {copy}"));
+    }
+    if std::fs::read(&src).unwrap() != sample_dump(2) {
+        return Err("原文件被写卡副本覆盖了".into());
+    }
+    // 确认框必须指向那份副本的完整路径（而非原来的 a.mfd）
+    let full = app
+        .paths
+        .dumpfiles_dir()
+        .join(copy)
+        .to_string_lossy()
+        .into_owned();
+    let got = match app.confirm {
+        Some(m) => match m.kind {
+            ConfirmKind::WriteDump { dump } => dump,
+            other => format!("{other:?}"),
+        },
+        None => String::new(),
+    };
+    if got != full {
+        return Err(format!("确认框未指向副本: {got:?}，应为 {full:?}"));
+    }
     Ok(())
 }
 
@@ -1809,6 +1893,33 @@ fn c_read_ic_save_round_trip() -> Result<(), String> {
     }
     if app.engine.pending_save().is_some() {
         return Err("续接后请求应被取走".into());
+    }
+    // 落盘成功后应自动打开编辑器并载入刚存的文件（解卡即改卡）
+    if !app.state.panels.dump_editor {
+        return Err("落盘后未自动打开转储编辑器".into());
+    }
+    if app.forms.editor.origin.as_ref() != Some(&target) {
+        return Err(format!(
+            "编辑器未载入用户选的路径: {:?}",
+            app.forms.editor.origin
+        ));
+    }
+    if app.forms.editor.sectors.len() != 1 {
+        return Err(format!(
+            "编辑器扇区数 {}: 64 字节应为 1 扇区",
+            app.forms.editor.sectors.len()
+        ));
+    }
+    // 引导条必须指向用户真正存的那条完整路径——选在 dumpfiles/ 之外时，
+    // 把裸名拼回 dumpfiles/ 会指到一个不存在的文件。
+    let (_, btns) = app.guidance.as_ref().ok_or("落盘后未出引导条")?;
+    let write = btns
+        .iter()
+        .find(|(action, _, _)| *action == "write-IC")
+        .ok_or("引导缺少 write-IC")?;
+    let want = target.to_string_lossy().into_owned();
+    if write.2.as_deref() != Some(want.as_str()) {
+        return Err(format!("write-IC 未带完整路径: {:?}，应为 {want}", write.2));
     }
     Ok(())
 }
