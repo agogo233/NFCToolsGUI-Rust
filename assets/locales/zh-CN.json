@@ -258,5 +258,8 @@
     "html_tip_mfcuk_run": "全加密卡的密钥爆破 (mfcuk, 不一定成功)",
     "log_msg_serial_enum_failed": "串口枚举失败",
     "html_copy_log": "复制日志",
-    "html_tip_copy_log": "复制全部日志到剪贴板"
+    "html_tip_copy_log": "复制全部日志到剪贴板",
+    "html_dump_view_byte": "字节视图",
+    "html_dump_view_continuous": "连续视图",
+    "html_tip_dump_view": "切换转储数据的显示方式（每字节空一格 / 连成一串）"
 }

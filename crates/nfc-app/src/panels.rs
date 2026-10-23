@@ -359,6 +359,18 @@ pub struct Forms {
     pub history_focus_request: bool,
 }
 
+/// 转储编辑器的 hex 显示方式（docs/02 §6.40）。
+///
+/// `Continuous` 是原版形态（一整个块的 32 个 hex 连成一串），
+/// `Byte` 是每字节空一格且大写（`00 01 02 03 ...`），便于对照
+/// 资料逐个字节定位。两者共用同一份 `sectors`，只是屏幕上怎么摆。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ViewMode {
+    #[default]
+    Continuous,
+    Byte,
+}
+
 /// `dumpEditor.html` 的表单：每扇区一个 4 行文本框。
 ///
 /// 原版每扇区是**一个** `contenteditable` 的 div，内含 4 行
@@ -381,6 +393,46 @@ pub struct EditorForm {
     pub dirty: bool,
     /// S18：上次「体检全卡」的结果（逐扇区问题）。空 = 未体检或无问题。
     pub check_issues: Vec<nfc_core::model::dumpcheck::CheckIssue>,
+    /// hex 显示方式。只改屏幕排布，`sectors` 不受影响，故保存 / 写卡走的
+    /// 仍是同一份数据（docs/02 §6.40）。
+    pub view_mode: ViewMode,
+    /// 字节视图下的显示缓存：每扇区一个含空格、大写的 4 行文本。
+    ///
+    /// 不能每帧拿 `sectors` 重新排版——那会变成「用户刚打出来的字符串」的
+    /// 加空格版本，而 egui 的光标位置以「上一帧画出来的字符串」为基准，
+    /// 重排会让每次击键后光标跳回行首。故编辑后把原文存进来，下一帧原样
+    /// 画回去；仅在切模式 / 载入 / 修复时重建。
+    pub byte_view: Vec<String>,
+}
+
+/// 一行 32 hex → `00 01 02 03 ...`（大写、每字节之间空一格）。
+fn to_byte_view_line(line: &str) -> String {
+    let flat: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+    flat.chars()
+        .collect::<Vec<char>>()
+        .chunks(2)
+        .map(|pair| {
+            pair.iter()
+                .copied()
+                .collect::<String>()
+                .to_ascii_uppercase()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// 字节视图的编辑内容 → 4 行 × 32 小写 hex。
+///
+/// 空白（含换行）一律当分隔符，因此整段粘贴连续 hex 同样可用。
+/// 尾部**不补零**：短了就让 `validate` 报 `LineLength`，而不是静默产出坏数据。
+fn from_byte_view_text(text: &str) -> Sector {
+    let flat: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    flat.to_ascii_lowercase()
+        .chars()
+        .collect::<Vec<char>>()
+        .chunks(32)
+        .map(|row| row.iter().copied().collect::<String>())
+        .collect()
 }
 
 impl EditorForm {
@@ -392,7 +444,35 @@ impl EditorForm {
         // 载入新内容即作废旧来源：调用方按需重设 origin，避免 file_name 与
         // origin 指向不同文件（两处 `load_dump_*` 都在成功处赋 origin）。
         self.origin = None;
+        // 显示缓存随数据一起重建，否则切到字节视图会看到上一份 dump 的旧内容
+        self.rebuild_byte_view();
         Ok(())
+    }
+
+    /// 切换到另一种 hex 显示方式（连续 ↔ 字节分组）。
+    pub fn toggle_view(&mut self) {
+        self.view_mode = match self.view_mode {
+            ViewMode::Continuous => ViewMode::Byte,
+            ViewMode::Byte => ViewMode::Continuous,
+        };
+        // 双向都重建：切去字节视图时保证缓存是最新的；切回连续视图时清掉
+        // 上次留在缓存里的（可能已被编辑过的）排布，下次进来重新从 sectors 生成
+        self.rebuild_byte_view();
+    }
+
+    /// 用 `sectors` 重建字节视图显示缓存。
+    fn rebuild_byte_view(&mut self) {
+        self.byte_view = self
+            .sectors
+            .iter()
+            .map(|sector| {
+                sector
+                    .iter()
+                    .map(to_byte_view_line)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .collect()
     }
 
     /// 结构 + 内容校验（`dumpEditor.js:98-118` 的 `checkData`）。
@@ -1159,6 +1239,15 @@ fn dump_editor(ui: &mut Ui, app: &mut NfcApp) -> bool {
         // S18：值块徽章需知卡容量（1K=16 扇区）；iteration 内只读这个拷贝，
         // 不在此处再拦 `sectors`，避免与 `iter_mut` 的圈入冲突。
         let editor_is_1k = app.forms.editor.sectors.len() == 16;
+        // 字节视图（docs/02 §6.40）：模式与显示缓存都在循环外取走，
+        // 循环内只动本扇区。缓存每帧整份拷进局部、改完再写回——
+        // 直接跨 `iter_mut` 访问 `byte_view` 会踩 E0502。
+        let in_byte = app.forms.editor.view_mode == ViewMode::Byte;
+        let mut byte_view_buf = if in_byte {
+            app.forms.editor.byte_view.clone()
+        } else {
+            Vec::new()
+        };
         ScrollArea::vertical().show(ui, |ui| {
             for (si, sector) in app.forms.editor.sectors.iter_mut().enumerate() {
                 // 校验（`dumpEditor.js:98-118` 的 checkData）
@@ -1209,17 +1298,34 @@ fn dump_editor(ui: &mut Ui, app: &mut NfcApp) -> bool {
                             );
                         }
                     });
-                    // 把 4 行拼成带换行的单串，交给一个 multiline 输入
-                    let mut text = sector.join("\n");
-                    let resp = ui.add(
-                        egui::TextEdit::multiline(&mut text)
-                            .desired_rows(4)
-                            .desired_width(f32::INFINITY)
-                            .font(egui::TextStyle::Monospace),
-                    );
+                    // 把 4 行拼成带换行的单串，交给一个 multiline 输入。
+                    // 字节视图改用显示缓存 + 独立控件 id（docs/02 §6.40）：
+                    // 缓存里是「用户上次打出来的原文」，下一帧原样画回去，
+                    // egui 的光标才不会每次击键后跳回行首。
+                    let mut text = if in_byte {
+                        byte_view_buf.get(si).cloned().unwrap_or_default()
+                    } else {
+                        sector.join("\n")
+                    };
+                    let builder = egui::TextEdit::multiline(&mut text)
+                        .desired_rows(4)
+                        .desired_width(f32::INFINITY)
+                        .font(egui::TextStyle::Monospace);
+                    let resp = if in_byte {
+                        ui.add(builder.id_salt("byte-view"))
+                    } else {
+                        ui.add(builder)
+                    };
                     if resp.changed() {
                         dirty = true;
-                        *sector = text.split('\n').map(str::to_owned).collect();
+                        if in_byte {
+                            if let Some(slot) = byte_view_buf.get_mut(si) {
+                                *slot = text.clone();
+                            }
+                            *sector = from_byte_view_text(&text);
+                        } else {
+                            *sector = text.split('\n').map(str::to_owned).collect();
+                        }
                     }
                 });
                 ui.add_space(4.0);
@@ -1227,6 +1333,9 @@ fn dump_editor(ui: &mut Ui, app: &mut NfcApp) -> bool {
         });
         if dirty {
             app.forms.editor.dirty = true;
+        }
+        if in_byte {
+            app.forms.editor.byte_view = byte_view_buf;
         }
     }
 
@@ -1269,6 +1378,23 @@ fn dump_editor(ui: &mut Ui, app: &mut NfcApp) -> bool {
         .unwrap_or_else(|| "-".to_owned());
     ui.horizontal(|ui| {
         ui.label(format!("{}{name}", t("html_current_file")));
+        // 显示方式切换（docs/02 §6.40）：连续 hex ↔ 每字节空一格的大写。
+        // 放在文件条上而不是按钮行——底部已 7 个按钮且窄窗口会换行，
+        // 再加一个只会更挤；且它属于「怎么显示」，和打开 / 保存 / 写卡
+        // 那一排处理操作分开更清楚。按钮文字是**切换后的目标**视图，
+        // 故两种状态各需一条文案。
+        let label = if app.forms.editor.view_mode == ViewMode::Continuous {
+            t("html_dump_view_byte")
+        } else {
+            t("html_dump_view_continuous")
+        };
+        if ui
+            .button(label)
+            .on_hover_text(t("html_tip_dump_view"))
+            .clicked()
+        {
+            app.forms.editor.toggle_view();
+        }
     });
     // 7 个按钮在窄窗口下装不下一行，改自动换行而不是横向溢出（docs/02 §6.29）。
     ui.horizontal_wrapped(|ui| {
@@ -1319,6 +1445,9 @@ fn dump_editor(ui: &mut Ui, app: &mut NfcApp) -> bool {
             match nfc_core::model::dumpcheck::fix(&app.forms.editor.sectors) {
                 Ok((fixed, items)) => {
                     app.forms.editor.sectors = fixed;
+                    // 修复改写了扇区，字节视图的显示缓存必须跟着重建，
+                    // 否则停在字节视图时会继续看到修复前的内容（docs/02 §6.40）
+                    app.forms.editor.rebuild_byte_view();
                     app.forms.editor.dirty = true;
                     app.forms.editor.check_issues.clear();
                     // 修复日志逐条写进控制台
