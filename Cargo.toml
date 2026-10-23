@@ -6,8 +6,8 @@ resolver = "2"
 # CPU 优化级别对体验无感知影响）；`lto = true` 全 LTO 提升死代码消除与内联；
 # `strip = "debuginfo"` 连调试段一并剥离。实测 release 产物约 10-13MB
 # （Linux x86_64，未含 framework/bin）。原版 Electron 打包后约 100MB+，此处不设上限。
-# `[profile.release.package."*"]` 把同一组配置下推到全部依赖链，避免某个依赖
-# 用默认 debug 级编译把体积撑大。
+# `[profile.release.package."*"]` 把 opt-level 下推到全部依赖链，避免某个依赖
+# 用默认 debug 级编译把体积撑大。（`panic` 不能写在 package 段，只在根 profile。）
 [profile.release]
 opt-level = "z"
 lto = true
@@ -17,4 +17,3 @@ panic = "abort"
 
 [profile.release.package."*"]
 opt-level = "z"
-panic = "abort"

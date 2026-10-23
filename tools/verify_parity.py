@@ -1375,8 +1375,9 @@ def s4_model() -> None:
     # ── S12 交付层守卫 ──────────────────────────────────────────────
     ct = rd(REPO / "Cargo.toml")
     check("[profile.release]" in ct, "S12 有 release profile")
-    for k in ['panic = "abort"', "strip = true", 'lto = "thin"']:
+    for k in ['panic = "abort"', 'strip = "debuginfo"', "lto = true", 'opt-level = "z"']:
         check(k in ct, f"S12 release profile 含 {k}")
+    check("[profile.release.package." in ct, "S12 release profile 含 package.* 段")
     check("pub fn missing_tools" in rs, "S12 有 framework/bin 启动自检")
     check("KNOWN_TOOLS" in rs, "S12 列出已知工具清单")
     check("MAX_LOOKUP_LEVELS" in rs, "S12 framework_bin 上溯有层数上限")
