@@ -1528,10 +1528,12 @@ impl NfcApp {
             .inner_margin(egui::Margin::symmetric(10, 6))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    // 整行统一文字垂直基准：Button/ComboBox 按 button_padding 靠下，
-                    // Label 走 cross_align 居中，混用会让「选择设备 / 未连接设备 / 工具」
-                    // 左右台阶式下沉，故在本行范围内强制 Center（style 是 CoW，只影响
-                    // 本 horizontal 及其子控件，不污染全局 style）。
+                    // 台阶的真正成因：ui.horizontal 的初始行高固定为 interact_size.y(24)，
+                    // 而 ComboBox 默认 button_padding.y=8 会把按钮撑到 ~34 并向行底溢出。
+                    // 压到 2 让所有按钮都落在 24 行内，整行文字中心线统一。
+                    ui.spacing_mut().button_padding.y = 2.0;
+                    // 文字在按钮内垂直居中（Button 的 atom 走 text_valign）。style 是 CoW，
+                    // 只影响本 horizontal 及其子控件，不污染全局 style。
                     ui.style_mut().override_text_valign = Some(Align::Center);
                     // 左上角 logo（20px，见 `main.rs::load_title_logo`）。
                     if let Some(tex) = &self.logo {
@@ -1736,10 +1738,20 @@ impl NfcApp {
             DeviceState::Connected => t("html_device_connected"),
             DeviceState::Failed => t("html_device_failed"),
         };
-        let inner = ui.horizontal(|ui| {
-            ui.colored_label(dot, RichText::new("●").size(10.0));
-            ui.label(RichText::new(&text).size(12.0));
-        });
+        // 裸 `ui.horizontal` 是 scope：子 Ui 的 available_rect 从行顶开始、不参与
+        // 父行的 cross_align 居中，会让胶囊比两侧 ComboBox 高一截。改用固定高度的
+        // 容器走 next_space，外框才会按父行 cross_align 居中；宽度给 0 即可——
+        // cursor 按 widget_rect 推进、Label 是 Extend 模式（main_wrap=false），
+        // 内容自然撑开，无需硬编码宽度。
+        let chip_h = ui.spacing().interact_size.y;
+        let inner = ui.allocate_ui_with_layout(
+            egui::vec2(0.0, chip_h),
+            Layout::left_to_right(Align::Center),
+            |ui| {
+                ui.colored_label(dot, RichText::new("●").size(10.0));
+                ui.label(RichText::new(&text).size(12.0));
+            },
+        );
         inner.response.on_hover_text(&text);
     }
 
