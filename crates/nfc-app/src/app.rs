@@ -2186,13 +2186,15 @@ impl NfcApp {
     }
 
     /// 日志区：`console_bg` 卡片 + 可选中复制的多行等宽输入，保留自动滚底 / 锁滚动。
+    /// 只渲染尾部窗口（`log_view`），避免每帧 clone + 布局 1MB 文本导致卡帧；
+    /// 保存 / 复制仍取全量 `log_buffer`。
     fn log_panel(&mut self, ui: &mut Ui, log_h: f32, paint: theme_ui::Paint) {
         Frame::NONE
             .fill(paint.color(paint.console_bg))
             .corner_radius(egui::CornerRadius::same(nfc_core::theme::RADIUS[0] as u8))
             .inner_margin(egui::Margin::symmetric(8, 6))
             .show(ui, |ui| {
-                let mut editable = self.state.log_buffer.clone();
+                let mut editable = self.state.log_view();
                 ScrollArea::vertical()
                     .id_salt("log")
                     .stick_to_bottom(!self.lock_scroll)

@@ -25,12 +25,12 @@ cargo run -p nfc-app --release     # 运行 GUI
 cargo run -p nfc-core -- --selftest   # 14 项核心行为（不开窗口）
 cargo run -p nfc-app  -- --selftest   # 90 项界面 + 接线
 
-cargo test --workspace             # 541 项
+cargo test --workspace             # 549 项
 cargo test -p nfc-core --test real_tools --test tool_cli   # 需要 framework/bin（否则自动跳过）
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --workspace --all-targets --features real-serial -- -D warnings   # CI 额外跑一次：RealSerial 平时不参与编译
 cargo fmt --all --check
-python3 tools/verify_parity.py     # 819 项静态门禁（39 action parity 表 + 接线守卫）
+python3 tools/verify_parity.py     # 826 项静态门禁（39 action parity 表 + 接线守卫）
 ./scripts/package.sh               # 构建 + 打包 out/NFCToolsGUI-win-x64.zip
 ./scripts/package.sh --check       # 只跑门禁与检测
 ```

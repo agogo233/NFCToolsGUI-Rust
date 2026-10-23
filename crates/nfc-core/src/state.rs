@@ -13,6 +13,13 @@ use crate::paths::DEVICE_SPEED;
 
 /// 事件列表上限（对标原版保留最近 30 条）。
 pub const EVENT_LIMIT: usize = 30;
+/// `log_buffer` 字节上限（§6.39）：超限即从换行行首截断，给长跑任务（读卡 /
+/// 字典攻击）的日志内存留个硬顶。原版 renderer 是字符级双上限
+/// （fullLog 5M / 显示区 500K），本重写按字节做单缓冲。
+pub const LOG_CAP: usize = 1 << 20;
+/// 日志区可见窗口字节数（§6.39）：只渲染尾部这么多字节，
+/// 避免每帧 clone + egui 重排 1MiB 文本造成 UI 卡顿。
+pub const LOG_VIEW: usize = 256 << 10;
 
 /// 设备连接状态，驱动顶部状态条配色。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -309,7 +316,7 @@ impl AppState {
                         self.exit_log(false);
                     } else {
                         let c = code.unwrap_or_default();
-                        self.log_buffer.push_str(&format!("\nexit code: {c}"));
+                        self.append_log(&format!("\nexit code: {c}"));
                         self.push_event(EventItem {
                             kind: EventKind::Error,
                             text: format!("{}{c}", i18n::t("event_task_failed")),
@@ -337,6 +344,8 @@ impl AppState {
 
     /// 追加日志文本。对标 renderer `onUpdateLogOutput`：块内含 `\33[2K` 时，
     /// 先把已有日志截断回最后一个 `\n`（无 `\n` 则清空），再剥离该转义序列后追加。
+    /// 追加后过 `LOG_CAP` 截断（§6.39）——所有日志追加都走这里（清空 / 重置除外），
+    /// 直推 `log_buffer` 会绕过上限。
     fn append_log(&mut self, chunk: &str) {
         if chunk.contains("\u{1b}[2K") {
             // 原版 index.js:21-23 —— `substring(0, lastIndexOf('\n'))`。
@@ -347,10 +356,66 @@ impl AppState {
                 Some(pos) => self.log_buffer.truncate(pos + 1),
                 None => self.log_buffer.clear(),
             }
+            // 只在这一支分配：普通日志块原地追加，不复制字符串。
             self.log_buffer.push_str(&chunk.replace("\u{1b}[2K", ""));
         } else {
             self.log_buffer.push_str(chunk);
         }
+        self.enforce_log_cap();
+    }
+
+    /// `LOG_CAP` 截断（§6.39）：从 `len - LOG_CAP` 起取第一个换行行首作截断点，
+    /// 保留不超过 `LOG_CAP` 字节的尾部且行首完整、不留下半截行；
+    /// 单行超长、窗口内无换行时只能切在行中间（此时保留量偏小）。
+    fn enforce_log_cap(&mut self) {
+        let len = self.log_buffer.len();
+        if len <= LOG_CAP {
+            return;
+        }
+        // 从 `len - LOG_CAP` 向后取第一个换行行首作截断点：截断后保留
+        // `len - start ≤ LOG_CAP`，且起点是完整行首、不留下半截行。
+        // 字节下标可能落在多字节字符中间（`get` 对非边界下标返回 None、
+        // `drain` 在非边界 panic），故先校正到字符边界；校正量最多 3 字节。
+        let mut cut = len - LOG_CAP;
+        while cut < len && !self.log_buffer.is_char_boundary(cut) {
+            cut += 1;
+        }
+        if cut >= len {
+            return; // 校正后已在上限内
+        }
+        let start = self
+            .log_buffer
+            .get(cut..)
+            .and_then(|tail| tail.find('\n'))
+            .map_or(cut, |pos| cut + pos + 1);
+        // 窗口内唯一换行就在末字节时截断后为空，退回纯尾部（此时只能切在一行中间）。
+        let start = if start < len { start } else { cut };
+        self.log_buffer.drain(..start);
+    }
+
+    /// 日志区可见窗口（§6.39）：只取尾部 `LOG_VIEW` 字节，避免每帧 clone +
+    /// egui 布局 1MB 文本导致卡帧。起始点校正到行首，首行不会只剩半行；
+    /// 单行超长（无 `\n`）时退化为纯尾部。保存 / 复制仍取 `log_buffer` 全量。
+    pub fn log_view(&self) -> String {
+        let len = self.log_buffer.len();
+        if len <= LOG_VIEW {
+            return self.log_buffer.clone();
+        }
+        let mut cut = len - LOG_VIEW;
+        while cut < len && !self.log_buffer.is_char_boundary(cut) {
+            cut += 1;
+        }
+        if cut >= len {
+            return self.log_buffer.clone();
+        }
+        let start = self
+            .log_buffer
+            .get(cut..)
+            .and_then(|tail| tail.find('\n'))
+            .map_or(cut, |pos| cut + pos + 1);
+        // 窗口内唯一换行就在末字节时截断后为空，退回纯尾部。
+        let start = if start < len { start } else { cut };
+        self.log_buffer[start..].to_owned()
     }
 
     /// 对标 execUtils.js::printExitLog：失败时置出错，否则复位为空闲，并追加日志尾。
@@ -366,7 +431,7 @@ impl AppState {
                 indicator: Indicator::Free,
             }
         };
-        self.log_buffer.push_str(&format!(
+        self.append_log(&format!(
             "\n{}",
             i18n::t(if failed {
                 "log_msg_error"
@@ -497,6 +562,129 @@ mod tests {
         // replace("\33[2K", "") 去掉**全部**清行序列。
         // 故 "a\n" 保留、两个清行序列都被剥掉，midtail 追加在后。
         assert_eq!(s.log_buffer, "a\nmidtail");
+    }
+
+    #[test]
+    fn log_buffer_is_capped_at_log_cap() {
+        // 每行 26 字节、共约 2MiB 日志，按 8000 行一段喂入（等价于工具分块输出）。
+        let lines: Vec<String> = (0..80_000u32)
+            .map(|i| format!("L{:08} 日志内容。\n", i))
+            .collect();
+        let mut s = AppState::new();
+        for batch in lines.chunks(8_000) {
+            s.apply(Event::Log(batch.concat()));
+        }
+        assert!(
+            s.log_buffer.len() <= LOG_CAP,
+            "log_buffer 未受 LOG_CAP 约束: {} 字节",
+            s.log_buffer.len()
+        );
+        let kept: Vec<&str> = s.log_buffer.lines().collect();
+        assert!(kept.len() >= 2);
+        // 保留的是**尾部**（不是头部）：行号递增，末行是最后一条日志
+        let idx = |l: &str| l[1..9].parse::<u32>().unwrap();
+        assert!(
+            idx(kept.first().copied().unwrap()) < idx(kept.last().copied().unwrap()),
+            "截断了尾部而非头部"
+        );
+        assert_eq!(kept.last().copied().unwrap(), "L00079999 日志内容。");
+        // 截断点在行首：首行也是完整行（25 字节），不残留半截行
+        assert_eq!(kept.first().copied().unwrap().len(), 25);
+    }
+
+    #[test]
+    fn log_cap_without_newline_keeps_tail() {
+        // 单行超长：无 `\n` 可退，只能切在行中间，保留恰好 LOG_CAP 字节
+        let mut s = AppState::new();
+        s.apply(Event::Log(
+            std::iter::repeat_n('x', LOG_CAP + 1000).collect(),
+        ));
+        assert_eq!(s.log_buffer.len(), LOG_CAP, "无换行长行截断量不对");
+        assert!(s.log_buffer.chars().all(|c| c == 'x'));
+    }
+
+    #[test]
+    fn log_cap_keeps_multibyte_char_boundary() {
+        // `len - LOG_CAP` 正好落在多字节字符中间：不做字符边界校正就会截在
+        // 字符中间（`get` 返回 None → 截断点非边界 → `drain` panic）。
+        // 同时窗口内只有一个换行，断言钉住「取第一个换行」而非最后一个。
+        let mut payload = String::with_capacity(LOG_CAP + 101);
+        payload.extend(std::iter::repeat_n('a', 100));
+        payload.push('日'); // 3 字节，占 100..103，截断点 101 落在中间
+        payload.extend(std::iter::repeat_n('a', LOG_CAP - 12));
+        payload.push_str("\nbbbbbbbb\n");
+        let mut s = AppState::new();
+        s.apply(Event::Log(payload));
+        assert_eq!(s.log_buffer, "bbbbbbbb\n");
+    }
+
+    #[test]
+    fn log_at_cap_is_untouched() {
+        // 恰好等于上限不截断（判定是 `<=`；写成 `<` 会把尾部截掉）
+        let mut s = AppState::new();
+        let mut payload = String::with_capacity(LOG_CAP);
+        payload.extend(std::iter::repeat_n('a', LOG_CAP - 2));
+        payload.push_str("\nx"); // 总长恰好 LOG_CAP，含换行才能验证截断判定
+        s.apply(Event::Log(payload));
+        assert_eq!(s.log_buffer.len(), LOG_CAP, "等于上限被误截断");
+        // 临界点上再走一遍 `\33[2K` 分支：截回最后一个换行后追加，超出即再截
+        s.apply(Event::Log("\u{1b}[2Ktail\n".into()));
+        assert_eq!(s.log_buffer, "tail\n");
+    }
+
+    #[test]
+    fn log_view_returns_full_buffer_when_under_window() {
+        let mut s = AppState::new();
+        s.apply(Event::Log("短日志\n".into()));
+        assert_eq!(s.log_view(), "短日志\n");
+    }
+
+    #[test]
+    fn log_view_is_a_tail_window_with_complete_lines() {
+        let lines: Vec<String> = (0..80_000u32)
+            .map(|i| format!("L{:08} 日志内容。\n", i))
+            .collect();
+        let mut s = AppState::new();
+        for batch in lines.chunks(8_000) {
+            s.apply(Event::Log(batch.concat()));
+        }
+        let view = s.log_view();
+        assert!(view.len() <= LOG_VIEW, "窗口超出预期: {} 字节", view.len());
+        // 窗口内保留的是尾部行：行号递增，且每行都完整（25 字节）
+        let view_lines: Vec<&str> = view.lines().collect();
+        assert!(view_lines.len() >= 2);
+        let idx = |l: &str| l[1..9].parse::<u32>().unwrap();
+        assert!(
+            idx(view_lines.first().copied().unwrap()) < idx(view_lines.last().copied().unwrap()),
+            "窗口保留了头部而非尾部"
+        );
+        assert!(view_lines.iter().all(|l| l.len() == 25), "存在半截行");
+        assert!(view.ends_with("日志内容。\n"));
+    }
+
+    #[test]
+    fn log_view_single_long_line_falls_back_to_tail() {
+        // 单行超长：窗口内没有换行可退，只保纯尾部（恰好 LOG_VIEW 字节），不返回空窗口
+        let mut s = AppState::new();
+        s.apply(Event::Log(
+            std::iter::repeat_n('y', LOG_VIEW + 5000).collect(),
+        ));
+        let view = s.log_view();
+        assert_eq!(view.len(), LOG_VIEW);
+        assert!(view.chars().all(|c| c == 'y'));
+    }
+
+    #[test]
+    fn log_view_keeps_multibyte_char_boundary() {
+        // 窗口起点正好落在多字节字符中间：不校正边界就切在字符中间（UTF-8 越界）。
+        let mut payload = String::with_capacity(LOG_VIEW + 101);
+        payload.extend(std::iter::repeat_n('a', 100));
+        payload.push('日'); // 3 字节，占 100..103，窗口起点 101 落在中间
+        payload.extend(std::iter::repeat_n('a', LOG_VIEW - 12));
+        payload.push_str("\nbbbbbbbb\n");
+        let mut s = AppState::new();
+        s.apply(Event::Log(payload));
+        assert_eq!(s.log_view(), "bbbbbbbb\n");
     }
 
     #[test]

@@ -522,6 +522,48 @@ def m_contract() -> None:
     for bad in ['assert_eq!(events,', "assert_eq!(s,", "assert_eq!(&s,", "assert_eq!(state,"]:
         check(bad not in integ and bad not in serial, f"M 无 {bad}... 比较")
 
+    # S6.39：日志缓冲必须过封顶漏斗。此前 append_log 只追加不封顶，
+    # 长跑任务（读卡 / 字典攻击）把 log_buffer 越喂越大。
+    st = rd(CORE / "src/state.rs")
+    check(
+        "pub const LOG_CAP: usize = 1 << 20;" in st
+        and "pub const LOG_VIEW: usize = 256 << 10;" in st,
+        "M LOG_CAP = 1MiB / LOG_VIEW = 256KiB 常量值钉死",
+    )
+    check(
+        "Event::Log(s) => self.append_log(&s)," in st,
+        "M Event::Log 走 append_log 漏斗（不直推 log_buffer）",
+    )
+    al = st.find("fn append_log(")
+    seg4 = st[al : al + 900] if al >= 0 else ""
+    check(
+        seg4.find("self.enforce_log_cap();") > 0,
+        "M append_log 末尾强制 enforce_log_cap",
+    )
+    check(
+        st.count("self.log_buffer.push_str") == 2,
+        "M 直推 log_buffer 只剩 append_log 内两处（漏斗无旁路）",
+        str(st.count("self.log_buffer.push_str")),
+    )
+    # 截断必须校正到字符边界：非边界下标会让 get() 返回 None、drain() panic。
+    check(
+        "is_char_boundary(cut)" in st
+        and st.count("while cut < len && !self.log_buffer.is_char_boundary(cut)") == 2,
+        "M 截断 / 视图起点均校正字符边界（enforce_log_cap + log_view）",
+        str(st.count("while cut < len && !self.log_buffer.is_char_boundary(cut)")),
+    )
+    # UI 只渲染尾部窗口，保存 / 复制仍取全量（§6.35 同源保真）
+    app = rd(APP / "src/app.rs")
+    check(
+        "let mut editable = self.state.log_view();" in app,
+        "M 日志区渲染 log_view 尾部窗口",
+    )
+    check(
+        "ui.ctx().copy_text(self.state.log_buffer.clone());" in app
+        and "let text = self.state.log_buffer.clone();" in app,
+        "M 保存 / 复制日志取全量 log_buffer（不受窗口限制）",
+    )
+
 
 # ---------------------------------------------------------------- N 泛型声明
 STDLIB = {

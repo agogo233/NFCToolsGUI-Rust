@@ -7,7 +7,24 @@ build = "build.rs"
 
 [dependencies]
 nfc-core = { path = "../nfc-core" }
-eframe = "0.36"
+# 渲染后端钉死 **glow**：eframe 的 default 里带 `wgpu`，会编译 wgpu/naga/spirv 整栈
+# 并在运行时初始化 adapter/surface/shaders，把常驻内存抬到 160MB 级。
+# 本 UI 无 wgpu 专属用法，切 glow 后内存降到几十 MB。
+#
+# 特性集 = eframe default 减 `wgpu` 加 `glow`。**故意不含** `winit/default`
+# ——cargo 不允许在依赖 features 里写带斜杠的特性名，而 eframe 未把
+# `winit/default` 重导出。差异仅在 winit 的两个 Linux 专属特性
+# （`wayland-dlopen`、`wayland-csd-adwaita`）：本窗口本就
+# `decorations(false)` 自绘标题栏，且 Windows 目标机上完全无感。
+eframe = { version = "0.36", default-features = false, features = [
+    "accesskit",
+    "default_fonts",
+    "links",
+    "wayland",
+    "web_screen_reader",
+    "x11",
+    "glow",
+] }
 egui = "0.36"
 # 解码内嵌图标 PNG（app_icon 做窗口图标、title_icon 做标题栏 logo）。
 # 只开 png 特性，不拉全套图像编解码器。

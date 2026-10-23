@@ -92,6 +92,9 @@ fn main() -> eframe::Result {
         .unwrap_or_default();
 
     let options = eframe::NativeOptions {
+        // eframe 的 `Renderer::default()` 在 glow + wgpu 双特性并存时选 wgpu，
+        // 故这里显式钉 glow，避免将来误加 `wgpu` 特性后静默换回重后端。
+        renderer: eframe::Renderer::Glow,
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([WIN_W, WIN_H])
             // S15：允许缩放，内容随之弹性排布；下限挡住「挤成一条」的极端尺寸
