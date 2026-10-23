@@ -1294,14 +1294,20 @@ fn dump_editor(ui: &mut Ui, app: &mut NfcApp) -> bool {
                 nfc_core::model::dumpcheck::check(&app.forms.editor.sectors).unwrap_or_else(|e| e);
         }
         if ui.button(t("html_fix_dump")).clicked() {
-            if let Ok((fixed, items)) = nfc_core::model::dumpcheck::fix(&app.forms.editor.sectors) {
-                app.forms.editor.sectors = fixed;
-                app.forms.editor.dirty = true;
-                app.forms.editor.check_issues.clear();
-                // 修复日志逐条写进控制台
-                for line in nfc_core::model::dumpcheck::fix_report(&items) {
-                    app.state
-                        .apply(nfc_core::state::Event::Log(format!("\n{line}\n")));
+            match nfc_core::model::dumpcheck::fix(&app.forms.editor.sectors) {
+                Ok((fixed, items)) => {
+                    app.forms.editor.sectors = fixed;
+                    app.forms.editor.dirty = true;
+                    app.forms.editor.check_issues.clear();
+                    // 修复日志逐条写进控制台
+                    for line in nfc_core::model::dumpcheck::fix_report(&items) {
+                        app.state
+                            .apply(nfc_core::state::Event::Log(format!("\n{line}\n")));
+                    }
+                }
+                Err(issues) => {
+                    // 修复失败（结构/容量不合法）：把致命问题写进体检区，让用户看见
+                    app.forms.editor.check_issues = issues;
                 }
             }
         }
