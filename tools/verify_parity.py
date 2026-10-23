@@ -114,6 +114,11 @@ MFOC_PROBES_EXTRA = {
     "html_mfoc_probes",
     "html_mfoc_probes_tip",
 }
+# 日志框可选中复制 + 控制台「复制日志」按钮（docs/02 §6.35 登记）。
+LOG_COPY_EXTRA = {
+    "html_copy_log",
+    "html_tip_copy_log",
+}
 # S18 从「上游独有」挪回的 20 个 key：两版共有且文案逐字一致。
 S18_MIGRATED = {
     "dialog_msg_invalid_uid_input",
@@ -323,10 +328,10 @@ def h_i18n() -> None:
     keys = json.loads(rd(REPO / "assets/locales/zh-CN.json"))
     orig_zh_keys = set(rd_json(ORIG / "src/locales/zh-CN.json")) if not ORIG_MISSING else set()
     check(
-        len(keys) == 194 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(S18_MIGRATED),
-        f"H zh-CN.json {194 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(S18_MIGRATED)} key"
+        len(keys) == 194 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(S18_MIGRATED),
+        f"H zh-CN.json {194 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(S18_MIGRATED)} key"
         f"（基础 194 + S16 补 {len(S16_EXTRA)} + S17 补 {len(S17_EXTRA)}"
-        f" + S18 新增 {len(S18_EXTRA)} + MFOC_PROBES 补 {len(MFOC_PROBES_EXTRA)} + S18 迁移 {len(S18_MIGRATED)}）",
+        f" + S18 新增 {len(S18_EXTRA)} + MFOC_PROBES 补 {len(MFOC_PROBES_EXTRA)} + LOG_COPY 补 {len(LOG_COPY_EXTRA)} + S18 迁移 {len(S18_MIGRATED)}）",
         f"实际 {len(keys)}",
     )
     # S8 新增的 3 个 settings 按钮文案（原版 settings.html 硬编码英文，无 i18n key，
@@ -341,6 +346,8 @@ def h_i18n() -> None:
         check(k in keys, f"H zh-CN 含 S18 新增 {k}")
     for k in MFOC_PROBES_EXTRA:
         check(k in keys, f"H zh-CN 含 MFOC_PROBES {k}")
+    for k in LOG_COPY_EXTRA:
+        check(k in keys, f"H zh-CN 含 LOG_COPY {k}")
     for k in S18_MIGRATED:
         check(k in keys, f"H zh-CN 含 S18 迁移 {k}")
     for k in S18_MIGRATED:
@@ -976,7 +983,8 @@ def s4_model() -> None:
     check(".constrain_to(ctx.content_rect().shrink(16.0))" in pa, "S16 面板受视口约束，不再溢出窗口")
     # ── §6.28 P1 UI 打磨 ────────────────────────────────────────
     check("html_tip_clear_log" in ap and "html_tip_save_log" in ap
-          and "html_tip_stop_task" in ap and "html_tip_autoscroll" in ap,
+          and "html_tip_stop_task" in ap and "html_tip_autoscroll" in ap
+          and "html_tip_copy_log" in ap,
           "P1 控制台按钮都有悬停说明")
     check("on_disabled_hover_text" in ap and "html_tip_stop_idle" in ap,
           "P1 停止按钮禁用态也说明原因")
@@ -1577,7 +1585,7 @@ def s4_model() -> None:
     # 自动执行提示、文件框等待文案、检测结果“已知/未知”、历史重命名、
     # 控制台按钮悬停说明（§6.28 P1）
     # （docs/02 §6.25 续 / §6.28 / S16 偏离登记）。
-    LOCAL_EXTRA = S8_EXTRA | S11_EXTRA | S12_EXTRA | S15_EXTRA | S16_EXTRA | S17_EXTRA | S18_EXTRA | MFOC_PROBES_EXTRA
+    LOCAL_EXTRA = S8_EXTRA | S11_EXTRA | S12_EXTRA | S15_EXTRA | S16_EXTRA | S17_EXTRA | S18_EXTRA | MFOC_PROBES_EXTRA | LOG_COPY_EXTRA
     # 原版对拍基线（ORIG_REF）漂移时上游会新增 key，对应本重写**没有**的功能/结构。
     # 搬运这些文案没有意义（没有代码会 t() 它们），故显式登记为「上游有、我们不做」。
     # 若将来真要做对应功能，把 key 从这里挪进 LOCAL_EXTRA 即可。
@@ -1635,6 +1643,7 @@ def s4_model() -> None:
     check(S11_EXTRA <= set(i18n_asset), "R S11 补的无进展兜底文案在表内")
     check(S15_EXTRA <= set(i18n_asset), "R S15 补的 6 个 UI 文案在表内")
     check(S16_EXTRA <= set(i18n_asset), "R S16 补的 24 个 UI 文案在表内")
+    check(LOG_COPY_EXTRA <= set(i18n_asset), "R 日志复制补的 2 个文案在表内")
     check_orig(LOCAL_EXTRA.isdisjoint(orig_zh),
           f"R 本地补的 {len(LOCAL_EXTRA)} 个 key 确认原版不存在")
     check(UPSTREAM_ONLY.isdisjoint(set(i18n_asset)),
@@ -1648,8 +1657,8 @@ def s4_model() -> None:
           "R i18n key 名不得以标点结尾（疑似误建的新 key）",
           f"{[k for k in i18n_asset if k[-1:] in {':', '.', ',', ' ', '-', '_'}]}")
     # 本地补的 key 数量原本写死在 Rust 测试与此处两处，已漂移过一次。双向钉死。
-    check(len(LOCAL_EXTRA) == 14 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA),
-          "R 本地补的 i18n key 恰为 58 个", f"实际 {len(LOCAL_EXTRA)}")
+    check(len(LOCAL_EXTRA) == 14 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA),
+          "R 本地补的 i18n key 恰为 60 个", f"实际 {len(LOCAL_EXTRA)}")
     cd = rd(CORE / "src/command.rs")
     # rustfmt 会把字段拆成多行，故用 DOTALL 匹配整个结构体字面量
     specs = re.findall(

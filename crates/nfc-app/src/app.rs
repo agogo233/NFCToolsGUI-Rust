@@ -1988,7 +1988,7 @@ impl NfcApp {
         self.task_bar(ui, paint);
     }
 
-    /// 控制台头部：左侧标题，右侧自动滚动 / 停止 / 保存 / 清空。
+    /// 控制台头部：左侧标题，右侧自动滚动 / 停止 / 复制 / 保存 / 清空。
     fn console_header(&mut self, ui: &mut Ui) {
         let paint = self.paint();
         let danger = paint.color(paint.danger);
@@ -2005,6 +2005,9 @@ impl NfcApp {
                 if tip_button(ui, &t("html_save_log"), &t("html_tip_save_log")) {
                     let text = self.state.log_buffer.clone();
                     self.exec("save-log", Some(text));
+                }
+                if tip_button(ui, &t("html_copy_log"), &t("html_tip_copy_log")) {
+                    ui.ctx().copy_text(self.state.log_buffer.clone());
                 }
                 let stop =
                     egui::Button::new(RichText::new(t("html_stop_task")).color(danger).strong());
@@ -2095,15 +2098,14 @@ impl NfcApp {
         }
     }
 
-    /// 日志区：`console_bg` 卡片 + 只读多行等宽输入，保留自动滚底 / 锁滚动。
+    /// 日志区：`console_bg` 卡片 + 可选中复制的多行等宽输入，保留自动滚底 / 锁滚动。
     fn log_panel(&mut self, ui: &mut Ui, log_h: f32, paint: theme_ui::Paint) {
         Frame::NONE
             .fill(paint.color(paint.console_bg))
             .corner_radius(egui::CornerRadius::same(nfc_core::theme::RADIUS[0] as u8))
             .inner_margin(egui::Margin::symmetric(8, 6))
             .show(ui, |ui| {
-                let log = self.state.log_buffer.clone();
-                let mut editable = log;
+                let mut editable = self.state.log_buffer.clone();
                 ScrollArea::vertical()
                     .id_salt("log")
                     .stick_to_bottom(!self.lock_scroll)
@@ -2113,12 +2115,9 @@ impl NfcApp {
                             egui::TextEdit::multiline(&mut editable)
                                 .desired_width(f32::INFINITY)
                                 .font(egui::TextStyle::Monospace)
-                                .interactive(false),
+                                .interactive(true),
                         );
                     });
-                if editable != self.state.log_buffer {
-                    self.state.log_buffer = editable;
-                }
             });
     }
 
