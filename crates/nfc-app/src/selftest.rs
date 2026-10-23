@@ -109,6 +109,10 @@ pub fn run() -> eframe::Result {
         ("连接握手走到 Connected", c_connect_reaches_connected),
         ("连接失败落 Failed 不卡死", c_connect_failure_ends_in_failed),
         (
+            "cancel 连接后状态条落空闲",
+            c_connect_cancel_keeps_status_free,
+        ),
+        (
             "遮挡帧只调 logic 也要 pump",
             c_logic_drives_tick_when_window_occluded,
         ),
@@ -1514,6 +1518,12 @@ fn c_connect_reaches_connected() -> Result<(), String> {
     if !app.state.is_device_connected {
         return Err("is_device_connected 未置真".into());
     }
+    if !matches!(app.state.status.indicator, nfc_core::state::Indicator::Free) {
+        return Err(format!(
+            "连接成功后状态条未落「空闲」: {:?}",
+            app.state.status
+        ));
+    }
     Ok(())
 }
 
@@ -1535,6 +1545,40 @@ fn c_connect_failure_ends_in_failed() -> Result<(), String> {
     }
     if app.state.is_running_task {
         return Err("失败收尾也应释放任务位".into());
+    }
+    if !matches!(
+        app.state.status.indicator,
+        nfc_core::state::Indicator::Error
+    ) {
+        return Err(format!(
+            "连接失败后状态条未落「出错」: {:?}",
+            app.state.status
+        ));
+    }
+    Ok(())
+}
+
+/// cancel 连接握手段（§6.36 的 cancel 边界）：`cancel-task` 已把状态条置「空闲」，
+/// `ConnectFlow::finish` 被 kill（`exit.signal`）时不得再发 Status 盖成「出错」。
+fn c_connect_cancel_keeps_status_free() -> Result<(), String> {
+    let mut app = connected_app();
+    app.engine =
+        nfc_core::engine::Engine::new(Box::new(nfc_core::runner::MockToolRunner::new(vec![
+            nfc_core::runner::Chunk::stdout("NFC device: NFC_Device opened\n"),
+        ])));
+    app.exec("conn-usb-devices", Some("/dev/ttyACM0".into()));
+    app.consume_pending();
+    // 握手进行中（已收到 opened、进程尚未收尾）用户点「停止任务」
+    app.exec("cancel-task", None);
+    app.consume_pending();
+    for _ in 0..8 {
+        app.tick();
+    }
+    if !matches!(app.state.status.indicator, nfc_core::state::Indicator::Free) {
+        return Err(format!(
+            "cancel 连接后状态条应落「空闲」而非「出错」: {:?}",
+            app.state.status
+        ));
     }
     Ok(())
 }

@@ -459,6 +459,18 @@ def m_contract() -> None:
         and seg.find("Event::DeviceState(") < seg.find("Event::TaskDone"),
         "M finish 先 DeviceState 后 TaskDone（对齐原版顺序）",
     )
+    # 连接收尾必须复位状态条：成功落「空闲」、失败落「出错」。此前只发
+    # DeviceState + TaskDone 而从不发 Status，设备已连上时任务条仍挂在
+    # 「正在连接设备」（S13 死锁之外的第二个 UI 挂起点）。
+    # 用 `seg`（finish 起至文件尾）定位：`indicator_error` 串在 finish 之后只出现
+    # 一次（测试区写的是枚举名 `Indicator::Error` 而非 key 串），全文计数会因
+    # begin 两分支的存在而漏检「删掉 finish 的 error emit」。
+    check(seg.find("indicator_free") >= 0, "M finish 成功收尾复位状态条「空闲」")
+    check(seg.find("indicator_error") >= 0, "M finish 失败收尾复位状态条「出错」")
+    check(
+        seg.find("!exit.signal") >= 0,
+        "M 被 kill（cancel）时不复位状态条（killed 分支已 exit_log 定音，避免盖成出错）",
+    )
 
     gi_ = serial.find("pub fn judge_connect(")
     seg2 = serial[gi_ : gi_ + 400]
@@ -1013,8 +1025,8 @@ def s4_model() -> None:
     # 数 `("` 会漏。每项都以 `c_xxx,` 结尾。
     _vec = stf9[stf9.index("vec![") : stf9.index("];", stf9.index("vec!["))]
     n_cases = len(re.findall(r'\bc_[a-z0-9_]+\b', _vec))
-    check(n_cases == 88,
-          "S9-S18 UI selftest 88 项（79 原有 + S18 增 5 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1）",
+    check(n_cases == 89,
+          "S9-S18 UI selftest 89 项（79 原有 + S18 增 5 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1 + 连接收尾 cancel 1）",
           f"实际 {n_cases}")
 
     # ── S10 dump 三面板 ──────────────────────────────────────────
@@ -1144,8 +1156,8 @@ def s4_model() -> None:
     # selftest
     _vec2 = stf9[stf9.index("vec![") : stf9.index("];", stf9.index("vec!["))]
     n11 = len(re.findall(r"\bc_[a-z0-9_]+\b", _vec2))
-    check(n11 == 88,
-          "S11-S18 UI selftest 88 项（含 S18 新增 5 项 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1）",
+    check(n11 == 89,
+          "S11-S18 UI selftest 89 项（含 S18 新增 5 项 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1 + 连接收尾 cancel 1）",
           f"实际 {n11}")
 
     # ── S11-2 系统文件对话框 + 写卡接线 ───────────────────────────

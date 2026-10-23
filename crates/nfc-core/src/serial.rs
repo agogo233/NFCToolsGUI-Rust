@@ -222,6 +222,10 @@ impl ConnectFlow {
         });
         if let Err(e) = write_nfc_config(paths, &self.device, self.speed) {
             emit(Event::DeviceState(DeviceState::Failed));
+            emit(Event::Status {
+                text: i18n::t("indicator_error"),
+                indicator: Indicator::Error,
+            });
             return Err(e);
         }
         emit(Event::DeviceState(DeviceState::Connecting));
@@ -231,6 +235,10 @@ impl ConnectFlow {
         )));
         runner.start("nfc-list", &[], gs).map_err(|e| {
             emit(Event::DeviceState(DeviceState::Failed));
+            emit(Event::Status {
+                text: i18n::t("indicator_error"),
+                indicator: Indicator::Error,
+            });
             DeviceError::Tool(e)
         })
     }
@@ -289,6 +297,24 @@ impl ConnectFlow {
             code: exit.code,
             killed: exit.signal,
         });
+        // 自然退出才复位状态条，对齐普通任务的 printExitLog。`begin` 已发
+        // `indicator_connecting_device`，不复位则状态条永久挂「正在连接设备」。
+        // 被 kill（cancel）时 TaskDone 的 killed 分支已 exit_log 定音为「空闲」，
+        // 此处再发会把它盖成「出错」而自相矛盾，故 `exit.signal` 时跳过。
+        if !exit.signal {
+            emit(Event::Status {
+                text: i18n::t(if connected {
+                    "indicator_free"
+                } else {
+                    "indicator_error"
+                }),
+                indicator: if connected {
+                    Indicator::Free
+                } else {
+                    Indicator::Error
+                },
+            });
+        }
         Some(connected)
     }
 }
@@ -319,8 +345,11 @@ mod tests {
     /// 临时目录序号，避免同一进程内并行测试撞名。
     static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-    /// 父目录不存在的 base，用于触发 `fs::write` 失败。
-    const NO_PARENT: &str = "/nonexistent-parent-for-s3-test/nfc";
+    /// 父目录不可创建的 base，用于触发 `fs::create_dir_all` 失败。
+    ///
+    /// 走 `/proc`：即便以 root 运行，procfs 也不允许 `mkdir`，用例在
+    /// root / 普通用户下都稳定失败（`/` 下 root 能建目录会让它误判成功）。
+    const NO_PARENT: &str = "/proc/nonexistent-parent-for-s3-test/nfc";
 
     fn read_fixture(name: &str) -> String {
         fs::read_to_string(format!("{FIXTURES}{name}")).unwrap()
@@ -622,6 +651,36 @@ mod tests {
         assert!(events
             .iter()
             .any(|e| matches!(e, Event::DeviceState(DeviceState::Failed))));
+        // 状态条必须落「出错」，不能挂在「正在连接设备」
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Status { indicator, .. } if matches!(indicator, Indicator::Error)
+        )));
+        assert!(runner.started.is_empty());
+    }
+
+    #[test]
+    fn begin_spawn_rejection_marks_failed_and_status_error() {
+        let (paths, _guard) = tmp_guarded();
+        let mut runner = MockToolRunner::new(vec![]);
+        let mut flow = ConnectFlow::new("/dev/ttyACM0");
+        let mut events = Vec::new();
+        // 门禁拒 nfc-list（current_device 为空）→ begin 走 spawn 失败分支
+        let gs = GateState {
+            has_current_device: false,
+            is_device_connected: false,
+            is_running_task: false,
+            deep_scan: false,
+        };
+        let r = flow.begin(&paths, &mut runner, &gs, &mut |e| events.push(e));
+        assert!(matches!(r, Err(DeviceError::Tool(ToolError::NotConnected))));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, Event::DeviceState(DeviceState::Failed))));
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Status { indicator, .. } if matches!(indicator, Indicator::Error)
+        )));
         assert!(runner.started.is_empty());
     }
 
@@ -657,6 +716,34 @@ mod tests {
             .position(|e| matches!(e, Event::TaskDone { .. }))
             .unwrap_or_else(|| panic!("未见 TaskDone 事件，实际: {events:?}"));
         assert!(dev < done, "update-device-status 应早于 printExitLog");
+        // 连接成功收尾：状态条必须落「空闲」，不能挂在「正在连接设备」
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Status { indicator, .. } if matches!(indicator, Indicator::Free)
+        )));
+    }
+
+    #[test]
+    fn finish_failure_sets_status_error() {
+        let (paths, _guard) = tmp_guarded();
+        let mut runner = MockToolRunner::new(vec![Chunk::stderr_chunk(read_fixture(
+            "nfc-list-unable.txt",
+        ))]);
+        let mut flow = ConnectFlow::new("/dev/ttyACM0");
+        let mut events = Vec::new();
+        flow.begin(&paths, &mut runner, &gs(), &mut |e| events.push(e))
+            .unwrap();
+        flow.pump(&mut runner, &mut |e| events.push(e));
+        let done = flow.finish(&mut runner, &mut |e| events.push(e));
+        assert_eq!(done, Some(false), "unable 标记应判为未连接");
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, Event::DeviceState(DeviceState::Failed))));
+        // 连接失败收尾：状态条必须落「出错」，不能挂在「正在连接设备」
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Status { indicator, .. } if matches!(indicator, Indicator::Error)
+        )));
     }
 
     #[test]
