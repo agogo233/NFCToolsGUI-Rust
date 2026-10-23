@@ -2,12 +2,19 @@
 members = ["crates/nfc-core", "crates/nfc-app"]
 resolver = "2"
 
-# 发布构建。`strip` 去掉符号表与调试段，显著缩小体积（docs/02 §8 估 8-15MB）；
-# `panic = "abort"` 让 panic 直接终止而不展开栈——GUI 场景下栈回溯没有消费者，
-# 且省下 unwind 表。原版 Electron 打包后约 100MB+，此处不设上限。
+# 发布构建。`opt-level = "z"` 最激进体积优化（GUI 场景性能瓶颈在 I/O/GPU，
+# CPU 优化级别对体验无感知影响）；`lto = true` 全 LTO 提升死代码消除与内联；
+# `strip = "debuginfo"` 连调试段一并剥离。实测 release 产物约 10-13MB
+# （Linux x86_64，未含 framework/bin）。原版 Electron 打包后约 100MB+，此处不设上限。
+# `[profile.release.package."*"]` 把同一组配置下推到全部依赖链，避免某个依赖
+# 用默认 debug 级编译把体积撑大。
 [profile.release]
-opt-level = 3
-lto = "thin"
+opt-level = "z"
+lto = true
 codegen-units = 1
-strip = true
+strip = "debuginfo"
+panic = "abort"
+
+[profile.release.package."*"]
+opt-level = "z"
 panic = "abort"
