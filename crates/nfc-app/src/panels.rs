@@ -466,9 +466,11 @@ impl EditorForm {
             .sectors
             .iter()
             .map(|sector| {
+                // 收成 closure 而不是直接传函数项：`Sector` 是 `Vec<String>`，
+                // `.iter()` 产出 `&String`，而 `.map(fn)` 不做 deref 转换（E0631）
                 sector
                     .iter()
-                    .map(to_byte_view_line)
+                    .map(|line| to_byte_view_line(line))
                     .collect::<Vec<_>>()
                     .join("\n")
             })
