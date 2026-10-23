@@ -1025,8 +1025,8 @@ def s4_model() -> None:
     # 数 `("` 会漏。每项都以 `c_xxx,` 结尾。
     _vec = stf9[stf9.index("vec![") : stf9.index("];", stf9.index("vec!["))]
     n_cases = len(re.findall(r'\bc_[a-z0-9_]+\b', _vec))
-    check(n_cases == 89,
-          "S9-S18 UI selftest 89 项（79 原有 + S18 增 5 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1 + 连接收尾 cancel 1）",
+    check(n_cases == 90,
+          "S9-S18 UI selftest 90 项（79 原有 + S18 增 5 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1 + 连接收尾 cancel 1 + 重命名行渲染不提交 1）",
           f"实际 {n_cases}")
 
     # ── S10 dump 三面板 ──────────────────────────────────────────
@@ -1156,8 +1156,8 @@ def s4_model() -> None:
     # selftest
     _vec2 = stf9[stf9.index("vec![") : stf9.index("];", stf9.index("vec!["))]
     n11 = len(re.findall(r"\bc_[a-z0-9_]+\b", _vec2))
-    check(n11 == 89,
-          "S11-S18 UI selftest 89 项（含 S18 新增 5 项 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1 + 连接收尾 cancel 1）",
+    check(n11 == 90,
+          "S11-S18 UI selftest 90 项（含 S18 新增 5 项 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1 + 连接收尾 cancel 1 + 重命名行渲染不提交 1）",
           f"实际 {n11}")
 
     # ── S11-2 系统文件对话框 + 写卡接线 ───────────────────────────
@@ -1255,6 +1255,12 @@ def s4_model() -> None:
     check("lost_focus() ||" in pn,
           "S11-4 重命名：失焦与回车是 || 而非 &&")
     check("lost_focus() &&" not in pn, "S11-4 重命名不得写成互斥的 &&")
+    # ③b 重命名行的显示/交互（曾把 ✗ 当成提交、编辑中重复显示旧名、✎ 后不聚焦）
+    check("&& !cancel" in pn, "S11-4 重命名 ✗ 点击不得被同帧失焦吞成提交")
+    check("history_focus_request" in pn,
+          "S11-4 重命名 ✎ 后下一帧自动聚焦输入框（否则要点两次）")
+    check('ui.checkbox(&mut checked, "")' in pn,
+          "S11-4 重命名编辑中勾选框不再重复显示旧名")
     # ④ write-ufuid-uid 的确认框必须显示 block0（用户盲授权 = 安全问题）
     check("write_uid_confirm(&hex).message" in ap,
           "S11-4 write-ufuid-uid 确认正文含 block0 hex")

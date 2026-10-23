@@ -352,6 +352,11 @@ pub struct Forms {
     /// 另加一个「✓」按钮作为鼠标用户的后备（egui 的
     /// `key_pressed(Enter)` 在 `TextEdit` 内不一定被识别为提交）。
     pub history_rename: Option<(String, String)>,
+    /// S11-2：点「✎」后下一帧让重命名输入框自动获焦。
+    ///
+    /// egui 不会把当帧的鼠标点击转成新控件的聚焦请求（控件是下一帧才画出来
+    /// 的），否则用户得先点铅笔、再点一次输入框才能开始打字。
+    pub history_focus_request: bool,
 }
 
 /// `dumpEditor.html` 的表单：每扇区一个 4 行文本框。
@@ -1459,44 +1464,70 @@ fn dump_history(ui: &mut Ui, app: &mut NfcApp) -> bool {
             .auto_shrink([false, true])
             .show(ui, |ui| {
                 for f in &files {
-                    let sel = app.forms.history_selected.iter().any(|s| s == f);
-                    let mut checked = sel;
-                    if ui.checkbox(&mut checked, f).clicked() {
-                        if checked {
-                            app.forms.history_selected.push(f.clone());
+                    // 一行一项（勾选 + 名字 + 操作按钮）。外层是竖排，若不套
+                    // horizontal，✎ / 输入框 / ✓✗ 会各占一行，像断开的碎片。
+                    ui.horizontal(|ui| {
+                        let sel = app.forms.history_selected.iter().any(|s| s == f);
+                        let mut checked = sel;
+                        let editing = app
+                            .forms
+                            .history_rename
+                            .as_ref()
+                            .is_some_and(|(o, _)| o == f);
+                        // 编辑中勾选框不再重复显示旧名——原版是文件名**变成**输入框
+                        // （`dumpHistory.js:29-53`），旧名留在标签上会一行两遍名字。
+                        let box_resp = if editing {
+                            ui.checkbox(&mut checked, "")
                         } else {
-                            app.forms.history_selected.retain(|s| s != f);
+                            ui.checkbox(&mut checked, f.as_str())
+                        };
+                        if box_resp.clicked() {
+                            if checked {
+                                app.forms.history_selected.push(f.clone());
+                            } else {
+                                app.forms.history_selected.retain(|s| s != f);
+                            }
                         }
-                    }
-                    let editing = app
-                        .forms
-                        .history_rename
-                        .as_ref()
-                        .is_some_and(|(o, _)| o == f);
-                    if editing {
-                        let (_, text) = app.forms.history_rename.as_mut().unwrap();
-                        let r = ui.add(egui::TextEdit::singleline(text).desired_width(160.0));
-                        // 原版是「失焦**或**回车」提交（`dumpHistory.js:34`）。
-                        // egui 两者都能做：失焦用 `Response::lost_focus()`，
-                        // 回车直接查输入。注意**不能**写成 `&&`——单行 TextEdit
-                        // 按回车不会失焦，而失焦那一帧通常也没有回车，
-                        // 条件互斥会让回车提交永远不触发。
-                        if r.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                            commit = app.forms.history_rename.take();
+                        if editing {
+                            let autofocus = app.forms.history_focus_request
+                                && !ui.input(|i| i.pointer.any_click());
+                            app.forms.history_focus_request = false;
+                            let (_, text) = app.forms.history_rename.as_mut().unwrap();
+                            // 留出尾部 ✓/✗ 两个小按钮的位置，避免输入框越界压住按钮。
+                            let width = (ui.available_width() - 60.0).max(80.0);
+                            let r = ui.add(egui::TextEdit::singleline(text).desired_width(width));
+                            if autofocus {
+                                r.request_focus();
+                            }
+                            // 先取按钮结果、再判失焦：点 ✗ 会让输入框同一帧失焦，
+                            // 判定在前会把「取消」误当成提交（blur 提交本身对标原版）。
+                            let confirm = ui.small_button("✓").clicked();
+                            let cancel = ui.small_button("✗").clicked();
+                            // 原版是「失焦**或**回车」提交（`dumpHistory.js:34`）。
+                            // egui 两者都能做：失焦用 `Response::lost_focus()`，
+                            // 回车直接查输入。注意**不能**把两者写成互斥的 `&&`
+                            // ——单行 TextEdit 按回车不会失焦，而失焦那一帧通常也
+                            // 没有回车，条件互斥会让回车提交永远不触发。
+                            if (r.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                                && !cancel
+                            {
+                                commit = app.forms.history_rename.take();
+                            }
+                            if confirm {
+                                commit = app.forms.history_rename.take();
+                            }
+                            if cancel {
+                                app.forms.history_rename = None;
+                            }
+                        } else if ui
+                            .small_button("✎")
+                            .on_hover_text(t("html_rename"))
+                            .clicked()
+                        {
+                            app.forms.history_rename = Some((f.clone(), f.clone()));
+                            app.forms.history_focus_request = true;
                         }
-                        if ui.small_button("✓").clicked() {
-                            commit = app.forms.history_rename.take();
-                        }
-                        if ui.small_button("✗").clicked() {
-                            app.forms.history_rename = None;
-                        }
-                    } else if ui
-                        .small_button("✎")
-                        .on_hover_text(t("html_rename"))
-                        .clicked()
-                    {
-                        app.forms.history_rename = Some((f.clone(), f.clone()));
-                    }
+                    });
                 }
             });
         if let Some((old, new)) = commit {

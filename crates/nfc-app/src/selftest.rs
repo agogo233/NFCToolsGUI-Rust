@@ -103,6 +103,7 @@ pub fn run() -> eframe::Result {
         ("save-log 快照写出", c_save_log_flow),
         ("选字典回填 dict_path", c_dict_file_flow),
         ("重命名提交", c_history_rename),
+        ("重命名行渲染不提交", c_history_rename_render),
         ("comparator 从历史载入两侧", c_comparator_from_history),
         // ── S13 设备层接线 + 遮挡帧推进 ──
         ("scan 刷出设备下拉列表", c_scan_populates_device_list),
@@ -2433,6 +2434,31 @@ fn c_history_rename() -> Result<(), String> {
     panels::commit_rename_for_test(&dir, "new.mfd", "  ", &mut app);
     if !dir.join("new.mfd").exists() {
         return Err("空名竟被接受".into());
+    }
+    Ok(())
+}
+
+fn c_history_rename_render() -> Result<(), String> {
+    // 画「正在重命名」那一帧：渲染本身绝不能提交、不能丢状态。
+    // 曾把 ✗ 按钮引起的失焦误判成提交，故这里钉住「只画一帧 = 什么都没变」。
+    let (d, mut app) = app_with_temp_dumps("rename-render");
+    let dir = d.0.join("dumpfiles");
+    std::fs::write(dir.join("old.mfd"), b"x").unwrap();
+    app.forms.history_rename = Some(("old.mfd".to_owned(), "new.mfd".to_owned()));
+    app.forms.history_focus_request = true;
+    let _ = panel_harness(&mut app, Panel::DumpHistory)?;
+    if dir.join("new.mfd").exists() {
+        return Err("只渲染一帧竟已落盘重命名".into());
+    }
+    if app.forms.history_rename != Some(("old.mfd".to_owned(), "new.mfd".to_owned())) {
+        return Err(format!(
+            "渲染一帧就丢了重命名状态: {:?}",
+            app.forms.history_rename
+        ));
+    }
+    // 焦点申请被消费一次即清掉，否则下一轮编辑会被误抢焦点
+    if app.forms.history_focus_request {
+        return Err("自动聚焦标志未被消费".into());
     }
     Ok(())
 }
