@@ -193,12 +193,16 @@ pub fn mfoc_keys_total(file_keys: usize, args: &[String]) -> usize {
     DEFAULT_KEYS.len() + file_keys + arg_keys(args).len()
 }
 
-/// 构造 `mfoc` 的完整参数：`-O<temp>` + `-f<keys>` 前置，追加用户传入的其余参数。
-pub fn mfoc_args(paths: &Paths, extra: &[String]) -> Vec<String> {
+/// 构造 `mfoc` 的完整参数：`-O<temp>` + `-f<keys>` 前置，`-P<probes>` 随后，
+/// 最后追加用户传入的其余参数。
+pub fn mfoc_args(paths: &Paths, extra: &[String], probes: u32) -> Vec<String> {
     let mut v = vec![
         format!("-O{}", paths.temp_mfd().display()),
         format!("-f{}", paths.keys_file().display()),
     ];
+    if probes > 0 {
+        v.push(format!("-P{probes}"));
+    }
     v.extend(extra.iter().cloned());
     v
 }
@@ -957,12 +961,23 @@ mod tests {
         let dir = tempdir("args");
         let _guard = TempGuard(dir.clone());
         let paths = Paths::new(&dir);
-        let a = mfoc_args(&paths, &["-C".to_string()]);
+        let a = mfoc_args(&paths, &["-C".to_string()], 0);
         assert_eq!(a.len(), 3);
         assert!(a[0].starts_with("-O"), "实际: {}", a[0]);
         assert!(a[0].contains("temp.mfd"));
         assert!(a[1].starts_with("-f"), "实际: {}", a[1]);
         assert!(a[1].contains("keys.txt"));
         assert_eq!(a[2], "-C");
+    }
+
+    #[test]
+    fn mfoc_args_appends_probes_when_positive() {
+        let dir = tempdir("args_probes");
+        let _guard = TempGuard(dir.clone());
+        let paths = Paths::new(&dir);
+        let a = mfoc_args(&paths, &[], 50);
+        assert_eq!(a.len(), 3);
+        assert!(a[2].starts_with("-P"));
+        assert!(a[2].contains("50"));
     }
 }

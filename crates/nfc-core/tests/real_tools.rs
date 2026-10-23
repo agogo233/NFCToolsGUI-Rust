@@ -195,7 +195,7 @@ fn mfclassic_accepts_read_ic_arguments() {
     let bin = bin_or_skip!();
     let dir = tmp_dir("mfclass");
     let paths = Paths::new(dir.clone());
-    let args = nfc_core::tasks::mfoc::mfoc_args(&paths, &[]);
+    let args = nfc_core::tasks::mfoc::mfoc_args(&paths, &[], 0);
     let (out, code) = run(&bin, "nfc-mfclassic", &args);
     eprintln!("[cmd] nfc-mfclassic {}", args.join(" "));
     eprintln!("[out] {out}");

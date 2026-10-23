@@ -670,6 +670,11 @@ fn settings(ui: &mut Ui, app: &mut NfcApp) -> bool {
         });
         ui.checkbox(&mut app.state.deep_scan, t("html_deep_scan"))
             .on_hover_text(t("html_deep_scan"));
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(t("html_mfoc_probes")).strong());
+            ui.add(egui::Slider::new(&mut app.state.mfoc_probes, 1..=255))
+                .on_hover_text(t("html_mfoc_probes_tip"));
+        });
         if app.state.is_device_connected {
             ui.label(RichText::new(t("html_applies_after_reconnect")).size(11.0))
                 .on_hover_text(t("html_applies_after_reconnect"));

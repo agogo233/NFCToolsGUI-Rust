@@ -733,7 +733,7 @@ impl Engine {
         state: &mut AppState,
         paths: &Paths,
     ) -> Result<(), ToolError> {
-        let args = tasks::mfoc::mfoc_args(paths, &extra);
+        let args = tasks::mfoc::mfoc_args(paths, &extra, state.mfoc_probes);
         // ETA 分母 = 默认密钥 + keys 文件里的 + 命令行传的（docs/01 §4.1：
         // 13 默认 + keys.txt 条数 + -k 条数）。此前把 keys.txt 条数按 0 估，
         // 分母偏小会让进度过早跳到 100%。

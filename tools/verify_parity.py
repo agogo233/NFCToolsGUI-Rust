@@ -109,6 +109,11 @@ S18_EXTRA = {
     "log_msg_serial_enum_failed",
     "log_msg_start_mfcuk",
 }
+# mfoc 探测次数设置（docs/02 §6.34 登记）。
+MFOC_PROBES_EXTRA = {
+    "html_mfoc_probes",
+    "html_mfoc_probes_tip",
+}
 # S18 从「上游独有」挪回的 20 个 key：两版共有且文案逐字一致。
 S18_MIGRATED = {
     "dialog_msg_invalid_uid_input",
@@ -318,10 +323,10 @@ def h_i18n() -> None:
     keys = json.loads(rd(REPO / "assets/locales/zh-CN.json"))
     orig_zh_keys = set(rd_json(ORIG / "src/locales/zh-CN.json")) if not ORIG_MISSING else set()
     check(
-        len(keys) == 194 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(S18_MIGRATED),
-        f"H zh-CN.json {194 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(S18_MIGRATED)} key"
+        len(keys) == 194 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(S18_MIGRATED),
+        f"H zh-CN.json {194 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(S18_MIGRATED)} key"
         f"（基础 194 + S16 补 {len(S16_EXTRA)} + S17 补 {len(S17_EXTRA)}"
-        f" + S18 新增 {len(S18_EXTRA)} + S18 迁移 {len(S18_MIGRATED)}）",
+        f" + S18 新增 {len(S18_EXTRA)} + MFOC_PROBES 补 {len(MFOC_PROBES_EXTRA)} + S18 迁移 {len(S18_MIGRATED)}）",
         f"实际 {len(keys)}",
     )
     # S8 新增的 3 个 settings 按钮文案（原版 settings.html 硬编码英文，无 i18n key，
@@ -334,6 +339,8 @@ def h_i18n() -> None:
         check(k in keys, f"H zh-CN 含 S17 {k}")
     for k in S18_EXTRA:
         check(k in keys, f"H zh-CN 含 S18 新增 {k}")
+    for k in MFOC_PROBES_EXTRA:
+        check(k in keys, f"H zh-CN 含 MFOC_PROBES {k}")
     for k in S18_MIGRATED:
         check(k in keys, f"H zh-CN 含 S18 迁移 {k}")
     for k in S18_MIGRATED:
@@ -780,7 +787,7 @@ def s4_model() -> None:
     # S5 单测数量
     s5_units = sum(rd(CORE / f"src/{f}").count("#[test]")
                    for f in ["data.rs", "dialogs.rs", "tasks/mfoc.rs", "tasks/detect.rs"])
-    check(s5_units == 83, "S5 单测累计 83（含 S6/S11-2/S17/F4 新增 + S19 权限收紧 1）", f"实际 {s5_units}")
+    check(s5_units == 84, "S5 单测累计 84（含 S6/S11-2/S17/F4 新增 + S19 权限收紧 1 + MFOC_PROBES 1）", f"实际 {s5_units}")
     ints = rd(CORE / "tests/integration.rs")
     check(ints.count("#[test]") == 58, "S5+S6/S7 集成测试累计 58", f"实际 {ints.count('#[test]')}")
     check(ints.count("fn s5_") == 14, "S5 新增 14 个集成测试", f"实际 {ints.count('fn s5_')}")
@@ -1104,7 +1111,7 @@ def s4_model() -> None:
           "S11 Action 住在 core::engine（S0-S10 时在 app）")
     # 参数构造对拍原版
     check("detect_args(paths, false, false)" in eng, "S11 detect-card-type 用 -N 分支（command.js:169-171）")
-    check("mfoc_args(paths, &extra)" in eng, "S11 read-IC 用 mfoc_args（command.js:608-611）")
+    check("mfoc_args(paths, &extra, state.mfoc_probes)" in eng, "S11 read-IC 用 mfoc_args（command.js:608-611）")
     check("dict_args(cfg, &state.dict_path)" in eng, "S11 dict-test 用 dict_args（command.js:395-397）")
     check('format!("-k{key}")' in eng, "S11 done-input-keys 转 -k 参数（command.js:154-156）")
     check("ConnectFlow::new(dev)" in eng and "write_nfc_config" in ser,
@@ -1570,7 +1577,7 @@ def s4_model() -> None:
     # 自动执行提示、文件框等待文案、检测结果“已知/未知”、历史重命名、
     # 控制台按钮悬停说明（§6.28 P1）
     # （docs/02 §6.25 续 / §6.28 / S16 偏离登记）。
-    LOCAL_EXTRA = S8_EXTRA | S11_EXTRA | S12_EXTRA | S15_EXTRA | S16_EXTRA | S17_EXTRA | S18_EXTRA
+    LOCAL_EXTRA = S8_EXTRA | S11_EXTRA | S12_EXTRA | S15_EXTRA | S16_EXTRA | S17_EXTRA | S18_EXTRA | MFOC_PROBES_EXTRA
     # 原版对拍基线（ORIG_REF）漂移时上游会新增 key，对应本重写**没有**的功能/结构。
     # 搬运这些文案没有意义（没有代码会 t() 它们），故显式登记为「上游有、我们不做」。
     # 若将来真要做对应功能，把 key 从这里挪进 LOCAL_EXTRA 即可。
@@ -1641,8 +1648,8 @@ def s4_model() -> None:
           "R i18n key 名不得以标点结尾（疑似误建的新 key）",
           f"{[k for k in i18n_asset if k[-1:] in {':', '.', ',', ' ', '-', '_'}]}")
     # 本地补的 key 数量原本写死在 Rust 测试与此处两处，已漂移过一次。双向钉死。
-    check(len(LOCAL_EXTRA) == 14 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA),
-          "R 本地补的 i18n key 恰为 56 个", f"实际 {len(LOCAL_EXTRA)}")
+    check(len(LOCAL_EXTRA) == 14 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA),
+          "R 本地补的 i18n key 恰为 58 个", f"实际 {len(LOCAL_EXTRA)}")
     cd = rd(CORE / "src/command.rs")
     # rustfmt 会把字段拆成多行，故用 DOTALL 匹配整个结构体字面量
     specs = re.findall(

@@ -153,7 +153,7 @@ fn case_read_ic_saves_dump() {
     );
 
     // ETA 全链
-    let total = mfoc_keys_total(0, &mfoc_args(&e.paths, &[]));
+    let total = mfoc_keys_total(0, &mfoc_args(&e.paths, &[], 0));
     let mut eta = EtaTracker::new(total, 0);
     for i in 0..total {
         if let Some(u) = eta.push("[Key: aabbccddeeff]\n", (i as u64) * 1000) {
@@ -342,7 +342,7 @@ fn case_cancel() {
     let mut runner =
         MockToolRunner::new(vec![Chunk::stdout("line 1\n"), Chunk::stdout("line 2\n")]);
     runner
-        .start("mfoc", &mfoc_args(&Paths::new("/tmp"), &[]), &gate())
+        .start("mfoc", &mfoc_args(&Paths::new("/tmp"), &[], 0), &gate())
         .unwrap();
     assert!(runner.is_running());
     let mut got = Vec::new();

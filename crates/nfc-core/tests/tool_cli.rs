@@ -118,7 +118,7 @@ fn tmp_paths(tag: &str) -> (Paths, PathBuf) {
 fn read_ic_flags_are_accepted_by_the_real_binary() {
     let bin = bin_or_skip!();
     let (paths, dir) = tmp_paths("readic");
-    let args = nfc_core::tasks::mfoc::mfoc_args(&paths, &[]);
+    let args = nfc_core::tasks::mfoc::mfoc_args(&paths, &[], 0);
     // 引擎读卡实际 spawn 的工具（engine.rs::read_ic）
     let out = run(&bin, "mfoc", &args);
     assert!(
@@ -164,7 +164,7 @@ fn original_mfoc_binary_accepts_read_ic_flags() {
         return;
     }
     let (paths, dir) = tmp_paths("origmfoc");
-    let args = nfc_core::tasks::mfoc::mfoc_args(&paths, &[]);
+    let args = nfc_core::tasks::mfoc::mfoc_args(&paths, &[], 0);
     let out = run(&bin, "mfoc", &args);
     assert!(
         !looks_like_argv_rejection(&out),

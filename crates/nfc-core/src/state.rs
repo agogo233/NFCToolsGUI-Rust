@@ -227,6 +227,8 @@ pub struct AppState {
     pub current_speed: u32,
     /// S18：深层扫描开关（`LIBNFC_INTRUSIVE_SCAN=1`）。默认关。
     pub deep_scan: bool,
+    /// mfoc 探测次数。默认 20（与 mfoc 二进制 `DEFAULT_PROBES_NR` 一致）。
+    pub mfoc_probes: u32,
     pub is_device_connected: bool,
     pub device_state: DeviceState,
     pub is_running_task: bool,
@@ -256,6 +258,7 @@ impl AppState {
     pub fn new() -> Self {
         Self {
             current_speed: DEVICE_SPEED,
+            mfoc_probes: 20,
             ..Default::default()
         }
     }

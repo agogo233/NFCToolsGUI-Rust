@@ -763,7 +763,7 @@ fn s5_mfoc_full_chain_saves_dump_and_updates_state() {
     fs::write(paths.temp_mfd(), b"DUMP".repeat(256)).unwrap();
 
     // 基线：13 默认 + 1 文件密钥 = 14 轮
-    let args = mfoc_args(&paths, &[]);
+    let args = mfoc_args(&paths, &[], 0);
     let total = mfoc_keys_total(1, &args);
     assert_eq!(total, 14);
     assert_eq!(count_keys_done("[Key: a][Key: b]"), 2);
@@ -912,7 +912,7 @@ fn s5_eta_converges_over_mock_runner_chunks() {
     runner
         .start(
             "mfoc",
-            &mfoc_args(&paths, &[]),
+            &mfoc_args(&paths, &[], 0),
             &GateState {
                 has_current_device: true,
                 is_device_connected: true,

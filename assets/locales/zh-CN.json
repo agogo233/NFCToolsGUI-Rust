@@ -249,6 +249,8 @@
     "indicator_mfcuk_running": "全加密破解中",
     "log_msg_start_mfcuk": "开始全加密爆破 (mfcuk)",
     "html_deep_scan": "深层扫描（响应慢的读卡器）",
+    "html_mfoc_probes": "MFOC 探测次数",
+    "html_mfoc_probes_tip": "每个扇区的探测次数（默认20，部分卡片需要更多，报错时可调高）",
     "log_msg_applies_after_reconnect": "任务运行中，将在重连设备后生效",
     "html_applies_after_reconnect": "任务运行中，将在重连设备后生效",
     "html_confirm_code": "确认码",
