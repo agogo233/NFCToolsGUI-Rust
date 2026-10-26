@@ -156,7 +156,7 @@ impl PortScanner {
 /// 连接必然失败而原因极难查，故宁可在写文件前直接拒绝。
 fn invalid_device_chars(device: &str) -> Option<char> {
     const BAD: &[char] = &['"', '\n', '\r', '\0'];
-    BAD.iter().find(|c| device.contains(*c)).copied()
+    BAD.iter().find(|c| device.contains(**c)).copied()
 }
 
 /// 写 `libnfc.conf`。内容见 `Paths::libnfc_conf`，波特率由调用方指定
