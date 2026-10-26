@@ -207,17 +207,17 @@ pub fn mfoc_args(paths: &Paths, extra: &[String], probes: u32) -> Vec<String> {
     v
 }
 
-/// 从 `nfc-mfclassic` 的输出里取卡片 UID，用作 dump 默认文件名的前缀。
+/// 从 `mfoc` 的输出里取卡片 UID，用作 dump 默认文件名的前缀。
 ///
 /// 对标 `command.js:641-645`：
 /// ```js
 /// let i = value.indexOf("UID (NFCID1):")
 /// if (i >= 0) { i += 14; cardID = value.substring(i, i + 14).replace(/\s+/g, "") }
 /// ```
-/// 即：定位标记 → 跳过 14 字符的标记本身 → 取 UID → 去掉所有空白
+/// 即（原版）：定位标记 → 跳过 14 字符的标记本身 → 取 UID → 去掉所有空白
 /// （原版 mfoc 输出里 UID 是分两行印的，中间有换行与空格）。
 ///
-/// `nfc-mfclassic` 可能吐多个含该标记的数据块，故取**最后一个**
+/// `mfoc` 可能吐多个含该标记的数据块，故取**最后一个**
 /// （与原版一致：每次命中都覆盖 `cardID`）。
 ///
 /// S18 修正（原 §6.15 登记的原版缺陷）：原版的 14 字符窗口**按含空白计**，

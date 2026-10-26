@@ -780,8 +780,9 @@ def s4_model() -> None:
     for ghost in ["mfoc-full.txt", "mfoc-default-keys.txt", "nfc-mfdetect-mixed.txt",
                   "libnfc-collect.txt", "cropto1_bs-found.txt", "nfc-mfdict-found.txt"]:
         check(f"`{ghost}`" not in f02, f"L docs/04 §2 不再列不存在的 {ghost}")
-    check("7 个" in f02 and "0 文件" in f02, "L docs/04 §2 声明 7 个子模块为 0 文件")
-    check("不可取证" in f02 and "不臆造" in f02, "L docs/04 §2 有不可取证与不臆造声明")
+    check("framework/source/" in f02 and "10 个目录" in f02,
+          "L docs/04 §2 声明工具源码已入库（framework/source 下 10 个目录）")
+    check("不臆造" in f02, "L docs/04 §2 有『不臆造工具表格装饰』声明")
     md = doc4.split("### model/dump")[1][:500]
     check("64 扇区" not in md.split("4096B = 64 扇区")[0], "L docs/04 model/dump 已订正「64 扇区」")
     check("**16 扇区**渲染" in doc4, "L docs/04 S8 dump_editor 已订正为 16 扇区")
@@ -843,6 +844,18 @@ def s4_model() -> None:
     check("pub fn detect_status_key" in dt and "pub fn detect_status(" in dt, "S5 状态条同时给出 key 与已翻译文案")
     check('i18n::t("log_msg_card_read_failed")' in dt, "S5 读卡失败文案")
     check("pub fn check_key_file_exists" in dt, "S5 密钥文件缺失时创建")
+    # S19：定义存在不等于被调用。mfoc / nfc-mfdetect 对 -f 的文件是硬依赖
+    # （fopen 失败直接 exit(EXIT_FAILURE)），此前该函数只有测试调用者，
+    # 全新安装的首次读卡 / 检测 / 写卡全部静默失败。
+    _eng = rd(CORE / "src/engine.rs")
+    check("tasks::detect::check_key_file_exists(paths)" in _eng,
+          "S19 check_key_file_exists 有生产调用者")
+    check("ensure_keys_file(paths);" in _eng, "S19 派发入口统一预建 keys.txt")
+    _ri = _eng.split("fn read_ic(")[1].split("\n    }")[0]
+    check("parser: Some(KeyInfoParser::new())" in _ri,
+          "S19 读卡挂 KeyInfoParser：结果须回填 known/unknown 并落盘新密钥（docs/01 §4.1）")
+    _ser = rd(CORE / "src/serial.rs")
+    check("fn invalid_device_chars" in _ser, "S19 拒绝无法写进 libnfc.conf 的设备名")
     dr = rd(CORE / "src/data.rs")
     check("pub struct CardRecord" in dr and "pub struct Registry" in dr, "S5 registry 数据结构")
     check("pub fn append" in dr and "pub fn append_and_save" in dr, "S5 registry 追加（按 UID 去重）")

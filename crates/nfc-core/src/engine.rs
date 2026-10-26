@@ -131,7 +131,7 @@ struct Running {
     /// 写卡/格式化第二段（`nfc-mfclassic`）的完成行解析器，用于判定
     /// 是否**全部**块写入成功（`Done, X of Y blocks written.`）。
     block_stats: Option<BlockStatsParser>,
-    /// 是否从输出里抓 `UID (NFCID1):`（`nfc-mfclassic` 需要，用于 dump 文件名）。
+    /// 是否从输出里抓 `UID (NFCID1):`（`mfoc` 需要，用于 dump 文件名）。
     scan_mfoc_uid: bool,
     /// 抓到的 UID，最终传给 `mfoc::dump_save` 当默认文件名前缀。
     uid: Option<String>,
@@ -372,6 +372,7 @@ impl Engine {
         paths: &Paths,
         dialog: &mut dyn DialogProvider,
     ) -> Result<(), ToolError> {
+        ensure_keys_file(paths);
         match action {
             Action::ScanUsb => self.scan(state),
             Action::ConnUsb(dev) => self.connect(state, paths, &dev),
@@ -535,7 +536,7 @@ impl Engine {
             }
             "done-input-keys-read-IC" => {
                 // 载荷是逗号分隔的密钥串（app 层已用 parse_12hex 扫过一遍，
-                // 这里再扫一次以防直接构造），转成 mfclassic 的 -k 参数。
+                // 这里再扫一次以防直接构造），转成 mfoc 的 -k 参数。
                 let keys = arg.as_deref().map(crate::model::keys::parse_12hex);
                 match keys {
                     // 原版 `keys.match(...)` 匹配不到会 `.forEach` 抛 TypeError；
@@ -747,7 +748,7 @@ impl Engine {
         }
     }
 
-    /// `read-IC` / `done-input-keys-read-IC` → `nfc-mfclassic`。
+    /// `read-IC` / `done-input-keys-read-IC` → `mfoc`。
     fn read_ic(
         &mut self,
         name: &'static str,
@@ -773,6 +774,12 @@ impl Engine {
                 eta: Some(tasks::mfoc::EtaTracker::new(total, 0)),
                 // command.js:641-645 从输出里取 UID 当 dump 文件名前缀
                 scan_mfoc_uid: true,
+                // mfoc 输出末尾同样打印每扇区的 `Found/Unknown Key` 行，格式与
+                // nfc-mfdetect 一致（docs/01 §4.1 的 `parse_key_info`）。挂上解析器，
+                // 收尾的 `after_detect` 才会把 known/unknown 回填进 `AppState`、
+                // 并把新发现的密钥落盘——否则读完整张卡，破解面板的预填仍是空的。
+                // `detect_saves_dump` 保持 false：读卡是否落 dump 由 `dump_prepare` 负责。
+                parser: Some(KeyInfoParser::new()),
                 ..Running::default()
             },
         )
@@ -1895,6 +1902,20 @@ fn registry_append(state: &AppState, paths: &Paths, uid: &str) {
     let _ = registry.append_and_save(record, paths);
 }
 
+/// 派发前确保密钥文件存在，对标 `command.js:747-750` 的 `checkKeyFileExist`。
+///
+/// 原版在每次读卡 / 检测 / 写卡**前**调用；此处收敛到派发入口一处，
+/// 覆盖全部把 `-f{keys.txt}` 传给 C 工具的动作（`mfoc` / `nfc-mfdetect`）。
+/// 该文件对 C 工具是**硬依赖**：`mfoc.c` / `nfc-mfdetect.c` 的 `fopen` 失败
+/// 直接 `exit(EXIT_FAILURE)`，不预建则全新安装的首次读卡 / 检测 / 写卡 /
+/// 格式化 / autoRun 前置探测全部失败，且只剩一行工具 stderr。
+///
+/// 建文件失败（数据目录不可写）时不额外报错：紧随其后的工具启动会带着
+/// "Cannot open keyfile" 的 stderr 被原样记进日志，比这里多一条重复错误清楚。
+fn ensure_keys_file(paths: &Paths) {
+    let _ = tasks::detect::check_key_file_exists(paths);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2130,6 +2151,62 @@ mod tests {
         );
         run_to_end(&mut e, &mut st, &p, 8);
         assert!(!e.is_running());
+    }
+
+    /// 全新数据目录里没有 keys.txt，mfoc / nfc-mfdetect 会因 `fopen` 失败直接
+    /// `exit(EXIT_FAILURE)`；派发入口必须先建空文件。
+    #[test]
+    fn dispatch_creates_missing_keys_file_before_spawning_mfoc() {
+        let (_d, p) = paths("keysfile");
+        let mut e = Engine::new(Box::new(MockToolRunner::new(vec![])));
+        let mut st = connected();
+        let mut dlg = MockDialog::new();
+
+        assert!(!p.keys_file().exists(), "前置：数据目录里不该已有密钥文件");
+        e.dispatch(Action::Plain("read-IC"), &mut st, &p, &mut dlg)
+            .unwrap();
+        assert!(p.keys_file().is_file(), "派发前应建出空密钥文件");
+        assert_eq!(
+            std::fs::read_to_string(p.keys_file()).unwrap(),
+            "",
+            "新建的文件应为空"
+        );
+    }
+
+    /// 已存在的密钥文件是用户资产，不能被截断成空文件。
+    #[test]
+    fn dispatch_never_truncates_existing_keys_file() {
+        let (_d, p) = paths("keystruncate");
+        std::fs::write(p.keys_file(), "aabbccddeeff\n").unwrap();
+        let mut e = Engine::new(Box::new(MockToolRunner::new(vec![])));
+        let mut st = connected();
+        let mut dlg = MockDialog::new();
+        e.dispatch(Action::Plain("read-IC"), &mut st, &p, &mut dlg)
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(p.keys_file()).unwrap(),
+            "aabbccddeeff\n",
+            "既有密钥不能丢"
+        );
+    }
+
+    /// 每个把 `-f<keys>` 传给 C 工具的动作都要在派发前建好文件，
+    /// 建文件发生在门禁 / 确认框之前，所以确认被拒也能建。
+    #[test]
+    fn dispatch_creates_keys_file_for_every_action_passing_dash_f() {
+        let mut i = 0usize;
+        for name in ["read-IC", "detect-card-type", "format-card", "write-IC"] {
+            i += 1;
+            let (_d, p) = paths(&format!("fkeys{i}"));
+            let mut e = Engine::new(Box::new(MockToolRunner::new(vec![])));
+            let mut st = connected();
+            let mut dlg = MockDialog::new();
+            let _ = e.dispatch(Action::Plain(name), &mut st, &p, &mut dlg);
+            assert!(
+                p.keys_file().is_file(),
+                "{name} 派发前没建 keys.txt，C 工具会因 fopen 失败直接退出"
+            );
+        }
     }
 
     #[test]
@@ -2382,6 +2459,39 @@ mod tests {
     /// 读卡成功后必须把 temp.mfd 移进 `dumpfiles/` 并发引导。
     ///
     /// 这是「读卡 → 引导 → 写这张卡」这条主流程的必经环节。
+    /// mfoc 输出末尾同样打印每扇区的 `Found/Unknown Key` 行，读卡必须解析并回填状态。
+    ///
+    /// 回归：read_ic 曾漏挂 `KeyInfoParser`，整轮读卡只更新 ETA——known/unknown
+    /// 恒空、新密钥不落盘，破解 / 字典面板的预填全靠下一次 detect-card-type。
+    /// 对标 docs/01 §4.1 的 `parse_key_info` → `save_keys`。
+    #[test]
+    fn read_ic_parses_sector_keys_and_saves_new_keys() {
+        let out = "Sector 00 - Found   Key A: ffffffffffff Found   Key B: ffffffffffff\n\
+                   Sector 04 - Found   Key A: deadbeef1234 Unknown Key B\n";
+        let (_d, p) = paths("readic-parse");
+        let mut e = Engine::new(Box::new(MockToolRunner::new(vec![Chunk::stdout(out)])));
+        let mut st = connected();
+        let mut dlg = MockDialog::new();
+        e.dispatch(Action::Plain("read-IC"), &mut st, &p, &mut dlg)
+            .unwrap();
+        run_to_end(&mut e, &mut st, &p, 6);
+
+        assert!(
+            st.known_key_info.iter().any(|(k, s, t)| {
+                k == "deadbeef1234" && *s == 4 && *t == crate::state::KeyType::A
+            }),
+            "应回填本次读到的已知密钥: {:?}",
+            st.known_key_info
+        );
+        assert_eq!(st.unknown_key_info, vec![(4, crate::state::KeyType::B)]);
+        // 新密钥落盘，默认密钥被剔除（不落 keys.txt）
+        let keys = std::fs::read_to_string(p.keys_file()).unwrap();
+        assert!(keys.contains("deadbeef1234"), "{keys:?}");
+        assert!(!keys.contains("ffffffffffff"), "默认密钥不该落盘: {keys:?}");
+        // 读卡不弹未知密钥引导：`finish` 的引导受 `run.name == "detect-card-type"`
+        // 门禁约束（`Event::Guidance` 在 AppState::apply 里是 no-op，无法直接观测）。
+    }
+
     /// S11 前两步都漏了它：`mfoc::dump_save` 没有任何生产调用者，
     /// 于是 `Event::DumpSaved` 永不发出、引导条永远不出现。
     #[test]

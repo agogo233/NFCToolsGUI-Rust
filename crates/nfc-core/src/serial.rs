@@ -151,9 +151,22 @@ impl PortScanner {
     }
 }
 
+/// `libnfc.conf` 解析器无法表示的字符（`conf.c` 的 `escaped_value` 见到下一个
+/// 引号就截断，且**不做**反斜杠转义）。命中则整行被截断、剩余部分变成伪行，
+/// 连接必然失败而原因极难查，故宁可在写文件前直接拒绝。
+fn invalid_device_chars(device: &str) -> Option<char> {
+    const BAD: &[char] = &['"', '\n', '\r', '\0'];
+    BAD.iter().find(|c| device.contains(*c)).copied()
+}
+
 /// 写 `libnfc.conf`。内容见 `Paths::libnfc_conf`，波特率由调用方指定
 /// （S18：设置面板可调；默认 [`crate::paths::DEVICE_SPEED`]）。
 pub fn write_nfc_config(paths: &Paths, device: &str, speed: u32) -> Result<(), DeviceError> {
+    if let Some(ch) = invalid_device_chars(device) {
+        return Err(DeviceError::WriteConfig(format!(
+            "invalid device name {device:?}: {ch:?} cannot be represented in libnfc.conf"
+        )));
+    }
     if let Some(parent) = paths.nfc_config().parent() {
         fs::create_dir_all(parent).map_err(|e| DeviceError::WriteConfig(e.to_string()))?;
     }
@@ -599,6 +612,19 @@ mod tests {
         );
         let dirs: Vec<_> = DIRS.with(|d| d.borrow().clone());
         drop_dirs(&dirs);
+    }
+
+    #[test]
+    fn write_nfc_config_rejects_unrepresentable_device_names() {
+        let paths = tmp_paths("bad-name");
+        let err = write_nfc_config(&paths, "/dev/tty\"ACM0", DEVICE_SPEED).unwrap_err();
+        assert!(matches!(err, DeviceError::WriteConfig(_)));
+        assert!(err.to_string().contains("libnfc.conf"));
+        assert!(
+            !paths.nfc_config().exists(),
+            "非法设备名不能写出半份 libnfc.conf"
+        );
+        drop_dirs(&DIRS.with(|d| d.borrow().clone()));
     }
 
     #[test]
