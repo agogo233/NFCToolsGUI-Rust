@@ -170,18 +170,19 @@ pub struct Chunk {
 }
 
 impl Chunk {
-    pub fn stdout<S: Into<String>>(text: S) -> Self {
+    fn new<S: Into<String>>(text: S, stderr: bool) -> Self {
         Self {
             text: text.into(),
-            stderr: false,
+            stderr,
         }
     }
 
+    pub fn stdout<S: Into<String>>(text: S) -> Self {
+        Self::new(text, false)
+    }
+
     pub fn stderr_chunk<S: Into<String>>(text: S) -> Self {
-        Self {
-            text: text.into(),
-            stderr: true,
-        }
+        Self::new(text, true)
     }
 }
 
