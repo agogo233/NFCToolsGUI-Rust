@@ -11,3 +11,5 @@ buildInfo.json
 __pycache__/
 *.pyc
 PLAN.md
+# 工具（crapper/dryer/mutator）运行产物
+.metrics/
