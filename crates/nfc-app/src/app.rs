@@ -419,6 +419,8 @@ impl NfcApp {
                 let content = self.log_pending.take().unwrap_or_default();
                 match std::fs::write(&path, content) {
                     Ok(()) => {
+                        // 日志正文含恢复出的密钥，与内部 keys_file 同样收紧到 0600（Windows no-op）。
+                        nfc_core::paths::restrict_owner(&path);
                         let name = path.to_string_lossy().into_owned();
                         self.push_event(EventKind::Success, &name);
                         self.state.apply(Event::Log(format!(
@@ -468,6 +470,8 @@ impl NfcApp {
                 let body = lines.join("\n");
                 match std::fs::write(&path, body) {
                     Ok(()) => {
+                        // 导出的密钥字典是恢复出的真实密钥，收紧到 0600（Windows no-op）。
+                        nfc_core::paths::restrict_owner(&path);
                         let name = path.to_string_lossy().into_owned();
                         self.push_event(EventKind::Success, &name);
                         self.state.apply(Event::Log(format!(

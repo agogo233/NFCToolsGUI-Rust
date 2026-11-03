@@ -350,7 +350,12 @@ impl NfcToolRunner {
             .map_err(|e| ToolError::SpawnFailed(e.to_string()))?;
         let handle = Arc::new(Mutex::new(Some(child)));
         let (mut stdout, mut stderr) = {
-            let mut g = handle.lock().unwrap();
+            // 与 exit_impl/kill 一致：锁中毒不 panic（egui 单线程，panic 即整程序崩），
+            // 而是当 spawn 失败返回。此锁刚创建、无其他持有者，实际不可能中毒，纯防御一致性。
+            let mut g = match handle.lock() {
+                Ok(g) => g,
+                Err(_) => return Err(ToolError::SpawnFailed("child handle poisoned".into())),
+            };
             let c = g.as_mut().expect("child just moved in");
             (
                 c.stdout.take().expect("stdout piped"),
