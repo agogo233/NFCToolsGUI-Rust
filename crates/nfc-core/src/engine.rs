@@ -415,19 +415,7 @@ impl Engine {
         status_key: &str,
         run: Running,
     ) -> Result<(), ToolError> {
-        let gs = GateState::from_state(state);
-        runner::gate(tool, gs)?;
-        // 命令行进日志，对标原版 printLog(`${cmd} ${args}`)
-        state.apply(Event::Log(format!("\n{tool} {}\n", args.join(" "))));
-        self.runner.start(tool, args, &gs)?;
-        state.is_running_task = true;
-        state.apply(Event::Status {
-            text: crate::i18n::t(status_key),
-            indicator: Indicator::Running,
-        });
-        self.eta_epoch = Some(Instant::now());
-        self.running = Some(run);
-        Ok(())
+        self.launch_with_status(tool, args, state, crate::i18n::t(status_key), run)
     }
 
     /// 同 [`Self::launch`]，但状态文案由调用方给定而非 i18n key。
