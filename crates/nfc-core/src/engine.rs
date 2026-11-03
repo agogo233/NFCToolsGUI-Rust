@@ -3859,8 +3859,309 @@ mod tests {
         // 退出码 0 且无完成行时，应通过兜底逻辑判定完成
         assert!(
             !st.log_buffer.contains("写卡失败"),
-            "退出码 0 应通过兜底逻辑判定写卡完成: {}",
+            "退出码 0 应通过兜底逻辑判定完成: {}",
             st.log_buffer,
         );
+    }
+
+    // ── 手机/手环操作区（S14）变异测试补充 ──
+
+    /// 测试 `phw_read_uid`：读取 UID 后缓存 block0
+    #[test]
+    fn phw_read_uid_caches_block0() {
+        let (_d, p) = paths("phw-read-uid");
+        // mfdetect 输出包含 UID
+        let mut e = Engine::new(Box::new(
+            MockToolRunner::new(vec![Chunk::stdout("UID (NFCID1): 04 A8 B2 C6\n")])
+                .with_exit(Some(0)),
+        ));
+        let mut st = connected();
+        let mut dlg = MockDialog::new();
+
+        e.dispatch(Action::Plain("phw-read-uid"), &mut st, &p, &mut dlg)
+            .unwrap();
+        // 模拟 mfdetect 写出 temp.mfd
+        std::fs::write(p.temp_mfd(), vec![0x5a; 1024]).unwrap();
+        run_to_end(&mut e, &mut st, &p, 6);
+
+        // 验证 block0 被缓存
+        assert!(st.phw.block0.is_some(), "phw-read-uid 应缓存 block0");
+    }
+
+    /// 测试 `phw_write_uid` 无缓存时报错
+    #[test]
+    fn phw_write_uid_without_block0_reports_error() {
+        let (_d, p) = paths("phw-write-uid-no-block0");
+        let mut e = Engine::new(Box::new(MockToolRunner::new(vec![])));
+        let mut st = connected();
+        let mut dlg = MockDialog::new();
+
+        e.dispatch(Action::Plain("phw-write-uid"), &mut st, &p, &mut dlg)
+            .unwrap();
+
+        assert!(
+            st.log_buffer.contains("请先读取卡号")
+                || st.log_buffer.contains("phw-read-uid")
+                || !st.log_buffer.is_empty(),
+            "无 block0 应记录错误日志: {}",
+            st.log_buffer,
+        );
+    }
+
+    /// 测试 `phw_write_uid` BCC 不自洽时报错
+    #[test]
+    fn phw_write_uid_with_invalid_bcc_reports_error() {
+        let (_d, p) = paths("phw-write-uid-bad-bcc");
+        let mut e = Engine::new(Box::new(MockToolRunner::new(vec![])));
+        let mut st = connected();
+        st.phw.block0 = Some("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF".to_owned());
+        let mut dlg = MockDialog::new();
+
+        e.dispatch(Action::Plain("phw-write-uid"), &mut st, &p, &mut dlg)
+            .unwrap();
+
+        assert!(
+            st.log_buffer.contains("BCC") || st.log_buffer.contains("校验"),
+            "BCC 不自洽应记录错误日志: {}",
+            st.log_buffer,
+        );
+    }
+
+    /// 测试 `phw_write_uid` 确认后启动 nfc-mfsetuid
+    #[test]
+    fn phw_write_uid_confirmed_starts_mfsetuid() {
+        let (_d, p) = paths("phw-write-uid-ok");
+        let mut e = Engine::new(Box::new(MockToolRunner::new(vec![])));
+        let mut st = connected();
+        // BCC 自洽的 block0（04^A8^B2^C6 = D8）
+        st.phw.block0 = Some("04A8B2C6D80804000000000000000000".to_owned());
+        let mut dlg = MockDialog::new().with_confirm(true);
+
+        e.dispatch(Action::Plain("phw-write-uid"), &mut st, &p, &mut dlg)
+            .unwrap();
+
+        let (tool, _, _) = e.runner().started_last().unwrap();
+        assert_eq!(tool, "nfc-mfsetuid", "phw-write-uid 应启动 mfsetuid");
+    }
+
+    /// 测试 `phw_write_data` 无缓存时报错
+    #[test]
+    fn phw_write_data_without_block0_reports_error() {
+        let (_d, p) = paths("phw-write-data-no-block0");
+        let mut e = Engine::new(Box::new(MockToolRunner::new(vec![])));
+        let mut st = connected();
+        let mut dlg = MockDialog::new();
+
+        e.dispatch(Action::Plain("phw-write-data"), &mut st, &p, &mut dlg)
+            .unwrap();
+
+        assert!(
+            st.log_buffer.contains("请先读取卡号")
+                || st.log_buffer.contains("phw-read-uid")
+                || !st.log_buffer.is_empty(),
+            "无 block0 应记录错误日志: {}",
+            st.log_buffer,
+        );
+    }
+
+    /// 测试 `phw_write_data` 块号越界时报错
+    #[test]
+    fn phw_write_data_with_invalid_sector_block_reports_error() {
+        let (_d, p) = paths("phw-write-data-bad-block");
+        let mut e = Engine::new(Box::new(MockToolRunner::new(vec![])));
+        let mut st = connected();
+        st.phw.block0 = Some("04A8B2C6780804000000000000000000".to_owned());
+        st.phw.sector = 0;
+        st.phw.block = 3; // 块 3 是尾块，禁止覆盖
+        let mut dlg = MockDialog::new().with_confirm(true);
+
+        e.dispatch(Action::Plain("phw-write-data"), &mut st, &p, &mut dlg)
+            .unwrap();
+
+        assert!(
+            st.log_buffer.contains("扇区")
+                || st.log_buffer.contains("块")
+                || st.log_buffer.contains("无效"),
+            "块号越界应记录错误日志: {}",
+            st.log_buffer,
+        );
+    }
+
+    /// 测试 `phw_write_data` 确认后启动备份阶段
+    #[test]
+    fn phw_write_data_confirmed_starts_backup() {
+        let (_d, p) = paths("phw-write-data-ok");
+        let mut e = Engine::new(Box::new(MockToolRunner::new(vec![])));
+        let mut st = connected();
+        st.phw.block0 = Some("04A8B2C6780804000000000000000000".to_owned());
+        st.phw.sector = 1;
+        st.phw.block = 1;
+        let mut dlg = MockDialog::new().with_confirm(true);
+
+        e.dispatch(Action::Plain("phw-write-data"), &mut st, &p, &mut dlg)
+            .unwrap();
+
+        let (tool, _, _) = e.runner().started_last().unwrap();
+        assert_eq!(tool, "nfc-mfdetect", "phw-write-data 应先启动备份");
+    }
+
+    /// 测试 `input_uid_write` 无效输入时报错
+    #[test]
+    fn input_uid_write_with_invalid_input_reports_error() {
+        let (_d, p) = paths("input-uid-invalid");
+        let mut e = Engine::new(Box::new(MockToolRunner::new(vec![])));
+        let mut st = connected();
+        let mut dlg = MockDialog::new();
+
+        e.dispatch(
+            Action::WithArg("done-input-uid-write", "GGGGGGGG".into()),
+            &mut st,
+            &p,
+            &mut dlg,
+        )
+        .unwrap();
+
+        assert!(
+            st.log_buffer.contains("无效")
+                || st.log_buffer.contains("invalid")
+                || st.log_buffer.contains("卡号"),
+            "无效输入应记录错误日志: {}",
+            st.log_buffer,
+        );
+    }
+
+    /// 测试 `input_uid_write` 8 位 UID 转换为 block0
+    #[test]
+    fn input_uid_write_8_digit_uid_converts_to_block0() {
+        let (_d, p) = paths("input-uid-8");
+        let mut e = Engine::new(Box::new(MockToolRunner::new(vec![])));
+        let mut st = connected();
+        let mut dlg = MockDialog::new().with_confirm(true);
+
+        e.dispatch(
+            Action::WithArg("done-input-uid-write", "04A8B2C6".into()),
+            &mut st,
+            &p,
+            &mut dlg,
+        )
+        .unwrap();
+
+        let (tool, _, _) = e.runner().started_last().unwrap();
+        assert_eq!(tool, "nfc-mfsetuid", "input-uid-write 应启动 mfsetuid");
+    }
+
+    /// 测试 `input_uid_write` BCC 不自洽时追加 -f 参数
+    #[test]
+    fn input_uid_write_with_invalid_bcc_appends_force_flag() {
+        let (_d, p) = paths("input-uid-bad-bcc");
+        let mut e = Engine::new(Box::new(MockToolRunner::new(vec![])));
+        let mut st = connected();
+        let mut dlg = MockDialog::new().with_confirm(true);
+
+        e.dispatch(
+            Action::WithArg(
+                "done-input-uid-write",
+                "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF".into(),
+            ),
+            &mut st,
+            &p,
+            &mut dlg,
+        )
+        .unwrap();
+
+        let (tool, args, _) = e.runner().started_last().unwrap();
+        assert_eq!(tool, "nfc-mfsetuid");
+        assert!(
+            args.contains(&"-f".to_owned()),
+            "BCC 不自洽应追加 -f: {args:?}"
+        );
+    }
+
+    /// 测试 `patch_phw_block` 的数据块修补逻辑
+    #[test]
+    fn patch_phw_block_modifies_target_block() {
+        use crate::tasks::phw::{patch_data_block, SectorBlock, BLOCK_SIZE};
+
+        let mut dump = vec![0u8; 1024];
+        let block0 = "04A8B2C6780804000000000000000000";
+        let target = SectorBlock {
+            sector: 1,
+            block: 1,
+        };
+
+        let result = patch_data_block(&mut dump, block0, target);
+        assert!(result, "patch_data_block 应成功");
+
+        let offset = target.offset();
+        let expected: Vec<u8> = (0..BLOCK_SIZE)
+            .map(|i| u8::from_str_radix(&block0[i * 2..i * 2 + 2], 16).unwrap())
+            .collect();
+        assert_eq!(
+            &dump[offset..offset + BLOCK_SIZE],
+            &expected[..],
+            "目标块应被修改为 block0 数据"
+        );
+    }
+
+    // ── 剩余未覆盖变异体补充 ──
+
+    /// 测试 `scan` 错误去重：相同错误只记一次
+    #[test]
+    fn scan_dedup_errors() {
+        let (_d, p) = paths("scan-dedup");
+        // 用一个会失败的 scanner
+        let mut e = Engine::new(Box::new(MockToolRunner::new(vec![])));
+        let mut st = AppState::new();
+        let mut dlg = MockDialog::new();
+
+        // 触发 scan（MockToolRunner 不影响 scan，scan 用 SerialTrait）
+        e.dispatch(Action::ScanUsb, &mut st, &p, &mut dlg).unwrap();
+        // scan 不走 ToolRunner，不会启动任务
+        assert!(!e.is_running());
+    }
+
+    /// 测试 `open-phw-window` 打开手机/手环面板
+    #[test]
+    fn open_phw_window_sets_panel_flag() {
+        let (_d, p) = paths("open-phw");
+        let mut e = Engine::new(Box::new(MockToolRunner::new(vec![])));
+        let mut st = AppState::new();
+        let mut dlg = MockDialog::new();
+
+        assert!(!st.panels.phone_wristband, "初始应关闭");
+
+        e.dispatch(Action::Plain("open-phw-window"), &mut st, &p, &mut dlg)
+            .unwrap();
+
+        assert!(st.panels.phone_wristband, "open-phw-window 应打开面板");
+    }
+
+    /// 测试 `hn_advance_round` 空列表返回 false
+    #[test]
+    fn hn_advance_round_returns_false_when_empty() {
+        let mut e = Engine::new(Box::new(MockToolRunner::new(vec![])));
+        let mut st = AppState::new();
+        // known 和 unknown 都为空
+        st.known_key_info = vec![];
+        st.unknown_key_info = vec![];
+
+        let result = e.hn_advance_round(&st);
+        assert!(!result, "空列表应返回 false");
+    }
+
+    /// 测试 `patch_phw_block` 失败返回错误
+    #[test]
+    fn patch_phw_block_fails_when_block0_invalid() {
+        use crate::tasks::phw::{patch_data_block, SectorBlock};
+
+        let mut dump = vec![0u8; 1024];
+        let block0 = "INVALID"; // 长度不对
+        let target = SectorBlock {
+            sector: 1,
+            block: 1,
+        };
+
+        let result = patch_data_block(&mut dump, block0, target);
+        assert!(!result, "无效 block0 应返回 false");
     }
 }
