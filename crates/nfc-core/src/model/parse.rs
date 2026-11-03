@@ -16,6 +16,19 @@ use regex::Regex;
 
 use super::keys::{KeyInfo, KeyType, UnknownKeyInfo};
 
+/// 编译一个 `&'static Regex`，消除多个 `fn X_re() -> &'static Regex` 的
+/// `OnceLock + get_or_init` 样板代码（`dryer` 评分 1.00）。
+///
+/// 调用处给出函数名与闭包体；闭包体可以是单表达式或 `{ ... }` 块。
+macro_rules! compile_re {
+    ($name:ident, $body:expr) => {
+        fn $name() -> &'static Regex {
+            static RE: OnceLock<Regex> = OnceLock::new();
+            RE.get_or_init(|| $body)
+        }
+    };
+}
+
 // ---------------------------------------------------------------- 标记串
 
 /// mfoc / nfc-mfdetect 的 UID 行标记，长 13。
@@ -113,35 +126,46 @@ fn take_window_after(text: &str, marker: &str, skip: usize, n: usize) -> Option<
     }
 }
 
-/// `Sector NN - ` 行头，取其后的数字，对标 `keyParser.js` 的 `sectorRe`。
-///
-/// 原版用 `parseInt(head[1], 10)`，故只取**开头连续数字**——
-/// `"Sector 12 - "` → 12，且不依赖两位补零（`"Sector  9 - "` → 9）。
-fn sector_header_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"Sector\s+(\d+)").expect("静态正则"))
-}
+// `Sector NN - ` 行头，取其后的数字，对标 `keyParser.js` 的 `sectorRe`。
+//
+// 原版用 `parseInt(head[1], 10)`，故只取**开头连续数字**——
+// `"Sector 12 - "` → 12，且不依赖两位补零（`"Sector  9 - "` → 9）。
+compile_re!(
+    sector_header_re,
+    Regex::new(r"Sector\s+(\d+)").expect("静态正则")
+);
 
 // ---------------------------------------------------------------- mfdetect / mfoc 密钥行
 
-fn key_line_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        // 原版 command.js:731：/ (\w{5}|\w{7})\s+Key \w(: \w{12}|)/g
-        // 修 bug #1：尾组 `(: \w{12}|)` 空分支恒真，改为可选组
-        // 收紧：(\w{5}|\w{7}) 改为具名 (Found|Unknown)，\w{12} 改为 [0-9A-Fa-f]{12}
-        //
-        // 说明：Mifare Classic 密钥恒为 6 字节 = 12 hex，工具输出不会给出
-        // 更长的串，故 `[0-9A-Fa-f]{12}` 直接取满即可。
-        // 早期版本尾部加了 `\b` / `(?![0-9A-Fa-f])` 之类的边界断言：
-        //   - `\b` 在 12 位后接数字时仍成立，会把 16 位的串白截 4 位；
-        //   - `(?!)` 需 `regex` 的 `look-around` feature，未启用则编译期报
-        //     "look-around is not enabled"，是本项目踩过的坑。
-        // 故此处不加边界断言，语义与原版 JS 的 `\w{12}` 一致。
-        Regex::new(r"(Found|Unknown)\s+Key\s+([AB])\s*(?::\s*([0-9A-Fa-f]{12}))?")
-            .expect("静态正则")
-    })
-}
+// mfoc / nfc-mfdetect 共用的密钥行正则。对标 `keyParser.js` 的 `createKeyInfoParser`。
+//
+// 相对原版的偏离：
+// - bug #1：尾组 `(:?\s*([0-9a-fA-F]{12})?)?` 空分支恒真 → 收紧为「`Found` 行
+//   必须带满 12 位 hex，否则整行忽略」（原版 `if (!m[3]) continue` 同义）
+// - bug #2：原版每 chunk 把 `sector` 归零，跨块后扇区号整体错位
+// - bug #3：原版 `newKeys.join(key)` 是死代码（返回值被丢弃），`newKeys` 恒空
+//
+// **扇区号取自 `Sector NN -` 行头，不取自匹配序号。** 这点很关键：
+// 序号只在「每个扇区恰好两条密钥、且无跳扇区」时才与真实扇区号一致。
+// 一旦工具跳过某个扇区、或某行只输出一条，序号就会与真实扇区号分叉，
+// 且**静默错位**——用户看到的是「A 扇区的密钥被算到了 B 扇区」。
+// 原版已按行头取值（`keyParser.js:20` `if (head) sector = parseInt(head[1], 10)`），
+// 本实现此前用 `index / 2` 反推，属回退到更差的假设。
+//
+// 正则收紧说明：
+// - 原版 command.js:731：/ (\w{5}|\w{7})\s+Key \w(: \w{12}|)/g
+// - 修 bug #1：尾组 `(: \w{12}|)` 空分支恒真，改为可选组
+// - 收紧：(\w{5}|\w{7}) 改为具名 (Found|Unknown)，\w{12} 改为 [0-9A-Fa-f]{12}
+// - Mifare Classic 密钥恒为 6 字节 = 12 hex，工具输出不会给出更长的串，
+//   故 `[0-9A-Fa-f]{12}` 直接取满即可。
+// - 早期版本尾部加了 `\b` / `(?![0-9A-Fa-f])` 之类的边界断言：
+//   - `\b` 在 12 位后接数字时仍成立，会把 16 位的串白截 4 位；
+//   - `(?!)` 需 `regex` 的 `look-around` feature，未启用则编译期报
+//     "look-around is not enabled"，是本项目踩过的坑。
+// - 故此处不加边界断言，语义与原版 JS 的 `\w{12}` 一致。
+compile_re!(key_line_re, {
+    Regex::new(r"(Found|Unknown)\s+Key\s+([AB])\s*(?::\s*([0-9A-Fa-f]{12}))?").expect("静态正则")
+});
 
 /// mfoc / nfc-mfdetect 共用的密钥行解析器，对标 `keyParser.js` 的 `createKeyInfoParser`。
 ///
@@ -289,10 +313,10 @@ impl UidParser {
 
 // ---------------------------------------------------------------- libnfc-collect
 
-fn sector_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\(sector ([0-9]{1,2})\)").expect("静态正则"))
-}
+compile_re!(
+    sector_re,
+    Regex::new(r"\(sector ([0-9]{1,2})\)").expect("静态正则")
+);
 
 /// 一次采集的结果，对标 `command.js:277-307` 闭包里的 `uid` / `sector` / `keyType`。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -428,17 +452,14 @@ impl SingleKeyParser {
 
 // ---------------------------------------------------------------- mfcuk（S18）
 
-/// `mfcuk` 命中密钥的行内模式（全加密爆破逐扇区恢复，一轮可能出**多把**）。
-///
-/// 两条来源行：`Found Key A [aabbccddeeff]`（collect/restore 命中）与
-/// `recovered KEY: [aabbccddeeff]`（爆破求解器落定），均限定 12 位 hex。
-fn mfcuk_key_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"(?:Found\s+Key\s+[AB]|recovered\s+KEY:)\s*\[([0-9A-Fa-f]{12})\]")
-            .expect("静态正则")
-    })
-}
+// `mfcuk` 命中密钥的行内模式（全加密爆破逐扇区恢复，一轮可能出**多把**）。
+//
+// 两条来源行：`Found Key A [aabbccddeeff]`（collect/restore 命中）与
+// `recovered KEY: [aabbccddeeff]`（爆破求解器落定），均限定 12 位 hex。
+compile_re!(mfcuk_key_re, {
+    Regex::new(r"(?:Found\s+Key\s+[AB]|recovered\s+KEY:)\s*\[([0-9A-Fa-f]{12})\]")
+        .expect("静态正则")
+});
 
 /// `mfcuk` 输出解析。对标 MifareOneTool 的 `mfcuk -v 3 -C -R -1 -s 250 -S 250`
 /// 爆破流程（原版只在 cmd 窗口里裸跑，无解析；此处把命中的密钥收进历史）。
@@ -552,12 +573,9 @@ impl BlockStatsParser {
     }
 }
 
-fn done_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"Done,\s*(\d+)\s*of\s*(\d+)\s*blocks\s+(written|read)\.").expect("静态正则")
-    })
-}
+compile_re!(done_re, {
+    Regex::new(r"Done,\s*(\d+)\s*of\s*(\d+)\s*blocks\s+(written|read)\.").expect("静态正则")
+});
 
 fn parse_done_line(line: &str) -> Option<(u32, u32)> {
     let caps = done_re().captures(line.trim())?;

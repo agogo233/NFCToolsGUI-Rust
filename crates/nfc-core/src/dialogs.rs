@@ -167,33 +167,41 @@ impl ScriptedDialog {
     }
 }
 
+/// 脚本式对话框的公共模式：记录请求 → 弹预设结果或返回默认值。
+///
+/// 三个 trait 方法（save / open / confirm）做同一件事，区别仅在于
+/// 请求队列字段、结果队列字段和默认返回值。此处提取泛型实现，
+/// 消除 `dryer` 评分 1.00 的三处 100% 重复。
+fn scripted_response<T: Clone, R: Clone>(
+    requests: &mut Vec<R>,
+    results: &mut Vec<T>,
+    default: T,
+    req: &R,
+) -> T {
+    requests.push(req.clone());
+    if results.is_empty() {
+        default
+    } else {
+        results.remove(0)
+    }
+}
+
 impl DialogProvider for ScriptedDialog {
     fn show_save_dialog(&mut self, req: &SaveDialogRequest) -> Option<PathBuf> {
-        self.save_requests.push(req.clone());
-        if self.save_results.is_empty() {
-            None
-        } else {
-            self.save_results.remove(0)
-        }
+        scripted_response(&mut self.save_requests, &mut self.save_results, None, req)
     }
 
     fn show_open_dialog(&mut self, req: &OpenDialogRequest) -> Option<PathBuf> {
-        self.open_requests.push(req.clone());
-        if self.open_results.is_empty() {
-            None
-        } else {
-            self.open_results.remove(0)
-        }
+        scripted_response(&mut self.open_requests, &mut self.open_results, None, req)
     }
 
     fn confirm_danger(&mut self, req: &ConfirmRequest) -> bool {
-        self.confirm_requests.push(req.clone());
-        // 用尽后返回 false：未预设即拒绝，符合安全默认值
-        if self.confirm_results.is_empty() {
-            false
-        } else {
-            self.confirm_results.remove(0)
-        }
+        scripted_response(
+            &mut self.confirm_requests,
+            &mut self.confirm_results,
+            false,
+            req,
+        )
     }
 }
 

@@ -631,25 +631,53 @@ MODEL = CORE / "src/model"
 FIX = CORE / "tests/fixtures"
 
 
-def s4_model() -> None:
-    hex_rs = rd(MODEL / "hex.rs")
-    dump_rs = rd(MODEL / "dump.rs")
-    keys_rs = rd(MODEL / "keys.rs")
-    parse_rs = rd(MODEL / "parse.rs")
-    js = rd(JS)
+class ModelFiles:
+    """`s4_model` 的共享文件缓存。原函数顶部一次性读 5 个文件供 13 个分区使用，
+    拆分后经此结构体传递，避免每个子函数重复读文件（行为与原逐字一致）。"""
 
-    # --- A 默认密钥表逐字对齐 command.js:50-64
-    # 原版缺省时 `js` 是空串，不能 `.index()`；此时留空表交给 check_orig 跳过。
-    if "const defaultKeys" in js:
-        _d = js.index("const defaultKeys")
-        js_keys = re.findall(r'"([0-9a-f]{12})"', js[_d:_d + 700])
+    def __init__(self):
+        self.hex_rs = rd(MODEL / "hex.rs")
+        self.dump_rs = rd(MODEL / "dump.rs")
+        self.keys_rs = rd(MODEL / "keys.rs")
+        self.parse_rs = rd(MODEL / "parse.rs")
+        self.js = rd(JS)
+
+
+def s4_model() -> None:
+    """S4 数据模型门禁。原函数 CC=224（13 个分区、~1200 行），按分区拆为
+    子函数后由此处调度，行为与原实现逐字一致（check 调用顺序、标签、详情均保留）。"""
+    mf = ModelFiles()
+    check_s4_a_default_keys(mf)
+    check_s4_b_markers(mf)
+    check_s4_c_sizes(mf)
+    check_s4_d_tail_offsets(mf)
+    check_s4_e_regex(mf)
+    check_s4_f_sector_header(mf)
+    check_s4_g_bug_fixes(mf)
+    check_s4_h_hex_errors(mf)
+    check_s4_i_validate(mf)
+    check_s4_j_fixtures(mf)
+    check_s4_k_deviations(mf)
+    check_s4_l_docs(mf)
+    check_s4_m_generic(mf)
+
+
+# ============================================================ S4 数据模型分区
+def check_s4_a_default_keys(mf: ModelFiles) -> None:
+    """A 默认密钥表逐字对齐 command.js:50-64"""
+    if "const defaultKeys" in mf.js:
+        _d = mf.js.index("const defaultKeys")
+        js_keys = re.findall(r'"([0-9a-f]{12})"', mf.js[_d:_d + 700])
     else:
         js_keys = []
-    rs_keys = re.findall(r'"([0-9a-f]{12})"', keys_rs[keys_rs.index("DEFAULT_KEYS: [&str; 13]") :][:700])
+    rs_keys = re.findall(r'"([0-9a-f]{12})"',
+                         mf.keys_rs[mf.keys_rs.index("DEFAULT_KEYS: [&str; 13]") :][:700])
     check_orig(js_keys == rs_keys, "A DEFAULT_KEYS 与 command.js:50-64 逐字一致", f"{js_keys} != {rs_keys}")
     check(len(rs_keys) == 13, "A DEFAULT_KEYS 恰 13 条", f"实得 {len(rs_keys)}")
 
-    # --- B 标记串与偏移逐字对齐
+
+def check_s4_b_markers(mf: ModelFiles) -> None:
+    """B 标记串与偏移逐字对齐"""
     for name, needle in [
         ("MARKER_UID", "UID (NFCID1):"),
         ("MARKER_COLLECT_UID", "Found tag with uid "),
@@ -657,53 +685,55 @@ def s4_model() -> None:
         ("MARKER_CROPTO1", "Key found:"),
         ("MARKER_MFDICT", "Found Key: "),
     ]:
-        check(f'"{needle}"' in parse_rs, f"B {name} 标记串逐字")
-    check('pub const MARKER_MFOC_PROGRESS: &str = "[Key: ";' in parse_rs, "B mfoc 进度前缀逐字")
-    check("const HIT_SKIP: usize = 11;" in parse_rs, "B 两个命中标记偏移均为 11（原版怪癖）")
-    check("MARKER_UID_OFFSET: usize = 14" in parse_rs and "UID_WINDOW: usize = 14" in parse_rs,
+        check(f'"{needle}"' in mf.parse_rs, f"B {name} 标记串逐字")
+    check('pub const MARKER_MFOC_PROGRESS: &str = "[Key: ";' in mf.parse_rs, "B mfoc 进度前缀逐字")
+    check("const HIT_SKIP: usize = 11;" in mf.parse_rs, "B 两个命中标记偏移均为 11（原版怪癖）")
+    check("MARKER_UID_OFFSET: usize = 14" in mf.parse_rs and "UID_WINDOW: usize = 14" in mf.parse_rs,
           "B UID 偏移 14 / 窗口 14（对齐原版 substring(i, i+14)）")
-    check("take_window_after" in parse_rs and "fn take_hex_after" not in parse_rs,
+    check("take_window_after" in mf.parse_rs and "fn take_hex_after" not in mf.parse_rs,
           "B 窗口切片函数名为 take_window_after（不做 hex 校验，对齐原版）")
-    check(re.search(r"MARKER_COLLECT_UID,\s*MARKER_COLLECT_UID\.chars\(\)\.count\(\),\s*8,", parse_rs) is not None,
+    check(re.search(r"MARKER_COLLECT_UID,\s*MARKER_COLLECT_UID\.chars\(\)\.count\(\),\s*8,", mf.parse_rs) is not None,
           "B collect UID 偏移 19 / 取 8 hex")
-    check("MARKER_COLLECT_KEY.len()" in parse_rs, "B collect keyType 偏移 26")
+    check("MARKER_COLLECT_KEY.len()" in mf.parse_rs, "B collect keyType 偏移 26")
 
-    # --- C 尺寸常量与原版分组逻辑一致
-    check("pub const BLOCK_SIZE: usize = 16;" in dump_rs, "C BLOCK_SIZE=16")
-    check("pub const BLOCKS_PER_SECTOR: usize = 4;" in dump_rs, "C 4 块/扇区（command.js:429 i+=4）")
-    check("pub const M1_SECTORS: usize = 16;" in dump_rs, "C 1K=16 扇区（订正了原计划的「64 扇区」）")
-    check("pub const M1_SIZE: usize = SECTOR_SIZE * M1_SECTORS;" in dump_rs, "C M1_SIZE 由常量推导")
-    check("**16 扇区**" in dump_rs and "64 块" in dump_rs, "C dump.rs 写明 1024B=64 块=16 扇区")
-    check("1024 字节 = 64 扇区" not in dump_rs, "C dump.rs 未把 1K 误称 64 扇区")
 
-    # --- D 尾块四段偏移对齐 dumpEditor.js:91-94
+def check_s4_c_sizes(mf: ModelFiles) -> None:
+    """C 尺寸常量与原版分组逻辑一致"""
+    check("pub const BLOCK_SIZE: usize = 16;" in mf.dump_rs, "C BLOCK_SIZE=16")
+    check("pub const BLOCKS_PER_SECTOR: usize = 4;" in mf.dump_rs, "C 4 块/扇区（command.js:429 i+=4）")
+    check("pub const M1_SECTORS: usize = 16;" in mf.dump_rs, "C 1K=16 扇区（订正了原计划的「64 扇区」）")
+    check("pub const M1_SIZE: usize = SECTOR_SIZE * M1_SECTORS;" in mf.dump_rs, "C M1_SIZE 由常量推导")
+    check("**16 扇区**" in mf.dump_rs and "64 块" in mf.dump_rs, "C dump.rs 写明 1024B=64 块=16 扇区")
+    check("1024 字节 = 64 扇区" not in mf.dump_rs, "C dump.rs 未把 1K 误称 64 扇区")
+
+
+def check_s4_d_tail_offsets(mf: ModelFiles) -> None:
+    """D 尾块四段偏移对齐 dumpEditor.js:91-94"""
     dumpjs = rd(DUMPJS)
     for off in ["substring(0, 12)", "substring(12, 18)", "substring(18, 20)", "substring(20)"]:
         check_orig(off in dumpjs, f"D 原版尾块切分 {off} 存在")
     for seg in ["seg(0, 12)", "seg(12, 18)", "seg(18, 20)", "seg(20, 32)"]:
-        check(seg in dump_rs, f"D 本实现尾块切分 {seg}")
+        check(seg in mf.dump_rs, f"D 本实现尾块切分 {seg}")
 
-    # --- E 正则收紧（bug #1）
-    check("(?::\\s*([0-9A-Fa-f]{12}))?" in parse_rs, "E 尾组改为可选组（bug #1）")
-    check("(Found|Unknown)" in parse_rs, "E 状态字段由 \\w{5}|\\w{7} 收紧为具名")
-    check('Regex::new(r"[0-9A-Fa-f]{12}")' in keys_rs, "E parse_12hex 正则逐字")
 
-    # --- F 扇区号取自 `Sector NN -` 行头（不是「序号/2」反推）
-    #
-    # 这里原先断言 `self.index / 2`，把**错误的**实现当成了正确行为锁住。
-    # 反推序号只在「每扇区恰好两条密钥且不跳扇区」时才等于真实扇区号；
-    # 一旦工具跳过某扇区，A 扇区的密钥就会被算到 B 扇区，且**静默错位**。
-    # 原版 keyParser.js:20 早就按行头取值了，是本重写回退到了更差的假设。
-    check("Sector\\s+(\\d+)" in parse_rs or 'Sector\\s+(\\d+)' in parse_rs,
+def check_s4_e_regex(mf: ModelFiles) -> None:
+    """E 正则收紧（bug #1）"""
+    check("(?::\\s*([0-9A-Fa-f]{12}))?" in mf.parse_rs, "E 尾组改为可选组（bug #1）")
+    check("(Found|Unknown)" in mf.parse_rs, "E 状态字段由 \\w{5}|\\w{7} 收紧为具名")
+    check('Regex::new(r"[0-9A-Fa-f]{12}")' in mf.keys_rs, "E parse_12hex 正则逐字")
+
+
+def check_s4_f_sector_header(mf: ModelFiles) -> None:
+    """F 扇区号取自 `Sector NN -` 行头（不是「序号/2」反推）"""
+    check("Sector\\s+(\\d+)" in mf.parse_rs or 'Sector\\s+(\\d+)' in mf.parse_rs,
           "F 扇区号取自 Sector NN - 行头（正则）")
-    check("sector_header_re" in parse_rs, "F 有独立的行头正则")
-    check("let Some(sector) = self.sector else" in parse_rs,
+    check("sector_header_re" in mf.parse_rs, "F 有独立的行头正则")
+    check("let Some(sector) = self.sector else" in mf.parse_rs,
           "F 无 Sector 行头时整行跳过（不产出、不消耗）")
-    check("self.index / 2" not in parse_rs,
+    check("self.index / 2" not in mf.parse_rs,
           "F 不得用「序号/2」反推扇区号（会静默错位）")
     check("fn key_info_result_is_identical_for_every_chunk_width" in rd(CORE / "tests/integration.rs"),
           "F 有「所有 chunk 宽度结果一致」集成测试")
-    # 原版唯一可执行真相源已逐条移植
     check((CORE / "tests" / "orig_keyparser.rs").exists(),
           "F 原版 keyParser.test.js 已逐条移植为 Rust 测试")
     orig_t = rd(CORE / "tests" / "orig_keyparser.rs")
@@ -711,32 +741,42 @@ def s4_model() -> None:
                 "orig_3_chunk_invariance", "orig_4_edges_and_noise",
                 "orig_5_uppercase_hex_normalized"]:
         check(grp in orig_t, f"F 原版测试第 {grp} 组已移植")
-    check("to_ascii_lowercase" in parse_rs,
+    check("to_ascii_lowercase" in mf.parse_rs,
           "F 大写 hex 归一化为小写（与 keys.txt 一致，原版 keyParser.js:28）")
 
-    # --- G bug #3/#4/#6/#12 的修复证据
+
+def check_s4_g_bug_fixes(mf: ModelFiles) -> None:
+    """G bug #3/#4/#6/#12 的修复证据"""
     integ = rd(CORE / "tests/integration.rs")
     check("fn new_keys_from_detect_are_all_usable_keys" in integ, "G bug#3 有 new_keys 非空测试")
     check("assert!(!p.new_keys().is_empty());" in integ, "G bug#3 断言 new_keys 非空")
-    check("assert_eq!(p.info().sector, Some(0u8));" in parse_rs, "G bug#4 扇区号为 u8 非 String")
-    check("fn is_default_key_is_case_insensitive_but_merge_dedup_is_not" in keys_rs, "G bug#6 覆盖")
-    check("eq_ignore_ascii_case" in keys_rs, "G bug#6 用 ASCII 大小写折叠")
-    check('.tmp"' in keys_rs and "fs::rename" in keys_rs, "G bug#12 临时文件 + rename 原子写")
+    check("assert_eq!(p.info().sector, Some(0u8));" in mf.parse_rs, "G bug#4 扇区号为 u8 非 String")
+    check("fn is_default_key_is_case_insensitive_but_merge_dedup_is_not" in mf.keys_rs, "G bug#6 覆盖")
+    check("eq_ignore_ascii_case" in mf.keys_rs, "G bug#6 用 ASCII 大小写折叠")
+    check('.tmp"' in mf.keys_rs and "fs::rename" in mf.keys_rs, "G bug#12 临时文件 + rename 原子写")
     check("fn save_keys_leaves_no_temp_file_behind" in integ, "G bug#12 有无残留测试")
 
-    # --- H bug #7 hex 显式报错
-    check("pub fn hex_decode(text: &str) -> Result<Vec<u8>, HexError>" in hex_rs, "H hex_decode 返回 Result")
-    check("OddLength" in hex_rs and "InvalidChar" in hex_rs, "H 两类错误齐备")
-    check("fn decode_rejects_odd_length" in hex_rs and "fn decode_rejects_invalid_char_instead_of_truncating" in hex_rs,
+
+def check_s4_h_hex_errors(mf: ModelFiles) -> None:
+    """H bug #7 hex 显式报错"""
+    integ = rd(CORE / "tests/integration.rs")
+    check("pub fn hex_decode(text: &str) -> Result<Vec<u8>, HexError>" in mf.hex_rs, "H hex_decode 返回 Result")
+    check("OddLength" in mf.hex_rs and "InvalidChar" in mf.hex_rs, "H 两类错误齐备")
+    check("fn decode_rejects_odd_length" in mf.hex_rs and "fn decode_rejects_invalid_char_instead_of_truncating" in mf.hex_rs,
           "H 有奇数尾 / 非法字符测试")
     check("fn dump_hex_text_rejects_malformed_input_instead_of_silently_shortening" in integ, "H 集成层覆盖")
 
-    # --- I validate 四类非法
-    for v in ["DumpError::Empty", "NotSectorAligned", "LineCount", "LineLength", "NonHex"]:
-        check(v in dump_rs, f"I validate 覆盖 {v}")
-    check("fn validate_gates_non_hex_on_check_content_only" in dump_rs, "I 字符集仅在 check_content 时校验")
 
-    # --- J fixture 齐备且是 fixture 驱动
+def check_s4_i_validate(mf: ModelFiles) -> None:
+    """I validate 四类非法"""
+    for v in ["DumpError::Empty", "NotSectorAligned", "LineCount", "LineLength", "NonHex"]:
+        check(v in mf.dump_rs, f"I validate 覆盖 {v}")
+    check("fn validate_gates_non_hex_on_check_content_only" in mf.dump_rs, "I 字符集仅在 check_content 时校验")
+
+
+def check_s4_j_fixtures(mf: ModelFiles) -> None:
+    """J fixture 齐备且是 fixture 驱动"""
+    integ = rd(CORE / "tests/integration.rs")
     need = ["mfoc-output.txt", "mfdetect-keys.txt", "collect-output.txt",
             "cropto1-output.txt", "mfdict-output.txt"]
     for n in need:
@@ -745,7 +785,9 @@ def s4_model() -> None:
         check(f'"{n}"' in integ, f"J 集成测试用到 {n}")
     check(integ.count("usize::MAX") >= 5, "J 每个解析器都跑「整块喂入」基线")
 
-    # --- K 偏离已登记
+
+def check_s4_k_deviations(mf: ModelFiles) -> None:
+    """K 偏离已登记"""
     doc2 = rd(REPO / "docs/02-架构设计.md")
     check("## 6. 与原版行为的偏离登记" in doc2, "K docs/02 §6 偏离登记表存在")
     for bug in ["| 1 |", "| 2 |", "| 3 |", "| 4 |", "| 6 |", "| 7 |", "| 12 |", "| 14 |",
@@ -763,11 +805,15 @@ def s4_model() -> None:
     check("### 6.4 不可取证项（不得臆造）" in doc2, "K 有「不可取证项」小节")
     check("Key default" in doc2 and "0 命中" in doc2, "K 登记了臆造串的 0 命中事实")
     for m in re.finditer(r"docs/02 §(\d)", rd(MODEL / "hex.rs") + rd(MODEL / "dump.rs")
-                         + rd(MODEL / "keys.rs") + rd(MODEL / "parse.rs") + rd(MODEL / "mod.rs")):
+                          + rd(MODEL / "keys.rs") + rd(MODEL / "parse.rs") + rd(MODEL / "mod.rs")):
         check(m.group(1) == "6", "K 代码注释引用的偏离表编号是 §6", f"实得 §{m.group(1)}")
 
-    # --- L 文档无残留错误说法
+
+def check_s4_l_docs(mf: ModelFiles) -> None:
+    """L 文档无残留错误说法"""
     doc3 = rd(REPO / "docs/03-实施计划.md")
+    need = ["mfoc-output.txt", "mfdetect-keys.txt", "collect-output.txt",
+            "cropto1-output.txt", "mfdict-output.txt"]
     s4 = re.search(r"## S4 数据模型.*?(?=\n## S5)", doc3, re.S)
     check(s4 is not None, "L docs/03 有 S4 小节")
     s4 = s4.group(0) if s4 else ""
@@ -775,6 +821,8 @@ def s4_model() -> None:
     check("16 扇区" in s4, "L docs/03 S4 写明 16 扇区")
     doc4 = rd(REPO / "docs/04-测试计划.md")
     f02 = doc4.split("## 2. fixture 清单")[1].split("## 3.")[0]
+    need = ["mfoc-output.txt", "mfdetect-keys.txt", "collect-output.txt",
+            "cropto1-output.txt", "mfdict-output.txt"]
     for n in need:
         check(f"`{n}`" in f02, f"L docs/04 §2 列了实际 fixture {n}")
     for ghost in ["mfoc-full.txt", "mfoc-default-keys.txt", "nfc-mfdetect-mixed.txt",
@@ -787,17 +835,24 @@ def s4_model() -> None:
     check("64 扇区" not in md.split("4096B = 64 扇区")[0], "L docs/04 model/dump 已订正「64 扇区」")
     check("**16 扇区**渲染" in doc4, "L docs/04 S8 dump_editor 已订正为 16 扇区")
     check("to_sector_lines" in md, "L docs/04 用实际函数名 to_sector_lines")
+    doc2 = rd(REPO / "docs/02-架构设计.md")
     check("# registry" in doc2, "L docs/02 data.rs 归属已改为 registry")
     check("未跑 `cargo test`" in s4, "L docs/03 S4 有未跑 cargo 的警示")
     check("已在 S4 落于" in doc3, "L docs/03 S5 的 data.rs 归属已改")
     check("connect_device" not in doc3, "L docs/03 无残留 connect_device")
 
-    # --- M 泛型/结构
-    check("pub struct KeyInfo {" in keys_rs and "pub sector: u8," in keys_rs, "M KeyInfo 三元组")
-    check("pub struct UnknownKeyInfo {" in keys_rs, "M UnknownKeyInfo 无 key 字段")
-    check("pub struct Trailer {" in dump_rs, "M Trailer 四字段")
-    check("pub enum KeyType {" in keys_rs, "M KeyType 枚举")
-    # ── S5 读卡闭环 ────────────────────────────────────────────────
+
+def check_s4_m_generic(mf: ModelFiles) -> None:
+    """M 泛型/结构 + S5 读卡闭环 + S6-S18/R 守卫（原 s4_model 后半段，尚未拆分子函数）"""
+    # 为保持与原 s4_model 顶部变量名兼容，从 ModelFiles 解引用
+    dump_rs = mf.dump_rs
+    keys_rs = mf.keys_rs
+    parse_rs = mf.parse_rs
+    check("pub struct KeyInfo {" in mf.keys_rs and "pub sector: u8," in mf.keys_rs, "M KeyInfo 三元组")
+    check("pub struct UnknownKeyInfo {" in mf.keys_rs, "M UnknownKeyInfo 无 key 字段")
+    check("pub struct Trailer {" in mf.dump_rs, "M Trailer 四字段")
+    check("pub enum KeyType {" in mf.keys_rs, "M KeyType 枚举")
+    # ── S5 读卡闭环
     lib = rd(CORE / "src/lib.rs")
     for m in ["data", "dialogs", "tasks"]:
         check(f"pub mod {m};" in lib, f"S5 lib.rs 导出 {m}")
@@ -806,44 +861,44 @@ def s4_model() -> None:
           "S5 DialogProvider 含 save/open 两个方法")
     check("pub struct ScriptedDialog" in dl and "save_requests" in dl and "pub type MockDialog = ScriptedDialog" in dl, "S5 ScriptedDialog 记录请求（MockDialog 保留别名）")
     check('extensions: vec!["dump".to_string(), "mfd".to_string()]' in dl, "S5 dump 过滤器含 dump+mfd")
-    mf = rd(CORE / "src/tasks/mfoc.rs")
+    mfoc = rd(CORE / "src/tasks/mfoc.rs")
     main_rs = rd(APP / "src/main.rs")
     ser = rd(CORE / "src/serial.rs")
-    check("pub const ETA_THROTTLE_MS: u64 = 1_000;" in mf, "S5 ETA 节流 1000ms")
-    check("last_update_ms: now_ms" in mf, "S5 节流初值取当前时刻（原版 bug #4）")
-    check("pub fn format_duration" in mf and 'if h > 0 {' in mf, "S5 format_duration 按 h>0 决定带不带小时段")
-    check("pub fn mfoc_keys_total" in mf and "DEFAULT_KEYS.len() + file_keys" in mf, "S5 ETA 分母含默认密钥")
-    check('starts_with("-k")' in mf, "S5 arg_keys 按 -k 前缀过滤")
-    check("buf: LineBuffer" in mf and "self.buf.push(chunk)" in mf, "S5 ETA 复用 LineBuffer（继承 \\r 归一）")
-    check("pub fn flush(&mut self, now_ms: u64) -> Option<EtaUpdate>" in mf, "S5 EtaTracker 有 flush（末行无换行也要结算）")
-    check("MARKER_MFOC_PROGRESS" in mf and 'matches(MARKER_MFOC_PROGRESS)' in mf,
+    check("pub const ETA_THROTTLE_MS: u64 = 1_000;" in mfoc, "S5 ETA 节流 1000ms")
+    check("last_update_ms: now_ms" in mfoc, "S5 节流初值取当前时刻（原版 bug #4）")
+    check("pub fn format_duration" in mfoc and 'if h > 0 {' in mfoc, "S5 format_duration 按 h>0 决定带不带小时段")
+    check("pub fn mfoc_keys_total" in mfoc and "DEFAULT_KEYS.len() + file_keys" in mfoc, "S5 ETA 分母含默认密钥")
+    check('starts_with("-k")' in mfoc, "S5 arg_keys 按 -k 前缀过滤")
+    check("buf: LineBuffer" in mfoc and "self.buf.push(chunk)" in mfoc, "S5 ETA 复用 LineBuffer（继承 \\r 归一）")
+    check("pub fn flush(&mut self, now_ms: u64) -> Option<EtaUpdate>" in mfoc, "S5 EtaTracker 有 flush（末行无换行也要结算）")
+    check("MARKER_MFOC_PROGRESS" in mfoc and 'matches(MARKER_MFOC_PROGRESS)' in mfoc,
           "S5 count_keys_done 复用 parse 的 marker 常量")
-    check("self.keys_done += count_keys_done" in mf, "S5 ETA 按 [Key: 计数累加")
-    check("self.finished = true;" in mf and "percent: Some(100.0)" in mf, "S5 ETA 收敛推 100 并停止")
-    check("Create_dir_all" in mf.replace("std::fs::create_dir_all", "Create_dir_all"), "S5 dump_save 用 create_dir_all")
-    check("pub enum SaveOutcome" in mf and "Empty" in mf and "Failed { reason: SaveFailure }" in mf,
+    check("self.keys_done += count_keys_done" in mfoc, "S5 ETA 按 [Key: 计数累加")
+    check("self.finished = true;" in mfoc and "percent: Some(100.0)" in mfoc, "S5 ETA 收敛推 100 并停止")
+    check("Create_dir_all" in mfoc.replace("std::fs::create_dir_all", "Create_dir_all"), "S5 dump_save 用 create_dir_all")
+    check("pub enum SaveOutcome" in mfoc and "Empty" in mfoc and "Failed { reason: SaveFailure }" in mfoc,
           "S5 SaveOutcome 三态（Failed 带具名原因）")
-    check("pub enum SaveFailure" in mf and "Mkdir" in mf and "Move" in mf, "S5 SaveFailure 区分 Mkdir/Move")
-    check("EXDEV" in mf and "std::fs::copy(from, to)?" in mf, "S5 跨设备移动有 copy+remove 兜底")
-    check("temp.display()" in mf, "S5 保存失败时日志带 temp 路径（唯一副本需可抢救）")
+    check("pub enum SaveFailure" in mfoc and "Mkdir" in mfoc and "Move" in mfoc, "S5 SaveFailure 区分 Mkdir/Move")
+    check("EXDEV" in mfoc and "std::fs::copy(from, to)?" in mfoc, "S5 跨设备移动有 copy+remove 兜底")
+    check("temp.display()" in mfoc, "S5 保存失败时日志带 temp 路径（唯一副本需可抢救）")
     check(rd(CORE / "src/dialogs.rs").count("pub fn dump_filter") == 1, "S5 复用 dialogs::dump_filter 不重复定义")
-    check("url.unwrap_or_else(|| pending.default_path.clone())" in mf,
+    check("url.unwrap_or_else(|| pending.default_path.clone())" in mfoc,
           "S5 用户取消回落默认名")
-    check("Event::DumpSaved(target.clone())" in mf, "S5 落盘后推 DumpSaved")
-    dt = rd(CORE / "src/tasks/detect.rs")
-    check('"-N".to_string(),' in dt and 'assert_eq!(a[0], "-N")' in dt, "S5 探测默认参数 -N")
-    check('format!(' in dt and '"-O{}"' in dt, "S5 落盘模式参数 -O")
-    check("pub fn unknown_guidance_text" in dt and "guidance_unknown_pre" in dt, "S5 unknown 引导文案")
-    check('("hard-nested", i18n::t("html_hard_nested"))' in dt and '("dict-test", i18n::t("html_test_dictionary"))' in dt,
+    check("Event::DumpSaved(target.clone())" in mfoc, "S5 落盘后推 DumpSaved")
+    ddt = rd(CORE / "src/tasks/detect.rs")
+    check('"-N".to_string(),' in ddt and 'assert_eq!(a[0], "-N")' in ddt, "S5 探测默认参数 -N")
+    check('format!(' in ddt and '"-O{}"' in ddt, "S5 落盘模式参数 -O")
+    check("pub fn unknown_guidance_text" in ddt and "guidance_unknown_pre" in ddt, "S5 unknown 引导文案")
+    check('("hard-nested", i18n::t("html_hard_nested"))' in ddt and '("dict-test", i18n::t("html_test_dictionary"))' in ddt,
           "S5 引导两按钮 action 名与 command.js 一致")
-    check("pub enum DetectOutcome" in dt and "ReadFailed { reason: ReadFailure }" in dt, "S5 DetectOutcome 两态")
-    check("pub fn guidance_for_unknown" in dt, "S5 引导独立成 detect-card-type 专属路径")
-    check("pub fn after_detect" in dt and "DetectOutcome::Proceed" in dt,
+    check("pub enum DetectOutcome" in ddt and "ReadFailed { reason: ReadFailure }" in ddt, "S5 DetectOutcome 两态")
+    check("pub fn guidance_for_unknown" in ddt, "S5 引导独立成 detect-card-type 专属路径")
+    check("pub fn after_detect" in ddt and "DetectOutcome::Proceed" in ddt,
           "S5 readICThenExec 路径不因 unknown 拦下主命令")
-    check("save_keys(paths, parser.new_keys())" in dt, "S5 探测收尾落盘新读到的密钥")
-    check("pub fn detect_status_key" in dt and "pub fn detect_status(" in dt, "S5 状态条同时给出 key 与已翻译文案")
-    check('i18n::t("log_msg_card_read_failed")' in dt, "S5 读卡失败文案")
-    check("pub fn check_key_file_exists" in dt, "S5 密钥文件缺失时创建")
+    check("save_keys(paths, parser.new_keys())" in ddt, "S5 探测收尾落盘新读到的密钥")
+    check("pub fn detect_status_key" in ddt and "pub fn detect_status(" in ddt, "S5 状态条同时给出 key 与已翻译文案")
+    check('i18n::t("log_msg_card_read_failed")' in ddt, "S5 读卡失败文案")
+    check("pub fn check_key_file_exists" in ddt, "S5 密钥文件缺失时创建")
     # S19：定义存在不等于被调用。mfoc / nfc-mfdetect 对 -f 的文件是硬依赖
     # （fopen 失败直接 exit(EXIT_FAILURE)），此前该函数只有测试调用者，
     # 全新安装的首次读卡 / 检测 / 写卡全部静默失败。
@@ -1479,12 +1534,13 @@ def s4_model() -> None:
     # ── S11-7 挂起式保存框 ──────────────────────────────────────────
     # 曾经的谎：read-IC 收尾与 collectOnly 标着「已接线」，实际 engine 侧
     # 永远拿不到路径，静默用默认名落盘。parity 表说完成，其实没弹过框。
+    mfoc_rs = rd(CORE / "src/tasks/mfoc.rs")
     dl = rd(CORE / "src/dialogs.rs")
     check("pub struct PendingSave" in dl, "S11-7 有挂起式保存请求")
     check("pub fn pending_save" in eng, "S11-7 engine 暴露 pending_save")
     check("pub fn resolve_save" in eng, "S11-7 engine 有续接入口")
-    check("pub fn dump_prepare" in mf, "S11-7 dump_save 拆成 prepare/commit")
-    check("pub fn dump_commit" in mf, "S11-7 有 commit 半段")
+    check("pub fn dump_prepare" in mfoc_rs, "S11-7 dump_save 拆成 prepare/commit")
+    check("pub fn dump_commit" in mfoc_rs, "S11-7 有 commit 半段")
     # 忙门禁：挂起期间必须挡住并发任务，否则 temp.mfd 会被下一次读卡覆盖
     check("self.running.is_some() || self.pending_save.is_some()" in eng,
           "S11-7 挂起期间算作在忙")
@@ -1629,6 +1685,7 @@ def s4_model() -> None:
 
     check("pub mod model;" in rd(CORE / "src/lib.rs"), "M lib.rs 导出 model")
     # S0-S3 回归：本次全量复查后固化
+    doc2 = rd(REPO / "docs/02-架构设计.md")
     th = rd(CORE / "src/theme.rs")
     check("tokens.css 有 39 个 `--color-*`" in th, "R theme.rs 注明建模范围 34/39")
     tok = rd(ORIG / "src/renderer/css/tokens.css")
@@ -1802,6 +1859,7 @@ def s4_model() -> None:
     check(r"\d{1,2}" not in parse_rs, "M 扇区正则用 ASCII [0-9] 而非 \\d")
     check("长 **25**" in parse_rs, "M MARKER_COLLECT_KEY 长度注释已订正为 25")
     check("长 **6**" in parse_rs, "M MARKER_MFOC_PROGRESS 长度注释已订正为 6")
+    integ = rd(CORE / "tests/integration.rs")
     # 审计发现的 7 处必红断言已修
     check("fn found_without_key_group_is_ignored_entirely" in parse_rs, "M A7 测试已改为「不消耗序号」语义")
     check("DEADBEEF1234" in keys_rs, "M A5 大小写去重测试不再用默认密钥")
