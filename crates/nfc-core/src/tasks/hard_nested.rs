@@ -299,20 +299,20 @@ pub fn collect_status_text(auto_run: bool, remaining: usize, total: usize) -> St
     }
 }
 
+/// 报告日志的公共逻辑。
+fn report_log(state: &mut AppState, key: &str, trailing_newline: bool) {
+    let suffix = if trailing_newline { "\n" } else { "" };
+    state.apply(Event::Log(format!("\n{}{suffix}", i18n::t(key))));
+}
+
 /// no known key 的收尾，对标 `command.js:259-262`。
 pub fn report_no_known_key(state: &mut AppState) {
-    state.apply(Event::Log(format!(
-        "\n{}",
-        i18n::t("log_msg_not_found_known_key")
-    )));
+    report_log(state, "log_msg_not_found_known_key", false);
 }
 
 /// unknown 全解完的收尾，对标 `command.js:263-267`。
 pub fn report_all_decrypted(state: &mut AppState) {
-    state.apply(Event::Log(format!(
-        "\n{}\n",
-        i18n::t("log_msg_tried_decrypt_all_unknown_keys")
-    )));
+    report_log(state, "log_msg_tried_decrypt_all_unknown_keys", true);
 }
 
 /// autoRun 起始时清空 nonces 文件，对标 `command.js:249`。
