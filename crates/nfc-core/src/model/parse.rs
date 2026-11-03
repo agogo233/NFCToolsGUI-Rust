@@ -29,6 +29,25 @@ macro_rules! compile_re {
     };
 }
 
+/// 为解析器生成 `push` / `flush` 方法，消除重复的行缓冲样板代码
+/// （`dryer` 评分 1.00，6 处重复）。
+///
+/// 调用处给出 `self.buf` 和 `self.scan` 的调用形式。
+macro_rules! impl_push_flush {
+    () => {
+        pub fn push(&mut self, chunk: &str) {
+            let lines = self.buf.push(chunk);
+            self.scan(&lines);
+        }
+
+        /// 工具退出时结算末行。
+        pub fn flush(&mut self) {
+            let lines = self.buf.flush();
+            self.scan(&lines);
+        }
+    };
+}
+
 // ---------------------------------------------------------------- 标记串
 
 /// mfoc / nfc-mfdetect 的 UID 行标记，长 13。
@@ -196,16 +215,7 @@ impl KeyInfoParser {
         Self::default()
     }
 
-    pub fn push(&mut self, chunk: &str) {
-        let lines = self.buf.push(chunk);
-        self.scan(&lines);
-    }
-
-    /// 工具退出时结算末行。
-    pub fn flush(&mut self) {
-        let lines = self.buf.flush();
-        self.scan(&lines);
-    }
+    impl_push_flush!();
 
     pub fn known(&self) -> &[KeyInfo] {
         &self.known
@@ -350,15 +360,7 @@ impl CollectParser {
         Self::default()
     }
 
-    pub fn push(&mut self, chunk: &str) {
-        let lines = self.buf.push(chunk);
-        self.scan(&lines);
-    }
-
-    pub fn flush(&mut self) {
-        let lines = self.buf.flush();
-        self.scan(&lines);
-    }
+    impl_push_flush!();
 
     pub fn info(&self) -> &CollectInfo {
         &self.info
@@ -426,15 +428,7 @@ impl SingleKeyParser {
         }
     }
 
-    pub fn push(&mut self, chunk: &str) {
-        let lines = self.buf.push(chunk);
-        self.scan(&lines);
-    }
-
-    pub fn flush(&mut self) {
-        let lines = self.buf.flush();
-        self.scan(&lines);
-    }
+    impl_push_flush!();
 
     /// 取出并清空。原版每次命中即 `saveKeys([key])`（`command.js:345,400`），按一次性语义。
     pub fn take(&mut self) -> Option<String> {
@@ -528,16 +522,7 @@ impl BlockStatsParser {
         Self::default()
     }
 
-    pub fn push(&mut self, chunk: &str) {
-        let lines = self.buf.push(chunk);
-        self.scan(&lines);
-    }
-
-    /// 工具退出时结算末行。
-    pub fn flush(&mut self) {
-        let lines = self.buf.flush();
-        self.scan(&lines);
-    }
+    impl_push_flush!();
 
     /// 最近一次抓到的 `(written, total)`；从未抓到过返回 `None`。
     ///
