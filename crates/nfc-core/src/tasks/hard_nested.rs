@@ -194,10 +194,14 @@ impl HardNestedRunner {
         }
     }
 
+    fn idle_step(&mut self, step: Step) -> Step {
+        self.phase = HardNestedPhase::Idle;
+        step
+    }
+
     /// collectOnly 保存结束。
     pub fn after_save(&mut self) -> Step {
-        self.phase = HardNestedPhase::Idle;
-        Step::Done
+        self.idle_step(Step::Done)
     }
 
     /// 破解结束后的判定，对标 `command.js:341-350`。
@@ -211,9 +215,8 @@ impl HardNestedRunner {
             self.phase = HardNestedPhase::AutoDetecting;
             Step::Detect
         } else {
-            self.phase = HardNestedPhase::Idle;
             let _ = unknown_remaining;
-            Step::Done
+            self.idle_step(Step::Done)
         }
     }
 
@@ -231,16 +234,14 @@ impl HardNestedRunner {
     ) -> Step {
         if config.auto_run && unknown_after >= unknown_before {
             // 本轮没解出任何密钥，再跑下去结果不会变
-            self.phase = HardNestedPhase::Idle;
-            return Step::StopNoProgress;
+            return self.idle_step(Step::StopNoProgress);
         }
         self.after_crack(config, unknown_after)
     }
 
     /// 手动中止（等价原版 `killProcess`），修掉 `Step::StopCancelled` 不可达的问题。
     pub fn cancel(&mut self) -> Step {
-        self.phase = HardNestedPhase::Idle;
-        Step::StopCancelled
+        self.idle_step(Step::StopCancelled)
     }
 
     /// 本轮瞄准的 unknown（队首），`after_detect` 后才有值。
