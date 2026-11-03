@@ -125,6 +125,12 @@ DUMP_VIEW_EXTRA = {
     "html_dump_view_continuous",
     "html_tip_dump_view",
 }
+# S19 审计收口·面板输入前置校验补的 2 个 key（docs/02 §6.42，原版靠工具报错、
+# 本重写在 UI 层前置拦截扇区/密钥范围，属刻意偏离）。
+PANEL_VALIDATION_EXTRA = {
+    "dialog_msg_sector_range_invalid",
+    "dialog_msg_key_hex_invalid",
+}
 # S18 从「上游独有」挪回的 20 个 key：两版共有且文案逐字一致。
 S18_MIGRATED = {
     "dialog_msg_invalid_uid_input",
@@ -334,10 +340,10 @@ def h_i18n() -> None:
     keys = json.loads(rd(REPO / "assets/locales/zh-CN.json"))
     orig_zh_keys = set(rd_json(ORIG / "src/locales/zh-CN.json")) if not ORIG_MISSING else set()
     check(
-        len(keys) == 194 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(DUMP_VIEW_EXTRA) + len(S18_MIGRATED),
-        f"H zh-CN.json {194 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(DUMP_VIEW_EXTRA) + len(S18_MIGRATED)} key"
+        len(keys) == 194 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(DUMP_VIEW_EXTRA) + len(PANEL_VALIDATION_EXTRA) + len(S18_MIGRATED),
+        f"H zh-CN.json {194 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(DUMP_VIEW_EXTRA) + len(PANEL_VALIDATION_EXTRA) + len(S18_MIGRATED)} key"
         f"（基础 194 + S16 补 {len(S16_EXTRA)} + S17 补 {len(S17_EXTRA)}"
-        f" + S18 新增 {len(S18_EXTRA)} + MFOC_PROBES 补 {len(MFOC_PROBES_EXTRA)} + LOG_COPY 补 {len(LOG_COPY_EXTRA)} + DUMP_VIEW 补 {len(DUMP_VIEW_EXTRA)} + S18 迁移 {len(S18_MIGRATED)}）",
+        f" + S18 新增 {len(S18_EXTRA)} + MFOC_PROBES 补 {len(MFOC_PROBES_EXTRA)} + LOG_COPY 补 {len(LOG_COPY_EXTRA)} + DUMP_VIEW 补 {len(DUMP_VIEW_EXTRA)} + 面板校验补 {len(PANEL_VALIDATION_EXTRA)} + S18 迁移 {len(S18_MIGRATED)}）",
         f"实际 {len(keys)}",
     )
     # S8 新增的 3 个 settings 按钮文案（原版 settings.html 硬编码英文，无 i18n key，
@@ -1724,7 +1730,7 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     # 自动执行提示、文件框等待文案、检测结果“已知/未知”、历史重命名、
     # 控制台按钮悬停说明（§6.28 P1）
     # （docs/02 §6.25 续 / §6.28 / S16 偏离登记）。
-    LOCAL_EXTRA = S8_EXTRA | S11_EXTRA | S12_EXTRA | S15_EXTRA | S16_EXTRA | S17_EXTRA | S18_EXTRA | MFOC_PROBES_EXTRA | LOG_COPY_EXTRA | DUMP_VIEW_EXTRA
+    LOCAL_EXTRA = S8_EXTRA | S11_EXTRA | S12_EXTRA | S15_EXTRA | S16_EXTRA | S17_EXTRA | S18_EXTRA | MFOC_PROBES_EXTRA | LOG_COPY_EXTRA | DUMP_VIEW_EXTRA | PANEL_VALIDATION_EXTRA
     # 原版对拍基线（ORIG_REF）漂移时上游会新增 key，对应本重写**没有**的功能/结构。
     # 搬运这些文案没有意义（没有代码会 t() 它们），故显式登记为「上游有、我们不做」。
     # 若将来真要做对应功能，把 key 从这里挪进 LOCAL_EXTRA 即可。
@@ -1784,6 +1790,7 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     check(S16_EXTRA <= set(i18n_asset), "R S16 补的 24 个 UI 文案在表内")
     check(LOG_COPY_EXTRA <= set(i18n_asset), "R 日志复制补的 2 个文案在表内")
     check(DUMP_VIEW_EXTRA <= set(i18n_asset), "R 转储编辑器视图切换补的 3 个文案在表内")
+    check(PANEL_VALIDATION_EXTRA <= set(i18n_asset), "R 面板输入校验补的 2 个文案在表内")
     check_orig(LOCAL_EXTRA.isdisjoint(orig_zh),
           f"R 本地补的 {len(LOCAL_EXTRA)} 个 key 确认原版不存在")
     check(UPSTREAM_ONLY.isdisjoint(set(i18n_asset)),
@@ -1797,8 +1804,8 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
           "R i18n key 名不得以标点结尾（疑似误建的新 key）",
           f"{[k for k in i18n_asset if k[-1:] in {':', '.', ',', ' ', '-', '_'}]}")
     # 本地补的 key 数量原本写死在 Rust 测试与此处两处，已漂移过一次。双向钉死。
-    check(len(LOCAL_EXTRA) == 14 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(DUMP_VIEW_EXTRA),
-          "R 本地补的 i18n key 恰为 63 个", f"实际 {len(LOCAL_EXTRA)}")
+    check(len(LOCAL_EXTRA) == 14 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(DUMP_VIEW_EXTRA) + len(PANEL_VALIDATION_EXTRA),
+          "R 本地补的 i18n key 恰为 65 个", f"实际 {len(LOCAL_EXTRA)}")
     cd = rd(CORE / "src/command.rs")
     # rustfmt 会把字段拆成多行，故用 DOTALL 匹配整个结构体字面量
     specs = re.findall(

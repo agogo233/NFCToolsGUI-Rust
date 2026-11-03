@@ -261,6 +261,18 @@ impl HardNestedForm {
             auto_run: self.auto_run,
         }
     }
+
+    /// 前置校验：known_key 须为 12 位 hex，两个扇区须在 0..=39（兼容 4K）。
+    /// 返回第一个命中的 i18n key（docs/02 §6.42）。原版无此校验，越界靠工具报错。
+    pub fn validation_error(&self) -> Option<&'static str> {
+        if !is_12hex(&self.known_key) {
+            return Some("dialog_msg_key_hex_invalid");
+        }
+        if !in_sector_range(&self.known_sector) || !in_sector_range(&self.target_sector) {
+            return Some("dialog_msg_sector_range_invalid");
+        }
+        None
+    }
 }
 
 /// 字典测试面板的表单（对标 `dictTest.html:15-36`）。
@@ -303,11 +315,36 @@ impl DictTestForm {
             start_position: self.start_position.parse().unwrap_or(0),
         }
     }
+
+    /// 前置校验：扇区须在 0..=39（兼容 4K，docs/02 §6.42）。
+    pub fn validation_error(&self) -> Option<&'static str> {
+        if !in_sector_range(&self.sector) {
+            return Some("dialog_msg_sector_range_invalid");
+        }
+        None
+    }
 }
 
 /// 文本框 → 扇区号。原版 `parseInt` 得 `NaN` 时工具会报错，此处兜底为 0。
 fn parse_sector(text: &str) -> u8 {
     text.trim().parse().unwrap_or(0)
+}
+
+/// hard-nested / dict-test 的扇区范围：0..=39（兼容 4K 卡，docs/02 §6.42）。
+///
+/// 空串视作 0（`parse_sector` 兜底），合法。
+fn in_sector_range(text: &str) -> bool {
+    let t = text.trim();
+    if t.is_empty() {
+        return true;
+    }
+    t.parse::<u8>().map(|v| v <= 39).unwrap_or(false)
+}
+
+/// 是否为恰好 12 位 hex（known_key 前置校验，docs/02 §6.42）。
+fn is_12hex(text: &str) -> bool {
+    let t = text.trim();
+    t.len() == 12 && t.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 /// 手机/手环面板表单（对标 `phoneWristband.html` 的扇区/块两个 input）。
@@ -324,6 +361,22 @@ impl Default for PhwForm {
         Self {
             sector: "0".to_owned(),
             block: "1".to_owned(),
+        }
+    }
+}
+
+impl PhwForm {
+    /// 前置校验：扇区 0..=15、块 1..=2（沿用 `SectorBlock::is_valid` 的 1K 语义，
+    /// docs/02 §6.42）。原版靠引擎侧拦，这里提前到输入时提示。
+    pub fn validation_error(&self) -> Option<&'static str> {
+        let sector = parse_u32(&self.sector);
+        let block = parse_u32(&self.block);
+        if sector <= nfc_core::tasks::phw::SECTOR_MAX
+            && (nfc_core::tasks::phw::BLOCK_MIN..=nfc_core::tasks::phw::BLOCK_MAX).contains(&block)
+        {
+            None
+        } else {
+            Some("dialog_msg_phw_sector_block_invalid")
         }
     }
 }
@@ -900,7 +953,12 @@ fn hard_nested(ui: &mut Ui, app: &mut NfcApp) -> bool {
         }
     });
 
-    let (cancel, ok) = footer(ui, &t("html_execute"), !no_config);
+    // docs/02 §6.42：known_key 12 位 hex + 两扇区 0..=39 前置校验，越界禁用「执行」+ 红字。
+    let verr = f.validation_error();
+    if let Some(key) = verr {
+        ui.colored_label(danger, t(key));
+    }
+    let (cancel, ok) = footer(ui, &t("html_execute"), !no_config && verr.is_none());
     if ok {
         app.pending
             .push(Action::HardNestedConfig(Box::new(f.config())));
@@ -984,7 +1042,12 @@ fn dict_test(ui: &mut Ui, app: &mut NfcApp) -> bool {
         }
     });
 
-    let (cancel, ok) = footer(ui, &t("dialog_button_ok"), !f.no_config);
+    // docs/02 §6.42：扇区 0..=39 前置校验，越界禁用「确定」+ 红字。
+    let verr = f.validation_error();
+    if let Some(key) = verr {
+        ui.colored_label(danger, t(key));
+    }
+    let (cancel, ok) = footer(ui, &t("dialog_button_ok"), !f.no_config && verr.is_none());
     if ok {
         app.pending
             .push(Action::DictTestConfig(Box::new(f.config())));
@@ -1151,6 +1214,12 @@ fn phone_wristband(ui: &mut Ui, app: &mut NfcApp) -> bool {
                 ui.end_row();
                 ui.label(t("html_phw_range"));
             });
+
+        // docs/02 §6.42：扇区 0..=15、块 1..=2 前置红字提示。读卡号不依赖扇区/块，
+        // 故不禁用 read；写数据扇区仍由引擎侧 is_valid 兜底，这里把提示提前到输入时。
+        if let Some(key) = app.forms.phw.validation_error() {
+            ui.colored_label(danger, t(key));
+        }
 
         ui.add_space(8.0);
         let read = egui::Button::new(
@@ -1758,5 +1827,108 @@ mod tests {
         let mut p = nfc_core::state::Panels::default();
         close_topmost(&mut p);
         assert!(!p.any_open());
+    }
+
+    // ── docs/02 §6.42 面板输入前置校验 ──
+
+    #[test]
+    fn in_sector_range_accepts_0_to_39_and_empty() {
+        assert!(in_sector_range(""));
+        assert!(in_sector_range("0"));
+        assert!(in_sector_range("39"));
+        assert!(!in_sector_range("40"));
+        assert!(!in_sector_range("99"));
+        assert!(!in_sector_range("abc"));
+        assert!(!in_sector_range("-1"));
+    }
+
+    #[test]
+    fn is_12hex_accepts_exactly_12_hex() {
+        assert!(is_12hex("ffffffffffff"));
+        assert!(is_12hex("FFFFFFFFFFFF"));
+        assert!(is_12hex("0123456789ab"));
+        assert!(!is_12hex("fffffffffff"), "11 位");
+        assert!(!is_12hex("fffffffffffffff"), "15 位");
+        assert!(!is_12hex("zzzzzzzzzzzz"), "非 hex");
+        assert!(!is_12hex(""), "空串不是合法密钥");
+    }
+
+    #[test]
+    fn hard_nested_validation_rejects_bad_key_and_sector() {
+        let valid = HardNestedForm {
+            known_key: "ffffffffffff".into(),
+            known_sector: "0".into(),
+            target_sector: "39".into(),
+            ..Default::default()
+        };
+        assert_eq!(valid.validation_error(), None, "合法配置应通过");
+
+        let bad_key = HardNestedForm {
+            known_key: "xyz".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            bad_key.validation_error(),
+            Some("dialog_msg_key_hex_invalid"),
+            "非 12 位 hex 应报密钥错"
+        );
+
+        let bad_sector = HardNestedForm {
+            known_key: "ffffffffffff".into(),
+            target_sector: "99".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            bad_sector.validation_error(),
+            Some("dialog_msg_sector_range_invalid"),
+            "扇区 99 应报范围错"
+        );
+    }
+
+    #[test]
+    fn dict_test_validation_rejects_out_of_range_sector() {
+        let ok = DictTestForm {
+            sector: "0".into(),
+            ..Default::default()
+        };
+        assert_eq!(ok.validation_error(), None);
+
+        let four_k = DictTestForm {
+            sector: "39".into(),
+            ..Default::default()
+        };
+        assert_eq!(four_k.validation_error(), None, "39 是 4K 合法扇区");
+
+        let bad = DictTestForm {
+            sector: "99".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            bad.validation_error(),
+            Some("dialog_msg_sector_range_invalid")
+        );
+    }
+
+    #[test]
+    fn phw_validation_follows_sector_max_15_block_1_to_2() {
+        let valid = |sector: &str, block: &str| PhwForm {
+            sector: sector.into(),
+            block: block.into(),
+        };
+        assert_eq!(valid("0", "1").validation_error(), None, "默认 0/1 合法");
+        assert_eq!(valid("15", "2").validation_error(), None, "15/2 是 1K 上界");
+        assert_eq!(
+            valid("16", "2").validation_error(),
+            Some("dialog_msg_phw_sector_block_invalid"),
+            "扇区 16 超出 1K"
+        );
+        assert_eq!(
+            valid("0", "0").validation_error(),
+            Some("dialog_msg_phw_sector_block_invalid")
+        );
+        assert_eq!(
+            valid("0", "3").validation_error(),
+            Some("dialog_msg_phw_sector_block_invalid")
+        );
     }
 }

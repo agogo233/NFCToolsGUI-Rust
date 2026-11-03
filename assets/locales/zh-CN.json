@@ -172,6 +172,8 @@
     "html_phw_write_data": "写数据扇区",
     "dialog_msg_need_phw_read_uid_first": "尚未读取卡号, 请先点\"读取卡号\"",
     "dialog_msg_phw_sector_block_invalid": "扇区/块号超出范围(扇区 0-15, 块 1-2)",
+    "dialog_msg_sector_range_invalid": "扇区号超出范围(0-39)",
+    "dialog_msg_key_hex_invalid": "密钥须为 12 位十六进制",
     "dialog_msg_phw_write_to": " 写入扇区 ",
     "dialog_msg_confirm_phw_write_uid": "将写入卡号 ",
     "dialog_msg_confirm_phw_write_data": "将把卡号 ",
