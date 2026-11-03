@@ -138,32 +138,30 @@ pub fn resolve_dump_id(dump_id: &str, dumps_dir: &Path) -> PathBuf {
     }
 }
 
+/// `nfc-mfclassic <sub> A u <src> <dst> f` 的公共拼装逻辑。
+fn mfclassic_args(sub: &str, src: &Path, dst: &Path) -> Vec<String> {
+    vec![
+        sub.to_string(),
+        "A".to_string(),
+        "u".to_string(),
+        src.display().to_string(),
+        dst.display().to_string(),
+        "f".to_string(),
+    ]
+}
+
 /// `nfc-mfclassic w A u <src> <temp> f`，对标 `command.js:117`。
 ///
 /// 六个参数分别是：子命令、目标扇区、UID 模式、源 dump、临时读出 dump、扇区过滤标志。
 pub fn mfclassic_write_args(src: &Path, temp: &Path) -> Vec<String> {
-    vec![
-        MFCLASSIC_WRITE.to_string(),
-        "A".to_string(),
-        "u".to_string(),
-        src.display().to_string(),
-        temp.display().to_string(),
-        "f".to_string(),
-    ]
+    mfclassic_args(MFCLASSIC_WRITE, src, temp)
 }
 
 /// `nfc-mfclassic f A u <temp> <temp> f`，对标 `command.js:145`。
 ///
 /// 源与目标同为 `temp.mfd`——先读出当前卡内容到 temp，再把 temp 写回去。
 pub fn mfclassic_format_args(temp: &Path) -> Vec<String> {
-    vec![
-        MFCLASSIC_FORMAT.to_string(),
-        "A".to_string(),
-        "u".to_string(),
-        temp.display().to_string(),
-        temp.display().to_string(),
-        "f".to_string(),
-    ]
+    mfclassic_args(MFCLASSIC_FORMAT, temp, temp)
 }
 
 /// `nfc-mfsetuid -q <block0_hex>`，对标 `command.js:220`。
