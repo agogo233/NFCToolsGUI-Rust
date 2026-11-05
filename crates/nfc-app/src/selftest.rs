@@ -38,7 +38,10 @@ pub fn run() -> eframe::Result {
         ("挂起期间不重复投递弹窗", c_pending_save_not_reposted),
         ("collectOnly 弹框续接", c_nonces_save_round_trip),
         ("无门户收尾用默认名落盘", c_pending_save_no_portal_autosave),
-        ("无门户 collectOnly 保留 nonces", c_nonces_no_portal_keeps_bin),
+        (
+            "无门户 collectOnly 保留 nonces",
+            c_nonces_no_portal_keeps_bin,
+        ),
         // ── S9 模态面板 ──
         ("5 个面板各自渲染一帧", c_panels_render),
         ("settings 三态主题", c_theme_mode_three_states),
@@ -103,7 +106,10 @@ pub fn run() -> eframe::Result {
         ("备份段非 0 退出不写卡", c_backup_nonzero_blocks_write),
         ("write-uid 确认框显示 block0", c_write_uid_shows_block0),
         ("save-log 快照写出", c_save_log_flow),
-        ("save-log 重复回传不空写", c_save_log_second_reply_no_empty_write),
+        (
+            "save-log 重复回传不空写",
+            c_save_log_second_reply_no_empty_write,
+        ),
         ("选字典回填 dict_path", c_dict_file_flow),
         ("重命名提交", c_history_rename),
         ("重命名行渲染不提交", c_history_rename_render),
