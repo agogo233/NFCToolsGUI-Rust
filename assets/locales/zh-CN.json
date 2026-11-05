@@ -140,6 +140,7 @@
     "log_msg_finished": "### 运行完毕 ###",
     "log_msg_hard_nested_no_progress": "本轮未解出任何密钥，已停止自动重试",
     "log_msg_hard_nested_state_lost": "HardNested 内部状态丢失，任务已中止",
+    "log_msg_nonce_kept_at": "采集数据未保存，仍保留在",
     "log_msg_nonces_empty_not_saved": "未采集到 nonce，未保存",
     "log_msg_not_found_device": "未发现设备!",
     "log_msg_not_found_known_key": "未发现已知密钥",

@@ -315,8 +315,29 @@ impl NfcApp {
     ///
     /// `engine.pending_save()` 一直非空直到 `resolve_save` 把它取走，故这里
     /// 还要看 `dialogs_host` 是否已在等——否则每帧都会重复投递、弹出几十个框。
+    ///
+    /// 无门户时 rfd 的保存框**永不返回**，请求照发会让 `pending_save` 一直
+    /// 占着任务位（状态条卡「运行中」且无提示）。改为对齐 `on_file_reply` 的
+    /// 取消续接直接收尾，并给出数据去向（偏离登记于 docs/02 §6.43）。
     fn pump_pending_save(&mut self) {
         if self.dialogs_host.is_pending() {
+            return;
+        }
+        if !self.file_dialogs_ok && self.engine.pending_save().is_some() {
+            self.warn_no_portal();
+            let nonce = self.engine.hn_saving();
+            self.engine.resolve_save(None, &mut self.state, &self.paths);
+            if nonce {
+                // collectOnly 取消＝保留 nonces.bin：补位置提示方便找回
+                // （read-IC 取消＝默认名落盘，`dump_commit` 日志自带完整路径）。
+                self.state.apply(Event::Log(format!(
+                    "\n{} {}\n",
+                    t("log_msg_nonce_kept_at"),
+                    self.paths.nonces_file().display()
+                )));
+            } else if let Some(path) = self.engine.take_last_dump_saved() {
+                self.on_dump_saved_ui(path);
+            }
             return;
         }
         let Some(pending) = self.engine.pending_save() else {
@@ -416,7 +437,11 @@ impl NfcApp {
             }
             // command.js:546-556
             dialogs_host::FilePurpose::SaveLog => {
-                let content = self.log_pending.take().unwrap_or_default();
+                // 挂起期间重复触发的回传：快照已被第一次回传取走，拿空内容
+                // 写盘会把用户刚选的路径覆盖成 0 字节文件（docs/02 §6.43）。
+                let Some(content) = self.log_pending.take() else {
+                    return;
+                };
                 match std::fs::write(&path, content) {
                     Ok(()) => {
                         // 日志正文含恢复出的密钥，与内部 keys_file 同样收紧到 0600（Windows no-op）。

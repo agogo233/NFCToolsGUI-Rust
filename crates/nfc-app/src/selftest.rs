@@ -37,6 +37,8 @@ pub fn run() -> eframe::Result {
         ("read-IC 收尾弹系统保存框", c_read_ic_save_round_trip),
         ("挂起期间不重复投递弹窗", c_pending_save_not_reposted),
         ("collectOnly 弹框续接", c_nonces_save_round_trip),
+        ("无门户收尾用默认名落盘", c_pending_save_no_portal_autosave),
+        ("无门户 collectOnly 保留 nonces", c_nonces_no_portal_keeps_bin),
         // ── S9 模态面板 ──
         ("5 个面板各自渲染一帧", c_panels_render),
         ("settings 三态主题", c_theme_mode_three_states),
@@ -101,6 +103,7 @@ pub fn run() -> eframe::Result {
         ("备份段非 0 退出不写卡", c_backup_nonzero_blocks_write),
         ("write-uid 确认框显示 block0", c_write_uid_shows_block0),
         ("save-log 快照写出", c_save_log_flow),
+        ("save-log 重复回传不空写", c_save_log_second_reply_no_empty_write),
         ("选字典回填 dict_path", c_dict_file_flow),
         ("重命名提交", c_history_rename),
         ("重命名行渲染不提交", c_history_rename_render),
@@ -2005,6 +2008,80 @@ fn c_nonces_save_round_trip() -> Result<(), String> {
     Ok(())
 }
 
+/// 无门户时挂起的保存请求不能照发（rfd 永不返回 → 任务位被占死），
+/// 应按取消语义直接收尾：read-IC 用默认名落盘，编辑器照常自动打开。
+fn c_pending_save_no_portal_autosave() -> Result<(), String> {
+    let (_d, mut app) = app_with_temp_dumps("no-portal-save");
+    app.file_dialogs_ok = false;
+    std::fs::write(app.paths.temp_mfd(), vec![0x5a; 64]).unwrap();
+    app.exec("read-IC", None);
+    app.consume_pending();
+    app.tick();
+    if app.dialogs_host.outstanding() != 0 {
+        return Err("无门户不应投递保存框".into());
+    }
+    if app.engine.pending_save().is_some() {
+        return Err("无门户收尾后挂起请求未清".into());
+    }
+    if app.engine.is_running() {
+        return Err("无门户收尾后任务位未释放".into());
+    }
+    // 默认名落盘 + 自动打开编辑器（找回去向可见）
+    if !app.state.panels.dump_editor {
+        return Err("未自动打开转储编辑器".into());
+    }
+    let origin = app
+        .forms
+        .editor
+        .origin
+        .clone()
+        .ok_or("编辑器未载入默认名落盘的文件")?;
+    if !origin.is_file() {
+        return Err(format!("默认名未落盘: {}", origin.display()));
+    }
+    Ok(())
+}
+
+/// 无门户时 collectOnly 收尾按「保留 nonces.bin」续接，日志必须给出
+/// 保留位置，用户才知道去哪找回。
+fn c_nonces_no_portal_keeps_bin() -> Result<(), String> {
+    use nfc_core::model::keys::KeyType;
+    let (_d, mut app) = app_with_temp_dumps("no-portal-nonce");
+    app.file_dialogs_ok = false;
+    app.state.known_key_info = vec![("aabbccddeeff".to_string(), 1u8, KeyType::A)];
+    std::fs::write(app.paths.nonces_file(), vec![0xab; 32]).unwrap();
+    let cfg = nfc_core::state::HardNestedConfig {
+        known_key: "aabbccddeeff".into(),
+        known_sector: 1,
+        known_key_type: KeyType::A,
+        target_sector: 1,
+        target_key_type: KeyType::A,
+        collect_only: true,
+        auto_run: false,
+    };
+    app.pending
+        .push(nfc_core::engine::Action::HardNestedConfig(Box::new(cfg)));
+    app.consume_pending();
+    app.tick();
+    if app.dialogs_host.outstanding() != 0 {
+        return Err("无门户不应投递 nonce 保存框".into());
+    }
+    if app.engine.is_running() {
+        return Err("无门户收尾后任务位未释放".into());
+    }
+    if !app.paths.nonces_file().is_file() {
+        return Err("nonces.bin 被误删".into());
+    }
+    if !app
+        .state
+        .log_buffer
+        .contains(&app.paths.nonces_file().display().to_string())
+    {
+        return Err("日志未给出 nonces.bin 保留位置".into());
+    }
+    Ok(())
+}
+
 fn c_dialog_host_queue() -> Result<(), String> {
     let mut h = DialogHost::spawn();
     if h.is_pending() {
@@ -2500,6 +2577,29 @@ fn c_save_log_flow() -> Result<(), String> {
     }
     if !app.state.log_buffer.contains("已保存到") {
         return Err("未记「已保存到」".into());
+    }
+    Ok(())
+}
+
+/// 保存框挂起期间重复回传时，快照已被第一次回传取走；第二次不得把
+/// 用户刚选的文件覆盖成 0 字节空文件。
+fn c_save_log_second_reply_no_empty_write() -> Result<(), String> {
+    let (_d, mut app) = app_with_temp_dumps("save-log-twice");
+    app.state.log_buffer = "第一行\n".to_owned();
+    app.exec("save-log", None);
+    let out = app.paths.dumpfiles_dir().join("log.txt");
+    app.dialogs_host
+        .feed_reply(FilePurpose::SaveLog, Some(out.clone()));
+    app.tick();
+    if std::fs::read_to_string(&out).unwrap_or_default() != "第一行\n" {
+        return Err("首次落盘内容不对".into());
+    }
+    // 重复回传（挂起期间再次触发）：必须跳过写盘而非空写覆盖
+    app.dialogs_host
+        .feed_reply(FilePurpose::SaveLog, Some(out.clone()));
+    app.tick();
+    if std::fs::read_to_string(&out).unwrap_or_default() != "第一行\n" {
+        return Err("重复回传把日志覆盖成空文件".into());
     }
     Ok(())
 }
