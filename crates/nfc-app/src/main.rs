@@ -69,10 +69,13 @@ fn main() -> eframe::Result {
     }
 
     // Paths::from_app_data 只算路径，不建目录；此处补上。
+    //
+    // 必须建 `base` 本身（= data_dir/NFCToolsGUI），而不是它的父目录：
+    // keys.txt / registry.json 都直接落在 `base` 下，只建父目录再靠
+    // `dumpfiles_dir()` 的递归创建去"顺带"建出 base 是隐式耦合——
+    // 一旦 dumpfiles 目录改到别处，这些文件就没地方写了。
     let paths = Paths::from_app_data();
-    if let Some(parent) = paths.base().parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
+    let _ = std::fs::create_dir_all(paths.base());
     let _ = std::fs::create_dir_all(paths.dumpfiles_dir());
 
     // 窗口 / 任务栏图标：解码内嵌 32×32 PNG（IconData 宽高须为 4 的倍数）。

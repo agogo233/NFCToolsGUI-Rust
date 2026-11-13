@@ -444,8 +444,6 @@ pub struct EditorForm {
     pub origin: Option<std::path::PathBuf>,
     /// 有未保存改动。
     pub dirty: bool,
-    /// S18：上次「体检全卡」的结果（逐扇区问题）。空 = 未体检或无问题。
-    pub check_issues: Vec<nfc_core::model::dumpcheck::CheckIssue>,
     /// hex 显示方式。只改屏幕排布，`sectors` 不受影响，故保存 / 写卡走的
     /// 仍是同一份数据（docs/02 §6.40）。
     pub view_mode: ViewMode,
@@ -630,6 +628,33 @@ fn commit_rename(dir: &std::path::Path, old: &str, new: &str, app: &mut NfcApp) 
 /// `commit_rename` 的测试入口（`--selftest` 用）。
 pub fn commit_rename_for_test(dir: &std::path::Path, old: &str, new: &str, app: &mut NfcApp) {
     commit_rename(dir, old, new, app)
+}
+
+/// 重命名输入框本帧的三方交互 → 该做什么。
+///
+/// 三个信号在同一帧可能**同时**成立，尤其是「点 ✓」：按钮拿到焦点会让
+/// TextEdit 失焦，于是 `lost_focus` 与 `confirm` 同为真。旧实现先按
+/// `lost_focus` 提交、再按 `confirm` 提交，第二次 `Option::take` 取到
+/// `None` 把结果覆盖掉，重命名被静默丢弃。此处把优先级定死：
+/// 取消 > 确认按钮 > 失焦/回车，且只提交一次。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenameIntent {
+    /// 什么都不做。
+    None,
+    /// 提交（提交内容由调用方 `take()` 取）。
+    Commit,
+    /// 放弃这次编辑。
+    Cancel,
+}
+
+pub fn rename_intent(lost_focus: bool, enter: bool, confirm: bool, cancel: bool) -> RenameIntent {
+    if cancel {
+        return RenameIntent::Cancel;
+    }
+    if confirm || lost_focus || enter {
+        return RenameIntent::Commit;
+    }
+    RenameIntent::None
 }
 
 // ───────────────────────── 绘制 ─────────────────────────
@@ -837,6 +862,27 @@ fn settings(ui: &mut Ui, app: &mut NfcApp) -> bool {
     true
 }
 
+/// inputKeys 面板点「确定」后的处理。返回 `true` 表示**保持面板打开**。
+///
+/// 抽成独立函数是为了能被 `--selftest` 直接驱动（egui 的按钮点击在测试
+/// 上下文里拿不到），UI 部分只负责调用它。
+pub fn confirm_input_keys(app: &mut NfcApp) -> bool {
+    // command.js:154-157 —— 先用正则扫出所有 12 位 hex，逐个转 `-k<key>`。
+    // 原版 `keys.match(...)` 匹配不到会返回 null 再 `.forEach` 抛 TypeError，
+    // 此处空结果不派发（等价于"什么都不做"）。
+    let keys = nfc_core::model::keys::parse_12hex(&app.forms.input_keys);
+    if keys.is_empty() {
+        // 不要静默关窗：用户会以为「确定」没生效或读卡已开始。
+        // 直接给出与硬解码面板同一套校验文案（12 位 hex 的要求一致）。
+        app.push_event(EventKind::Error, &t("dialog_msg_key_hex_invalid"));
+        // 保持面板打开，方便用户就地修正。
+        return true;
+    }
+    app.pending
+        .push(Action::WithArg("done-input-keys-read-IC", keys.join(",")));
+    false
+}
+
 /// `inputkeys.html`：标题 + 密钥输入框 + 取消/确定。
 fn input_keys(ui: &mut Ui, app: &mut NfcApp) -> bool {
     ui.label(t("html_please_input_known_keys_split_by_comma"));
@@ -845,15 +891,7 @@ fn input_keys(ui: &mut Ui, app: &mut NfcApp) -> bool {
 
     let (cancel, ok) = footer(ui, &t("dialog_button_ok"), true);
     if ok {
-        // command.js:154-157 —— 先用正则扫出所有 12 位 hex，逐个转 `-k<key>`。
-        // 原版 `keys.match(...)` 匹配不到会返回 null 再 `.forEach` 抛 TypeError，
-        // 此处空结果不派发（等价于"什么都不做"）。
-        let keys = nfc_core::model::keys::parse_12hex(&app.forms.input_keys);
-        if !keys.is_empty() {
-            app.pending
-                .push(Action::WithArg("done-input-keys-read-IC", keys.join(",")));
-        }
-        return false;
+        return !confirm_input_keys(app);
     }
     !cancel
 }
@@ -1235,10 +1273,17 @@ fn phone_wristband(ui: &mut Ui, app: &mut NfcApp) -> bool {
             if ui.add(read).clicked() {
                 app.exec("phw-read-uid", None);
             }
+            // 扇区/块非法时直接禁用写数据：面板已红字提示，若仍可点，用户
+            // 会在「已经报错」的状态下按下按钮、再由引擎回一条同样的错误，
+            // 显得像是没拦住。读卡号不依赖扇区/块，故 `read` 不受影响。
+            let fields_ok = app.forms.phw.validation_error().is_none();
             if ui.add_enabled(has_block0, write_uid).clicked() {
                 app.exec("phw-write-uid", None);
             }
-            if ui.add_enabled(has_block0, write_data).clicked() {
+            if ui
+                .add_enabled(has_block0 && fields_ok, write_data)
+                .clicked()
+            {
                 app.state.phw.sector = parse_u32(&app.forms.phw.sector);
                 app.state.phw.block = parse_u32(&app.forms.phw.block);
                 app.exec("phw-write-data", None);
@@ -1410,15 +1455,15 @@ fn dump_editor(ui: &mut Ui, app: &mut NfcApp) -> bool {
         }
     }
 
-    // S18：体检结果区——「体检全卡」之后在这里逐条列出问题 / 值块 / 未发现。
-    // 结果存在 `app.forms.editor.check_issues`，由 `check_report` 生成展示行。
-    let check_lines = {
-        let issues = &app.forms.editor.check_issues;
-        if issues.is_empty() && app.forms.editor.sectors.is_empty() {
-            Vec::new()
-        } else {
-            nfc_core::model::dumpcheck::check_report(&app.forms.editor.sectors)
-        }
+    // S18：体检结果区——逐条列出问题 / 值块 / 未发现。
+    //
+    // 这里**每帧按当前 `sectors` 实时计算**，不缓存「上次点按钮的结果」：
+    // 编辑内容一变结论就变，缓存反而会让用户看到过期结论。代价是每帧一次
+    // O(卡容量) 的纯计算，对 1K/4K 可忽略。
+    let check_lines = if app.forms.editor.sectors.is_empty() {
+        Vec::new()
+    } else {
+        nfc_core::model::dumpcheck::check_report(&app.forms.editor.sectors)
     };
     if !check_lines.is_empty() {
         ui.add_space(4.0);
@@ -1509,8 +1554,12 @@ fn dump_editor(ui: &mut Ui, app: &mut NfcApp) -> bool {
         }
         // S18：体检 / 修复 / 导出密钥（纯 UI 动作，不进 engine 队列）
         if ui.button(t("html_check_dump")).clicked() {
-            app.forms.editor.check_issues =
-                nfc_core::model::dumpcheck::check(&app.forms.editor.sectors).unwrap_or_else(|e| e);
+            // 体检结论每帧已实时显示在下方，这里把同样的结论写进控制台——
+            // 点按钮要有可见反馈，且日志可随「保存日志」留存。
+            for line in nfc_core::model::dumpcheck::check_report(&app.forms.editor.sectors) {
+                app.state
+                    .apply(nfc_core::state::Event::Log(format!("\n{line}\n")));
+            }
         }
         if ui.button(t("html_fix_dump")).clicked() {
             match nfc_core::model::dumpcheck::fix(&app.forms.editor.sectors) {
@@ -1520,7 +1569,6 @@ fn dump_editor(ui: &mut Ui, app: &mut NfcApp) -> bool {
                     // 否则停在字节视图时会继续看到修复前的内容（docs/02 §6.40）
                     app.forms.editor.rebuild_byte_view();
                     app.forms.editor.dirty = true;
-                    app.forms.editor.check_issues.clear();
                     // 修复日志逐条写进控制台
                     for line in nfc_core::model::dumpcheck::fix_report(&items) {
                         app.state
@@ -1528,8 +1576,13 @@ fn dump_editor(ui: &mut Ui, app: &mut NfcApp) -> bool {
                     }
                 }
                 Err(issues) => {
-                    // 修复失败（结构/容量不合法）：把致命问题写进体检区，让用户看见
-                    app.forms.editor.check_issues = issues;
+                    // 修复失败（结构/容量不合法）：逐条写进控制台，让用户看见原因。
+                    // （体检区是每帧实时算的，本身就会把这些致命问题显示出来，
+                    //  故这里不必再缓存一份。）
+                    for line in issues.iter().map(nfc_core::model::dumpcheck::issue_text) {
+                        app.state
+                            .apply(nfc_core::state::Event::Log(format!("\n{line}\n")));
+                    }
                 }
             }
         }
@@ -1720,21 +1773,20 @@ fn dump_history(ui: &mut Ui, app: &mut NfcApp) -> bool {
                             // 判定在前会把「取消」误当成提交（blur 提交本身对标原版）。
                             let confirm = ui.small_button("✓").clicked();
                             let cancel = ui.small_button("✗").clicked();
-                            // 原版是「失焦**或**回车」提交（`dumpHistory.js:34`）。
-                            // egui 两者都能做：失焦用 `Response::lost_focus()`，
-                            // 回车直接查输入。注意**不能**把两者写成互斥的 `&&`
-                            // ——单行 TextEdit 按回车不会失焦，而失焦那一帧通常也
-                            // 没有回车，条件互斥会让回车提交永远不触发。
-                            if (r.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter)))
-                                && !cancel
-                            {
-                                commit = app.forms.history_rename.take();
-                            }
-                            if confirm {
-                                commit = app.forms.history_rename.take();
-                            }
-                            if cancel {
-                                app.forms.history_rename = None;
+                            // 三方信号同帧成立的顺序问题见 `rename_intent` 的文档。
+                            match rename_intent(
+                                r.lost_focus(),
+                                ui.input(|i| i.key_pressed(egui::Key::Enter)),
+                                confirm,
+                                cancel,
+                            ) {
+                                RenameIntent::Commit => {
+                                    commit = app.forms.history_rename.take();
+                                }
+                                RenameIntent::Cancel => {
+                                    app.forms.history_rename = None;
+                                }
+                                RenameIntent::None => {}
                             }
                         } else if ui
                             .small_button("✎")
