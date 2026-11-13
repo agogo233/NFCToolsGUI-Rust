@@ -29,6 +29,7 @@ pub fn run() -> eframe::Result {
         ("锁滚动", c_lock_scroll),
         ("R5 连接中禁下拉", c_disable_dropdown_while_connecting),
         ("R3 空闲 cancel 清计时", c_idle_cancel_resets_timer),
+        ("R1 系统级关窗也拦截", c_system_close_intercepted),
         ("引导条按钮", c_guidance_buttons),
         ("冷启动引导", c_cold_start_guidance),
         ("热插拔 500ms 轮询", c_hotplug_interval),
@@ -50,6 +51,7 @@ pub fn run() -> eframe::Result {
         ("主题调色板写入两个 style 桶", c_theme_visuals_both_buckets),
         ("inputKeys 默认值 ffffffff…,", c_input_keys_default),
         ("inputKeys 确定 → -k 参数", c_input_keys_emit_keys),
+        ("inputKeys 空输入保持面板", c_input_keys_empty_keeps_panel),
         ("hardNested 预填检测结果", c_hard_nested_prefill),
         ("hardNested 无检测结果 → 禁用", c_hard_nested_no_config),
         (
@@ -113,6 +115,10 @@ pub fn run() -> eframe::Result {
         ("选字典回填 dict_path", c_dict_file_flow),
         ("重命名提交", c_history_rename),
         ("重命名行渲染不提交", c_history_rename_render),
+        (
+            "重命名 点✓与失焦同帧只提交一次",
+            c_history_rename_commit_once,
+        ),
         ("comparator 从历史载入两侧", c_comparator_from_history),
         // ── S13 设备层接线 + 遮挡帧推进 ──
         ("scan 刷出设备下拉列表", c_scan_populates_device_list),
@@ -133,6 +139,7 @@ pub fn run() -> eframe::Result {
         ("手输卡号面板打开 + 非法输入", c_uid_input_invalid),
         ("手输卡号合法输入进确认框", c_uid_input_valid),
         ("编辑器导出密钥落盘", c_export_keys_flow),
+        ("非法数据导出不留空文件", c_export_keys_rejects_bad_data),
         ("全加密爆破启动 mfcuk", c_run_mfcuk_flow),
         ("默认字典路径可用", c_default_dict_path),
         (
@@ -388,6 +395,38 @@ fn c_idle_cancel_resets_timer() -> Result<(), String> {
     }
     if app.timer_second != 0 {
         return Err("cancel 后计时未归零".into());
+    }
+    Ok(())
+}
+
+/// R1：系统级关窗（Alt+F4 / 任务栏关闭 / 会话结束）必须与自绘关闭按钮
+/// 走同一套二次确认，且**放行后不能再拦**（否则 `CancelClose` 与
+/// `ViewportCommand::Close` 每帧互相抵消，窗口永远关不掉）。
+fn c_system_close_intercepted() -> Result<(), String> {
+    // 有系统请求、未放行 → 必须拦截
+    if !NfcApp::should_intercept_close(true, false) {
+        return Err("系统关窗请求未被拦截".into());
+    }
+    // 无系统请求 → 不该拦截（别把自绘按钮的路径带偏）
+    if NfcApp::should_intercept_close(false, false) {
+        return Err("无请求时不该拦截".into());
+    }
+    // 已放行 → 必须不再拦截，否则窗口关不掉
+    if NfcApp::should_intercept_close(true, true) {
+        return Err("已放行后仍拦截，窗口将无法关闭".into());
+    }
+    // 完整流程：系统请求 + 任务运行中 → 弹确认窗而不是直接退出
+    let mut app = NfcApp::new(nfc_core::state::AppState::new());
+    app.state.is_running_task = true;
+    app.close_requested = true;
+    let ctx = Context::default();
+    // `run_logic` 不产出 UI、也就没有纹理增量，正好适合只验逻辑的用例。
+    let _out = ctx.run_logic(&Default::default(), |ctx| app.logic_body(ctx));
+    if app.confirm.is_none() {
+        return Err("运行中关窗应弹二次确认".into());
+    }
+    if app.closing_confirmed {
+        return Err("确认前不该放行关闭".into());
     }
     Ok(())
 }
@@ -764,6 +803,28 @@ fn c_input_keys_emit_keys() -> Result<(), String> {
     app.forms.input_keys = "没有密钥".into();
     if !nfc_core::model::keys::parse_12hex(&app.forms.input_keys).is_empty() {
         return Err("无密钥输入竟扫出结果".into());
+    }
+    Ok(())
+}
+
+/// inputKeys 面板：空/无密钥输入点「确定」时，必须**留在面板并报错**，
+/// 不能静默关窗又不派发（用户会以为读卡已开始）。
+fn c_input_keys_empty_keeps_panel() -> Result<(), String> {
+    let mut app = NfcApp::new(nfc_core::state::AppState::new());
+    app.state.panels.input_keys = true;
+    app.forms.input_keys = "没有密钥".into();
+    if !panels::confirm_input_keys(&mut app) {
+        return Err("无密钥输入应保持面板打开".into());
+    }
+    if !app.state.panels.input_keys {
+        return Err("无密钥输入时面板不该关闭".into());
+    }
+    if !app.pending.is_empty() || !app.pending_with_approval.is_empty() {
+        return Err("无密钥输入不该派发任何动作".into());
+    }
+    use nfc_core::state::EventKind;
+    if !app.state.events.iter().any(|e| e.kind == EventKind::Error) {
+        return Err(format!("应报错事件，实际: {:?}", app.state.events));
     }
     Ok(())
 }
@@ -2680,6 +2741,45 @@ fn c_history_rename_render() -> Result<(), String> {
     Ok(())
 }
 
+/// 点 ✓ 那一帧输入框同时失焦（按钮抢焦点）。旧的「先判失焦、再判 ✓」写法
+/// 会 `take()` 两次，第二次拿到 `None` 覆盖掉提交，重命名被静默丢弃。
+fn c_history_rename_commit_once() -> Result<(), String> {
+    use panels::{rename_intent, RenameIntent};
+    // ✓ 与失焦同帧 → 仍只承诺「提交一次」
+    if rename_intent(true, false, true, false) != RenameIntent::Commit {
+        return Err("点✓与失焦同帧应判提交".into());
+    }
+    // 取消优先于一切（点 ✗ 也会让输入框失焦）
+    if rename_intent(true, false, false, true) != RenameIntent::Cancel {
+        return Err("取消应优先于失焦提交".into());
+    }
+    // 回车提交
+    if rename_intent(false, true, false, false) != RenameIntent::Commit {
+        return Err("回车应判提交".into());
+    }
+    // 只渲染不交互 → 什么都不做
+    if rename_intent(false, false, false, false) != RenameIntent::None {
+        return Err("无交互时不该提交".into());
+    }
+    // 端到端：按住提交路径走一遍，文件真的改名且状态清空一次即可
+    let (d, mut app) = app_with_temp_dumps("rename-once");
+    let dir = d.0.join("dumpfiles");
+    std::fs::write(dir.join("old.mfd"), b"x").unwrap();
+    app.forms.history_rename = Some(("old.mfd".to_owned(), "new.mfd".to_owned()));
+    if rename_intent(true, false, true, false) == RenameIntent::Commit {
+        if let Some((old, new)) = app.forms.history_rename.take() {
+            panels::commit_rename_for_test(&dir, &old, &new, &mut app);
+        }
+    }
+    if !dir.join("new.mfd").exists() {
+        return Err("提交后文件未改名".into());
+    }
+    if app.forms.history_rename.is_some() {
+        return Err("提交后应清掉重命名状态".into());
+    }
+    Ok(())
+}
+
 fn c_comparator_from_history() -> Result<(), String> {
     let (d, mut app) = app_with_temp_dumps("cmp-hist");
     let dir = d.0.join("dumpfiles");
@@ -2874,9 +2974,11 @@ fn c_export_keys_flow() -> Result<(), String> {
     let (_d, mut app) = app_with_temp_dumps("export-keys");
     // 编辑器载入一个只有默认密钥的 dump，导出应得到密钥行
     let mut sectors = nfc_core::model::dump::to_sector_lines(&vec![0xff; 1024]).unwrap();
-    // A2 全扇区默认密钥（写入 trailers）
+    // 全扇区写默认尾块：KeyA(12) + 访问位(6) + GPB(2) + KeyB(12) = 32 hex。
+    // （早先这里写的是 38 字符的串，`key_dict` 因此返回空、导出的是空文件，
+    //   而本用例只查「文件存在」，属于假通过。）
     for sector in sectors.iter_mut() {
-        sector[3] = "FFFFFFFFFFFFFFFFFFFFFFFFF0FFFFFFFFFFFF".to_string();
+        sector[3] = "FFFFFFFFFFFFFF078069FFFFFFFFFFFF".to_string();
     }
     app.forms.editor.sectors = sectors;
     app.exec("dump-editor-export-keys", None);
@@ -2888,8 +2990,41 @@ fn c_export_keys_flow() -> Result<(), String> {
         Some(app.paths.dumpfiles_dir().join("keys.txt")),
     );
     app.tick();
-    if !app.paths.dumpfiles_dir().join("keys.txt").exists() {
+    let out = app.paths.dumpfiles_dir().join("keys.txt");
+    if !out.exists() {
         return Err("导出文件未落盘".into());
+    }
+    // 只查「文件存在」曾让本用例假通过（写的是空文件）。必须查内容：
+    // 每行是 12 位 hex 的密钥。
+    let body = std::fs::read_to_string(&out).map_err(|e| format!("读导出文件失败: {e}"))?;
+    if body.trim().is_empty() {
+        return Err("导出文件不该为空".into());
+    }
+    let first = body.lines().next().unwrap_or_default();
+    if first.len() != 12 || !first.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!("导出密钥格式不对: {first:?}"));
+    }
+    Ok(())
+}
+
+/// 数据不是合法 Mifare Classic 布局时（`key_dict` 返回空），导出必须**报错且
+/// 不写文件**——否则用户拿到 0 字节文件却看到「已保存」。
+fn c_export_keys_rejects_bad_data() -> Result<(), String> {
+    let (_d, mut app) = app_with_temp_dumps("export-keys-bad");
+    // 512 字节（8 扇区）：不在 VALID_SIZES（1024/2048/4096）内
+    let short: Vec<Vec<String>> = (0..8).map(|_| vec!["00".repeat(16); 4]).collect();
+    app.forms.editor.sectors = short;
+    app.exec("dump-editor-export-keys", None);
+    let target = app.paths.dumpfiles_dir().join("keys_bad.txt");
+    app.dialogs_host
+        .feed_reply(FilePurpose::ExportKeys, Some(target.clone()));
+    app.tick();
+    if target.exists() {
+        return Err("非法数据不该留下文件（会误导用户以为导出成功）".into());
+    }
+    use nfc_core::state::EventKind;
+    if !app.state.events.iter().any(|e| e.kind == EventKind::Error) {
+        return Err(format!("应报错事件，实际: {:?}", app.state.events));
     }
     Ok(())
 }

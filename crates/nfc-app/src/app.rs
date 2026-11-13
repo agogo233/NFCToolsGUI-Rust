@@ -116,6 +116,13 @@ pub struct NfcApp {
     pub pending: Vec<Action>,
     /// 窗口关闭请求。
     pub close_requested: bool,
+    /// 用户已在二次确认里放行关闭（或确认时无任务在跑）。
+    ///
+    /// 置真后**不再拦截**系统关窗请求，直接让 eframe 关掉窗口。
+    /// 必要性：`ViewportCommand::Close` 在 egui-winit 里只是往当前视口
+    /// push 一个 `ViewportEvent::Close`，于是下一帧 `close_requested()` 又为真；
+    /// 若每帧都先 `CancelClose` 再 `Close`，两者互相抵消、窗口永远关不掉。
+    pub closing_confirmed: bool,
     /// 主题模式三态（S9 settings 面板切换）。
     pub theme_mode: ThemeMode,
     /// 当前调色板。由 `theme_mode` + 系统主题解析而来，故每帧可能变。
@@ -187,6 +194,7 @@ impl NfcApp {
             last_hotplug: now,
             pending: Vec::new(),
             close_requested: false,
+            closing_confirmed: false,
             theme_mode,
             // 首帧拿不到系统主题（`system_theme()` 在 winit 事件到达前为 None），
             // 此时按深色起步；下一帧 `sync_theme` 会纠正。
@@ -492,6 +500,15 @@ impl NfcApp {
             // S18：编辑器导出密钥字典——把当前编辑器内容的密钥写进用户选的文件。
             dialogs_host::FilePurpose::ExportKeys => {
                 let lines = nfc_core::model::dumpcheck::key_dict(&self.forms.editor.sectors);
+                // `key_dict` 对结构非法 / 容量非法（512B、非 hex 行等）返回空。
+                // 此时**不能**写出 0 字节文件再报「已保存」——用户会拿到一个
+                // 空文件却以为导出成功。明确报错并放弃写盘。
+                if lines.is_empty() {
+                    let msg = t("html_data_not_classic_layout");
+                    self.state.apply(Event::Log(format!("\n{msg}\n")));
+                    self.push_event(EventKind::Error, &msg);
+                    return;
+                }
                 let body = lines.join("\n");
                 match std::fs::write(&path, body) {
                     Ok(()) => {
@@ -686,6 +703,17 @@ impl NfcApp {
         self.timer_second = 0;
     }
 
+    /// 本帧是否需要拦截系统关窗请求。纯决策，便于自检覆盖（不碰 egui）。
+    ///
+    /// `system_close` 为 `ctx.input(|i| i.viewport().close_requested())`。
+    ///
+    /// 返回 `true` 表示调用方应发 `CancelClose` 并把流程交给「确认 or 关闭」分支。
+    /// `closing_confirmed` 为真时返回 `false`——用户已放行，不能再拦，否则
+    /// `CancelClose` 与 `ViewportCommand::Close` 会每帧互相抵消，窗口永远关不掉。
+    pub fn should_intercept_close(system_close: bool, closing_confirmed: bool) -> bool {
+        system_close && !closing_confirmed
+    }
+
     /// `App::logic` 的全部内容。eframe 的 [`eframe::Frame`] 字段全
     /// `pub(crate)`，测试里构造不了；自检要用它模拟「窗被遮挡时 eframe
     /// 只调 `logic` 不调 `ui`」，故把与 `Frame` 无关的本体放在这里。
@@ -716,9 +744,28 @@ impl NfcApp {
             if let Some(ok) = dialogs_ui::show(ctx, &m, danger) {
                 self.confirm = None;
                 if self.on_confirm_result(m, ok) {
+                    // 必须先放行，再发 Close：否则下一帧的
+                    // `close_requested()` 拦截会把它 CancelClose 掉，窗口永不关闭。
+                    self.closing_confirmed = true;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             }
+        }
+
+        // 系统级关窗（Alt+F4 / 任务栏「关闭窗口」/ 桌面会话结束）：egui 会把
+        // winit 的 `CloseRequested` 变成当前视口的 `close_requested()`，
+        // 并在**本帧结束时**退出进程，除非这里发 `CancelClose`。
+        // 只拦自绘关闭按钮（`close_requested`）是不够的——无边框窗口下用户
+        // 完全可能从任务栏关窗，那时任务还在跑却没有二次确认（R1 的初衷失效）。
+        let cancel_close = Self::should_intercept_close(
+            ctx.input(|i| i.viewport().close_requested()),
+            self.closing_confirmed,
+        );
+        if cancel_close {
+            // egui 在根视口收到 CloseRequested 后，若本帧不发 CancelClose 就会退出；
+            // 这里先拦下，统一交给下面的 close_requested 分支决定「确认 or 关闭」。
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.close_requested = true;
         }
 
         if self.close_requested {
@@ -727,6 +774,10 @@ impl NfcApp {
             if self.state.is_running_task {
                 self.confirm = Some(dialogs_ui::close_while_running_modal());
             } else {
+                // 置位后不再拦截系统请求；这里的 `Close` 只是让自绘按钮路径
+                // 与系统路径走同一个出口（下一帧 `closing_confirmed` 生效，
+                // 不会与 `CancelClose` 互相抵消）。
+                self.closing_confirmed = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
         }
