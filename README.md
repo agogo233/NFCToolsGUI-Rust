@@ -2,8 +2,8 @@
 
 与 <b>PN532</b> 交互的跨平台工具，支持 Windows / Linux / macOS。
 
-> **这是 Rust 重写版。** UI 与全部 34 个动作的行为对齐原版（30 个对齐 Electron
-> 实现，4 个手机/手环增量对齐 Tauri 端口；`NFCToolsGUI`，AGPL-3.0）。逐项核验表见 [docs/04 §9](docs/04-测试计划.md)。
+> **这是 Rust 重写版。** UI 与全部 39 个动作的行为对齐原版（30 个对齐 Electron
+> 实现，4 个手机/手环增量对齐 Tauri 端口，5 个 S18 新能力合入；`NFCToolsGUI`，AGPL-3.0）。逐项核验表见 [docs/04 §9](docs/04-测试计划.md)。
 
 ## 功能
 
@@ -108,7 +108,7 @@ cargo run -p nfc-app --release
 
 ```bash
 cargo run -p nfc-core -- --selftest   # 14 项核心行为
-cargo run -p nfc-app  -- --selftest   # 93 项界面 + 接线（S8 主窗口 + S9 面板 + S10 三面板 + S11 接线 + S13 设备层，S14/S18/S19 另增）
+cargo run -p nfc-app  -- --selftest   # 98 项界面 + 接线（S8 主窗口 + S9 面板 + S10 三面板 + S11 接线 + S13 设备层，S14/S18/S19 另增）
 ```
 
 ### 平台依赖
@@ -121,10 +121,10 @@ cargo run -p nfc-app  -- --selftest   # 93 项界面 + 接线（S8 主窗口 + S
 ## 开发
 
 ```bash
-cargo test --workspace          # 549 项（含 15 项真实 C 工具测试——缺 framework/bin 时自动跳过；6 项原版解析套件）
+cargo test --workspace          # 597 项（含 15 项真实 C 工具测试——缺 framework/bin 时自动跳过；6 项原版解析套件）
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
-python3 tools/verify_parity.py  # 826 项静态门禁（parity 表 / 接线守卫）
+python3 tools/verify_parity.py  # 828 项静态门禁（parity 表 / 接线守卫）
 ```
 
 `tools/verify_parity.py` 把关键不变量钉在源码文本上——它会核对
@@ -138,8 +138,8 @@ python3 tools/verify_parity.py  # 826 项静态门禁（parity 表 / 接线守�
 |---|---|
 | [docs/01](docs/01-功能规格.md) | 功能规格 |
 | [docs/02](docs/02-架构设计.md) | 架构设计 + **§6 与原版行为的偏离登记** |
-| [docs/03](docs/03-实施计划.md) | 实施计划（S0–S12） |
-| [docs/04](docs/04-测试计划.md) | 测试计划 + **§9 30 action parity 表** |
+| [docs/03](docs/03-实施计划.md) | 实施计划（S0–S19） |
+| [docs/04](docs/04-测试计划.md) | 测试计划 + **§9 39 action parity 表** |
 
 **改动前先看 docs/02 §6。** 那里登记了所有刻意偏离原版的地方及原因 ——
 包括危险确认框改为应用内、提示条用 UTC、文件名排序等。

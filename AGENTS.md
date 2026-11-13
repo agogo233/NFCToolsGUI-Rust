@@ -23,14 +23,14 @@ NFCToolsGUI 的 Rust 重写版（AGPL-3.0）。与 PN532 交互的跨平台桌�
 cargo build --release              # → target/release/nfc-app(.exe)
 cargo run -p nfc-app --release     # 运行 GUI
 cargo run -p nfc-core -- --selftest   # 14 项核心行为（不开窗口）
-cargo run -p nfc-app  -- --selftest   # 93 项界面 + 接线
+cargo run -p nfc-app  -- --selftest   # 98 项界面 + 接线
 
-cargo test --workspace             # 549 项
+cargo test --workspace             # 597 项
 cargo test -p nfc-core --test real_tools --test tool_cli   # 需要 framework/bin（否则自动跳过）
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --workspace --all-targets --features real-serial -- -D warnings   # CI 额外跑一次：RealSerial 平时不参与编译
 cargo fmt --all --check
-python3 tools/verify_parity.py     # 826 项静态门禁（39 action parity 表 + 接线守卫）
+python3 tools/verify_parity.py     # 828 项静态门禁（39 action parity 表 + 接线守卫）
 ./scripts/package.sh               # 构建 + 打包 out/NFCToolsGUI-win-x64.zip
 ./scripts/package.sh --check       # 只跑门禁与检测
 ```
@@ -69,7 +69,7 @@ python3 tools/verify_parity.py     # 826 项静态门禁（39 action parity 表 
 
 - `docs/01-功能规格.md` — 功能规格
 - `docs/02-架构设计.md` — 架构 + §6 偏离登记
-- `docs/03-实施计划.md` — S0–S12 实施计划
+- `docs/03-实施计划.md` — S0–S19 实施计划
 - `docs/04-测试计划.md` — 测试计划 + §9 39 action parity 表
 - `PLAN.md` — 总计划
 
