@@ -112,6 +112,10 @@ pub fn run() -> eframe::Result {
             "save-log 重复回传不空写",
             c_save_log_second_reply_no_empty_write,
         ),
+        (
+            "无门户保存日志不留快照",
+            c_save_log_no_portal_leaves_no_snapshot,
+        ),
         ("选字典回填 dict_path", c_dict_file_flow),
         ("重命名提交", c_history_rename),
         ("重命名行渲染不提交", c_history_rename_render),
@@ -2667,6 +2671,44 @@ fn c_save_log_second_reply_no_empty_write() -> Result<(), String> {
     app.tick();
     if std::fs::read_to_string(&out).unwrap_or_default() != "第一行\n" {
         return Err("重复回传把日志覆盖成空文件".into());
+    }
+    Ok(())
+}
+
+/// 回归：无桌面门户时点「保存日志」不该留下快照。
+///
+/// `save_file_for` 在 `!file_dialogs_ok` 时早退（不投递任何请求）。若快照
+/// 在调用**之前**就赋值，它就永远没人取——等到用户日后真正保存成功时，
+/// 写下去的是**这一次**的旧日志，却挂在新选的路径下（静默错配）。
+fn c_save_log_no_portal_leaves_no_snapshot() -> Result<(), String> {
+    let (_d, mut app) = app_with_temp_dumps("save-log-no-portal");
+    app.file_dialogs_ok = false;
+    app.state.log_buffer = "旧日志\n".to_owned();
+    app.exec("save-log", None);
+    if app.dialogs_host.outstanding() != 0 {
+        return Err("无门户不该投递保存框".into());
+    }
+    if app.log_pending.is_some() {
+        return Err(format!(
+            "无门户时不该留下日志快照（会在下次保存时错配）: {:?}",
+            app.log_pending
+        ));
+    }
+
+    // 门户恢复后正常保存，写下去必须是**当次**内容，而非上面那份旧日志。
+    app.file_dialogs_ok = true;
+    app.state.log_buffer = "新日志\n".to_owned();
+    app.exec("save-log", None);
+    if app.dialogs_host.outstanding() != 1 {
+        return Err("门户恢复后应能投递保存框".into());
+    }
+    let out = app.paths.dumpfiles_dir().join("fresh.txt");
+    app.dialogs_host
+        .feed_reply(FilePurpose::SaveLog, Some(out.clone()));
+    app.tick();
+    let body = std::fs::read_to_string(&out).unwrap_or_default();
+    if body != "新日志\n" {
+        return Err(format!("保存内容错配（应为「新日志」）: {body:?}"));
     }
     Ok(())
 }

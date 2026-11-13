@@ -1111,10 +1111,10 @@ impl NfcApp {
         purpose: dialogs_host::FilePurpose,
         default_path: PathBuf,
         filters: Vec<nfc_core::dialogs::FileFilter>,
-    ) {
+    ) -> bool {
         if !self.file_dialogs_ok {
             self.warn_no_portal();
-            return;
+            return false;
         }
         let req = nfc_core::dialogs::SaveDialogRequest {
             title: t("dialog_title_save_to"),
@@ -1123,6 +1123,7 @@ impl NfcApp {
             message: t("dialog_msg_choose_save_path"),
         };
         self.dialogs_host.request_save(purpose, req);
+        true
     }
 
     /// 系统文件框不可用时提示一次（不刷屏）。
@@ -1305,15 +1306,21 @@ impl NfcApp {
             "save-log" => {
                 let default =
                     PathBuf::from(format!("NFCTools_log_{}", nfc_core::paths::timestamp()));
-                self.log_pending = Some(arg.unwrap_or_else(|| self.state.log_buffer.clone()));
-                self.save_file_for(
+                // 先弹框、**投递成功才**快照：`save_file_for` 在无桌面门户时
+                // 会早退（不投递任何请求）。若先赋 `log_pending`，那份快照就
+                // 永远没人取——等到用户下次成功保存时，写下去的会是**上一次**
+                // 的旧日志，却记在这个新路径名下（静默错配，用户无从发现）。
+                let content = arg.unwrap_or_else(|| self.state.log_buffer.clone());
+                if self.save_file_for(
                     dialogs_host::FilePurpose::SaveLog,
                     default,
                     vec![nfc_core::dialogs::FileFilter {
                         name: t("file_type_txt"),
                         extensions: vec!["txt".to_owned()],
                     }],
-                );
+                ) {
+                    self.log_pending = Some(content);
+                }
             }
             "open-dict-file" => self.open_file_for(dialogs_host::FilePurpose::DictFile),
             // command.js:415-422：带路径则直接读，不弹框
@@ -1343,7 +1350,8 @@ impl NfcApp {
                         .origin
                         .clone()
                         .unwrap_or_else(|| self.paths.dumpfiles_dir().join(&current));
-                    self.save_file_for(
+                    // 这里没有需要预存的内容，故忽略「是否投递」的返回值。
+                    let _ = self.save_file_for(
                         dialogs_host::FilePurpose::EditorSaveAs,
                         default,
                         vec![nfc_core::dialogs::dump_filter(&t("file_type_dump"))],
@@ -1452,7 +1460,8 @@ impl NfcApp {
             "dump-editor-export-keys" => {
                 let default =
                     PathBuf::from(format!("NFCTools_keys_{}", nfc_core::paths::timestamp()));
-                self.save_file_for(
+                // 这里没有需要预存的内容，故忽略「是否投递」的返回值。
+                let _ = self.save_file_for(
                     dialogs_host::FilePurpose::ExportKeys,
                     default,
                     vec![nfc_core::dialogs::FileFilter {

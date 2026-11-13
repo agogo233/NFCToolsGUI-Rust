@@ -1182,8 +1182,8 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     # 按 ("名字", 标识符) 配对计数：标识符不一定以 `c_` 开头
     #（`case_phone_wristband` 就是一条），只数 `c_` 会少算 1 项。
     n_cases = len(re.findall(r'\(\s*\n?\s*"[^"]+",\s*\n?\s*[a-z][a-z0-9_]*\s*,?\s*\n?\s*\)', _vec))
-    check(n_cases == 98,
-          "S9-S18 UI selftest 98 项（79 原有 + S18 增 5 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1 + 连接收尾 cancel 1 + 重命名行渲染不提交 1 + 无门户收尾/重复回传 3 + R1 系统级关窗 1 + 导出空文件防护 1 + inputKeys 空输入 1 + 重命名同帧提交 1）",
+    check(n_cases == 99,
+          "S9-S18 UI selftest 99 项（79 原有 + S18 增 5 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1 + 连接收尾 cancel 1 + 重命名行渲染不提交 1 + 无门户收尾/重复回传 3 + R1 系统级关窗 1 + 导出空文件防护 1 + inputKeys 空输入 1 + 重命名同帧提交 1 + 无门户保存日志不留快照 1）",
           f"实际 {n_cases}")
 
     # ── S10 dump 三面板 ──────────────────────────────────────────
@@ -1313,8 +1313,8 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     # selftest
     _vec2 = stf9[stf9.index("vec![") : stf9.index("];", stf9.index("vec!["))]
     n11 = len(re.findall(r'\(\s*\n?\s*"[^"]+",\s*\n?\s*[a-z][a-z0-9_]*\s*,?\s*\n?\s*\)', _vec2))
-    check(n11 == 98,
-          "S11-S18 UI selftest 98 项（含 S18 新增 5 项 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1 + 连接收尾 cancel 1 + 重命名行渲染不提交 1 + 无门户收尾/重复回传 3 + R1 系统级关窗 1 + 导出空文件防护 1 + inputKeys 空输入 1 + 重命名同帧提交 1）",
+    check(n11 == 99,
+          "S11-S18 UI selftest 99 项（含 S18 新增 5 项 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1 + 连接收尾 cancel 1 + 重命名行渲染不提交 1 + 无门户收尾/重复回传 3 + R1 系统级关窗 1 + 导出空文件防护 1 + inputKeys 空输入 1 + 重命名同帧提交 1 + 无门户保存日志不留快照 1）",
           f"实际 {n11}")
 
     # ── S11-2 系统文件对话框 + 写卡接线 ───────────────────────────
