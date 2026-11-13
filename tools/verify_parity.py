@@ -224,6 +224,28 @@ def sh(cmd: list[str], cwd: Path | None = None, timeout: int = 300) -> subproces
 
 
 # ---------------------------------------------------------------- A rustfmt
+def a_agents_doc() -> None:
+    """AGENTS.md 里写的 selftest 用例数必须与源码实际条目一致。
+
+    这组数字漂移过（文档写 93 项、实际已 98），漂移后误导性极强：
+    读者会以为某个用例没跑。这里用与 S9/S11 门禁相同的计数口径核对。
+    """
+    stf = rd(APP / "src/selftest.rs")
+    idx = stf.find("vec![")
+    if idx < 0:
+        check(False, "AGENTS.md selftest 数量：找不到用例表")
+        return
+    _vec = stf[idx : stf.index("];", idx)]
+    n = len(re.findall(r'\(\s*\n?\s*"[^"]+",\s*\n?\s*[a-z][a-z0-9_]*\s*,?\s*\n?\s*\)', _vec))
+    doc = rd(REPO / "AGENTS.md")
+    m = re.search(r'nfc-app\s+--\s+--selftest\s+#\s*(\d+)\s*项', doc)
+    check(m is not None, "AGENTS.md 记录了 nfc-app selftest 的项数")
+    if m:
+        check(int(m.group(1)) == n,
+              f"AGENTS.md selftest 项数与实际一致（{n}）",
+              f"文档写 {m.group(1)}，实际 {n}")
+
+
 def a_rustfmt() -> None:
     # edition 从 Cargo.toml 读，不在脚本里重复登记。
     edition = re.search(r'^edition\s*=\s*"(\d{4})"', rd(CORE / "Cargo.toml"), re.M)
@@ -372,7 +394,9 @@ def h_i18n() -> None:
     for k in NO_PORTAL_EXTRA:
         check(k in keys, f"H zh-CN 含无门户收尾 {k}")
     for k in S18_MIGRATED:
-        check(k in orig_zh_keys, f"H S18 迁移 {k} 确在上游（非误造）")
+        # 必须走 check_orig：原版不在本机时 orig_zh_keys 是空集（第 346 行），
+        # 用 check 会把「查不到原版」误判成「key 是误造的」→ 20 项假失败。
+        check_orig(k in orig_zh_keys, f"H S18 迁移 {k} 确在上游（非误造）")
     check(not (REPO / "assets/locales/en.json").exists(), "H 无 en.json（仅中文决策）")
     body = rd(CORE / "src/serial.rs")
     used = set()
@@ -995,7 +1019,7 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     # 测试数
     s6s7_units = sum(rd(CORE / f"src/{f}").count("#[test]")
                      for f in ["tasks/card_write.rs", "tasks/hard_nested.rs", "tasks/dict_test.rs"])
-    check(s6s7_units == 76, "S6/S7 新增 76 个单测（含 S17/S18 增量 + S19 的 uid_prefix/非hex 判定）", f"实际 {s6s7_units}")
+    check(s6s7_units == 77, "S6/S7 新增 77 个单测（含 S17/S18 增量 + S19 的 uid_prefix/非hex 判定 + found_key 进展判据）", f"实际 {s6s7_units}")
     ints2 = rd(CORE / "tests/integration.rs")
     check(ints2.count("#[test]") == 58, "S6/S7 后集成测试 58", f"实际 {ints2.count('#[test]')}")
     check(ints2.count("fn s6_") == 7 and ints2.count("fn s7_") == 4, "S6/S7 新增 11 个集成测试",
@@ -1155,9 +1179,11 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     # 条数按**函数引用**统计：rustfmt 会把名字长的条目折成多行，
     # 数 `("` 会漏。每项都以 `c_xxx,` 结尾。
     _vec = stf9[stf9.index("vec![") : stf9.index("];", stf9.index("vec!["))]
-    n_cases = len(re.findall(r'\bc_[a-z0-9_]+\b', _vec))
-    check(n_cases == 93,
-          "S9-S18 UI selftest 93 项（79 原有 + S18 增 5 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1 + 连接收尾 cancel 1 + 重命名行渲染不提交 1 + 无门户收尾/重复回传 3）",
+    # 按 ("名字", 标识符) 配对计数：标识符不一定以 `c_` 开头
+    #（`case_phone_wristband` 就是一条），只数 `c_` 会少算 1 项。
+    n_cases = len(re.findall(r'\(\s*\n?\s*"[^"]+",\s*\n?\s*[a-z][a-z0-9_]*\s*,?\s*\n?\s*\)', _vec))
+    check(n_cases == 98,
+          "S9-S18 UI selftest 98 项（79 原有 + S18 增 5 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1 + 连接收尾 cancel 1 + 重命名行渲染不提交 1 + 无门户收尾/重复回传 3 + R1 系统级关窗 1 + 导出空文件防护 1 + inputKeys 空输入 1 + 重命名同帧提交 1）",
           f"实际 {n_cases}")
 
     # ── S10 dump 三面板 ──────────────────────────────────────────
@@ -1286,9 +1312,9 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
           "S11 is_running 看任务位+挂起保存框，但不看 nfc-list")
     # selftest
     _vec2 = stf9[stf9.index("vec![") : stf9.index("];", stf9.index("vec!["))]
-    n11 = len(re.findall(r"\bc_[a-z0-9_]+\b", _vec2))
-    check(n11 == 93,
-          "S11-S18 UI selftest 93 项（含 S18 新增 5 项 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1 + 连接收尾 cancel 1 + 重命名行渲染不提交 1 + 无门户收尾/重复回传 3）",
+    n11 = len(re.findall(r'\(\s*\n?\s*"[^"]+",\s*\n?\s*[a-z][a-z0-9_]*\s*,?\s*\n?\s*\)', _vec2))
+    check(n11 == 98,
+          "S11-S18 UI selftest 98 项（含 S18 新增 5 项 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1 + 连接收尾 cancel 1 + 重命名行渲染不提交 1 + 无门户收尾/重复回传 3 + R1 系统级关窗 1 + 导出空文件防护 1 + inputKeys 空输入 1 + 重命名同帧提交 1）",
           f"实际 {n11}")
 
     # ── S11-2 系统文件对话框 + 写卡接线 ───────────────────────────
@@ -1382,12 +1408,18 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
           "S11-4 不再有独立的 approved 字段")
     check("fn push_approved" in ap and "pending_with_approval.push_back" in ap,
           "S11-4 push_approved 成对入队")
-    # ③ 重命名的回车/失焦必须独立判断（曾写成 && 互斥，永不触发）
-    check("lost_focus() ||" in pn,
-          "S11-4 重命名：失焦与回车是 || 而非 &&")
+    # ③ 重命名的回车/失焦必须独立判断（曾写成 && 互斥，永不触发）。
+    # 现由纯函数 `rename_intent` 统一裁决，故守住它的实现与调用点。
+    check("pub fn rename_intent(" in pn,
+          "S11-4 重命名的交互裁决集中在 rename_intent")
+    _ri = pn.split("pub fn rename_intent(")[1].split("\n}")[0]
+    check("if cancel" in _ri, "S11-4 取消优先于失焦提交")
+    check("confirm || lost_focus || enter" in _ri,
+          "S11-4 重命名：失焦与回车是「或」而非互斥")
     check("lost_focus() &&" not in pn, "S11-4 重命名不得写成互斥的 &&")
     # ③b 重命名行的显示/交互（曾把 ✗ 当成提交、编辑中重复显示旧名、✎ 后不聚焦）
-    check("&& !cancel" in pn, "S11-4 重命名 ✗ 点击不得被同帧失焦吞成提交")
+    check("RenameIntent::Cancel =>" in pn,
+          "S11-4 重命名 ✗ 点击不得被同帧失焦吞成提交")
     check("history_focus_request" in pn,
           "S11-4 重命名 ✎ 后下一帧自动聚焦输入框（否则要点两次）")
     check('ui.checkbox(&mut checked, "")' in pn,
@@ -1469,6 +1501,17 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     check("cargo build --release" in rk and "framework/bin" in rk,
           "S12 打包脚本构建 release 并检测 framework/bin")
     check("tools/verify_parity.py" in rk, "S12 打包脚本会跑静态门禁")
+    # AGENTS.md 规定的门禁顺序必须在打包脚本里也落实（早先只跑了 parity，
+    # 会把带 clippy 告警 / 测试失败的二进制交付出去）。
+    check("cargo fmt --all --check" in rk, "S12 打包脚本跑 fmt 检查")
+    check("cargo clippy --workspace --all-targets -- -D warnings" in rk,
+          "S12 打包脚本跑 clippy -D warnings")
+    check("cargo test --workspace" in rk, "S12 打包脚本跑全量测试")
+    # 顺序：fmt 必须早于 clippy 早于 test 早于 parity
+    _rk_fmt, _rk_clippy = rk.find("cargo fmt --all --check"), rk.find("cargo clippy --workspace")
+    _rk_test, _rk_parity = rk.find("cargo test --workspace"), rk.find("verify_parity.py")
+    check(-1 < _rk_fmt < _rk_clippy < _rk_test < _rk_parity,
+          "S12 打包脚本门禁顺序 fmt → clippy → test → parity")
     wf = rd(REPO / ".github/workflows/ci.yml")
     check("verify_parity.py" in wf, "S12 CI 跑静态门禁")
     check("cargo clippy" in wf and "-D warnings" in wf, "S12 CI clippy 零告警")
@@ -1935,6 +1978,7 @@ def s14_phw() -> None:
 
 def main() -> int:
     for fn in (
+        a_agents_doc,
         a_rustfmt,
         b_resolve,
         c_msrv,

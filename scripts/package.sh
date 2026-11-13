@@ -40,6 +40,25 @@ command -v cargo >/dev/null || die "未找到 cargo"
 ok "cargo: $(cargo --version)"
 
 # ── 2. 静态门禁（与 CI 跑同一套）────────────────────────────────────────────
+# AGENTS.md 规定的顺序：fmt → clippy → test → verify_parity。
+# 打包前必须全跑一遍：否则可能把带 clippy 告警或测试失败的二进制交付出去。
+# 早先这里只跑了 verify_parity，前四道全靠调用者自觉。
+say "cargo fmt --all --check"
+cargo fmt --all --check
+ok "格式检查通过"
+
+say "cargo clippy --workspace --all-targets -- -D warnings"
+cargo clippy --workspace --all-targets -- -D warnings
+# RealSerial 平时不参与编译（`real-serial` 默认只在 app 侧开），
+# 故与 CI 一样额外再跑一次，避免这段代码带着告警入库。
+say "cargo clippy --workspace --all-targets --features real-serial -- -D warnings"
+cargo clippy --workspace --all-targets --features real-serial -- -D warnings
+ok "clippy 零告警"
+
+say "cargo test --workspace"
+cargo test --workspace
+ok "测试通过"
+
 if [[ -f tools/verify_parity.py ]]; then
   say "静态回归 tools/verify_parity.py"
   if command -v python3 >/dev/null; then
