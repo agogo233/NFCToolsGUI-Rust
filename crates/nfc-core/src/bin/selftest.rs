@@ -306,7 +306,7 @@ fn case_hard_nested_autorun() {
                 assert!(remove_unknown(&mut unknown, head.sector, head.key_type));
                 let before = unknown.len() + 1;
                 assert_eq!(
-                    r.after_crack_guarded(&config, before, unknown.len()),
+                    r.after_crack_guarded(&config, before, unknown.len(), true),
                     Step::Detect
                 );
             }

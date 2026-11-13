@@ -1509,10 +1509,19 @@ impl Engine {
             }
             HnStep::Crack => {
                 // 命中则存密钥，并在队列中移除该 unknown（S18 F1：任意位置，非仅队首）
+                // `found_key` 要传给 `after_crack_guarded`：命中本身就是进展，
+                // 即使命中的 (sector, type) 已不在 unknown 列表里。
+                //
+                // 判据用 `save_keys` 返回的「**本次新增**」而非「命中」：autoRun
+                // 会在 known 不变时反复瞄准同一个目标，若把重复命中算作进展，
+                // 状态机会永远循环。只有真拿到新密钥才算推进。
+                let mut found_key = false;
                 if let Some(mut c) = run.crypto {
                     c.flush();
                     if let Some(key) = c.take() {
-                        let _ = crate::model::keys::save_keys(paths, &[key]);
+                        found_key = crate::model::keys::save_keys(paths, &[key])
+                            .map(|fresh| !fresh.is_empty())
+                            .unwrap_or(false);
                     }
                 }
                 // 命中的扇区/类型在 unknown 里**任意位置**移除（command.js:347
@@ -1548,7 +1557,8 @@ impl Engine {
                 // `unknown_after >= unknown_before` 永远成立，autoRun 每轮都
                 // 判「无进展」并在第 1 轮后停住。
                 let after = state.unknown_key_info.len();
-                self.hn.after_crack_guarded(&cfg, run.unknown_before, after)
+                self.hn
+                    .after_crack_guarded(&cfg, run.unknown_before, after, found_key)
             }
         };
         let before = unknown.len();
@@ -2424,6 +2434,27 @@ mod tests {
         assert_eq!(st.status.indicator, Indicator::Free);
     }
 
+    /// 取消后**立刻**再发起任务不能报 Busy。
+    ///
+    /// `cancel-task` 只是把任务位与 `Engine::running` 清掉，底层 `ToolRunner`
+    /// 的 job 要到下一次 `pump` 才回收；而 `start` 见 job 存在就返回 `Busy`。
+    /// 用户点「取消」后马上点「读卡」是常见操作，不能因为这一帧的时序而失败。
+    #[test]
+    fn cancel_then_immediate_dispatch_is_not_busy() {
+        let (_d, p) = paths("cancel-immediate");
+        let mut e = Engine::new(Box::new(MockToolRunner::new(vec![])));
+        let mut st = connected();
+        let mut dlg = MockDialog::new();
+        e.dispatch(Action::Plain("read-IC"), &mut st, &p, &mut dlg)
+            .unwrap();
+        e.dispatch(Action::Plain("cancel-task"), &mut st, &p, &mut dlg)
+            .unwrap();
+        // 不插 `pump`，直接再派发
+        let r = e.dispatch(Action::Plain("read-IC"), &mut st, &p, &mut dlg);
+        assert!(r.is_ok(), "取消后立刻发起新任务不该被拦，实际: {r:?}");
+        assert!(e.is_running(), "新任务应处于运行中");
+    }
+
     // ── 未接线动作要显式报错 ──
 
     #[test]
@@ -2657,6 +2688,68 @@ mod tests {
             st.log_buffer.contains("已尝试解密全部未知密钥"),
             "收工原因不对: {:?}",
             st.log_buffer
+        );
+        assert!(!e.is_running(), "收工后仍在跑");
+    }
+
+    /// 回归：破解**解出了密钥**，但命中的 `(sector, type)` 不在 unknown 列表里
+    /// （`nfc-mfdetect` 每轮会重刷该列表）。此时 unknown 数量不变，仍必须继续
+    /// 下一轮——解出新密钥本身就是进展，不能判「无进展」而中止。
+    ///
+    /// 构造手法：探测只报「扇区 1 未知」，而 collect 报的命中扇区是 3，
+    /// 于是 `remove_unknown(.., 3, A)` 找不到匹配项、队列长度不变。
+    #[test]
+    fn hard_nested_autorun_continues_when_key_found_outside_unknown_list() {
+        use crate::model::keys::KeyType as KT;
+        use crate::runner::Chunk;
+        let detect = || {
+            Chunk::stdout(
+                "Sector 00 - Found   Key A: ffffffffffff Found   Key B: ffffffffffff \n\
+                 Sector 01 - Unknown Key A               Unknown Key B\n",
+            )
+        };
+        // 命中扇区恒为 3（不在 unknown 列表里 → 队列长度不减）
+        let collect_out = || {
+            Chunk::stdout(
+                "Found tag with uid 01020304050607\n\
+                 collecting nonces for key A of block 15 (sector 3) using known key A ffffffffffff for block 0 (sector 0)\n",
+            )
+        };
+        let script = vec![
+            // 第 1 轮：新密钥 aaaabbbbcccc（新增 → 进展 → 必须继续）
+            vec![detect()],
+            vec![collect_out()],
+            vec![Chunk::stdout("Key found: aaaabbbbcccc\n")],
+            // 第 2 轮：新密钥 ddddeeeeffff（仍是新增 → 必须继续）
+            vec![detect()],
+            vec![collect_out()],
+            vec![Chunk::stdout("Key found: ddddeeeeffff\n")],
+            // 第 3 轮：重复命中 aaaabbbbcccc（无新增 → 允许终止）
+            vec![detect()],
+            vec![collect_out()],
+            vec![Chunk::stdout("Key found: aaaabbbbcccc\n")],
+        ];
+        let mut e = Engine::new(Box::new(MockToolRunner::new(vec![]).with_scripts(script)));
+        let mut st = hn_state(&[(1, KT::A)]);
+        let mut dlg = MockDialog::new();
+        let (_d, p) = paths("hn-outside");
+        e.dispatch(
+            Action::HardNestedConfig(Box::new(hn_cfg(true, false))),
+            &mut st,
+            &p,
+            &mut dlg,
+        )
+        .unwrap();
+        for _ in 0..80 {
+            e.pump(&mut st, &p);
+        }
+        let count = |needle: &str| st.log_buffer.matches(needle).count();
+        // 第 1、2 轮都解出了**新**密钥 → 必须继续；第 3 轮重复命中，
+        // 判据（新增密钥）为假，才允许终止，不会无限循环。
+        assert!(
+            count("cropto1_bs") >= 2,
+            "解出新密钥后应继续下一轮，实际破解轮数: {}",
+            count("cropto1_bs")
         );
         assert!(!e.is_running(), "收工后仍在跑");
     }

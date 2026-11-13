@@ -22,9 +22,15 @@ pub const BLOCK_SIZE: usize = 16;
 ///
 /// 对标 `commands.rs:1033`：前 4 字节按位异或应等于第 5 字节。不自洽说明卡号
 /// 被手工输入过或块数据被改动，`nfc-mfsetuid` 需要 `-f` 才写得进去。
-/// 入参越界或非 hex 时按 0 计，不 panic——拼串出错的代价是「BCC 不自洽」，
-/// 而不是崩在工具参数上。
+///
+/// 入参不是「满 32 位 hex」时一律返回 `false`（不自洽），绝不 panic。
+/// 早先版本让越界/非 hex 的字节按 0 计，于是 `""` 与含 `zz` 的串都被判成
+/// 「自洽」——虽有调用方的 `block0_is_valid` / `clean_uid_input` 兜底，
+/// 但函数本身的契约不该给出与事实相反的答案。
 pub fn block0_bcc_ok(block0: &str) -> bool {
+    if block0.len() != 32 || !block0.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return false;
+    }
     let xor = [0usize, 1, 2, 3]
         .iter()
         .copied()
@@ -143,10 +149,13 @@ mod tests {
 
     #[test]
     fn bcc_ok_handles_short_or_garbage_without_panicking() {
-        // 非 hex / 过短不应 panic（越界字节按 0 计，等价「BCC 恰好自洽」）。
-        let _ = block0_bcc_ok("");
-        let _ = block0_bcc_ok("04A8");
-        let _ = block0_bcc_ok("GHIJKLMNOPQRSTUVWXYZ0123456789");
+        // 非 hex / 过短不 panic，且**一律判不自洽**（不能把畸形输入当成
+        // 「BCC 恰好自洽」——那会让调用方的安全闸形同虚设）。
+        assert!(!block0_bcc_ok(""));
+        assert!(!block0_bcc_ok("04A8"));
+        assert!(!block0_bcc_ok("GHIJKLMNOPQRSTUVWXYZ0123456789"));
+        // 长度对但含非 hex：同样不自洽
+        assert!(!block0_bcc_ok("04A8A68A8004000100000000000000zz"));
     }
 
     #[test]

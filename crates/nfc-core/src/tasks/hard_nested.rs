@@ -226,14 +226,19 @@ impl HardNestedRunner {
     /// 递归下一轮，若 `cropto1_bs` 始终找不出密钥会**无限递归**。原版靠
     /// `totalUnknownKeys` 固定而 `unknownKeyInfo` 不变来暴露问题（进度条永远停在
     /// 同一格），实为缺陷。此处给出显式终止条件。
+    ///
+    /// **`found_key` 不可省**：仅看 `unknown` 数量会把「解出了密钥、但命中的
+    /// (sector, type) 已不在 unknown 列表里」误判成无进展——`nfc-mfdetect`
+    /// 每轮都会重刷该列表，这种情形真实可发生。解出密钥本身就是进展。
     pub fn after_crack_guarded(
         &mut self,
         config: &HardNestedConfig,
         unknown_before: usize,
         unknown_after: usize,
+        found_key: bool,
     ) -> Step {
-        if config.auto_run && unknown_after >= unknown_before {
-            // 本轮没解出任何密钥，再跑下去结果不会变
+        if config.auto_run && unknown_after >= unknown_before && !found_key {
+            // 本轮既没解出密钥、队列也没推进，再跑下去结果不会变
             return self.idle_step(Step::StopNoProgress);
         }
         self.after_crack(config, unknown_after)
@@ -550,11 +555,25 @@ mod tests {
         let mut r = HardNestedRunner::new();
         let c = cfg(true, false);
         r.begin(&c, &unknown(3));
-        // unknown 一直是 3
-        assert_eq!(r.after_crack_guarded(&c, 3, 3), Step::StopNoProgress);
+        // unknown 一直是 3，且本轮没解出密钥 → 停
+        assert_eq!(r.after_crack_guarded(&c, 3, 3, false), Step::StopNoProgress);
         assert_eq!(*r.phase(), HardNestedPhase::Idle);
         // 有进展则继续
-        assert_eq!(r.after_crack_guarded(&c, 3, 2), Step::Detect);
+        assert_eq!(r.after_crack_guarded(&c, 3, 2, false), Step::Detect);
+    }
+
+    /// 回归：解出了密钥、但命中的 (sector, type) 不在 unknown 列表里
+    /// （`nfc-mfdetect` 每轮会重刷该列表），数量不变也**不能**判无进展而中止。
+    #[test]
+    fn auto_run_continues_when_key_found_but_queue_unchanged() {
+        let mut r = HardNestedRunner::new();
+        let c = cfg(true, false);
+        r.begin(&c, &unknown(3));
+        assert_eq!(
+            r.after_crack_guarded(&c, 3, 3, true),
+            Step::Detect,
+            "解出密钥即进展，不得中止"
+        );
     }
 
     #[test]
