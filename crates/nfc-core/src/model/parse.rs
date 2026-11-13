@@ -446,13 +446,33 @@ impl SingleKeyParser {
 
 // ---------------------------------------------------------------- mfcuk（S18）
 
-// `mfcuk` 命中密钥的行内模式（全加密爆破逐扇区恢复，一轮可能出**多把**）。
+// `mfcuk` 命中密钥的行内模式（全加密爆破逐扇区恢复）。
 //
-// 两条来源行：`Found Key A [aabbccddeeff]`（collect/restore 命中）与
-// `recovered KEY: [aabbccddeeff]`（爆破求解器落定），均限定 12 位 hex。
+// **真相源是 `framework/source/mfcuk/src/mfcuk.c:647`**，唯一的一处求解成功
+// 打印为：
+//
+// ```text
+// printf("\nINFO: block %d recovered KEY: %012"PRIx64"\n", uiBlock, key_recovered)
+// ```
+//
+// 即 `INFO: block 15 recovered KEY: aabbccddeeff` —— **没有方括号**，且需
+// `-v 3`（`verboseLevel > 1`）才输出。
+//
+// 早先的正则照抄了 nfc-mfdetect/mfoc 的 `Found Key A [xxx]` 写法（那是
+// `mfoc.c:530` / `nfc-mfdetect.c:517` 的格式，mfcuk 里根本没有这个串），
+// 于是对真实输出**永不命中**：`run-mfcuk` 跑完一把密钥都收不到，
+// 落盘逻辑永不触发，属静默失败。测试用例当时也是照虚构格式写的，故没发现。
+//
+// 同时保留 `Found Key A/B [hex]` 这条兼容分支：万一将来换成带 patch 的
+// mfcuk 变体、或用户用别的工具链，两种格式都能收。
 compile_re!(mfcuk_key_re, {
-    Regex::new(r"(?:Found\s+Key\s+[AB]|recovered\s+KEY:)\s*\[([0-9A-Fa-f]{12})\]")
-        .expect("静态正则")
+    // 末尾 `(?:[0-9A-Fa-f]|$)` 的负向断言不能直接用（Rust regex 无 lookahead），
+    // 故改为「捕获 12 位后必须跟非 hex 或行尾」：少这一条，13 位 hex 会被
+    // 截断成前 12 位误收（13 位是真实可能出现的脏数据，如拼接错误）。
+    Regex::new(
+        r"(?:recovered\s+KEY:\s*|Found\s+Key\s+[AB]\s*\[)([0-9A-Fa-f]{12})(?:[^0-9A-Fa-f]|$)",
+    )
+    .expect("静态正则")
 });
 
 /// `mfcuk` 输出解析。对标 MifareOneTool 的 `mfcuk -v 3 -C -R -1 -s 250 -S 250`
@@ -1013,19 +1033,28 @@ mod tests {
 
     #[test]
     fn mfcuk_parser_collects_all_hits_in_order() {
+        // 真实 mfcuk 输出（`mfcuk.c:647`）：`INFO: block N recovered KEY: <12 hex>`，
+        // **无方括号**。这条用例此前用的是虚构的 `[xxx]` 格式，正是它让
+        // 「对真实输出永不命中」的缺陷逃过了测试。
         let mut p = MfcukKeyParser::new();
         p.push("collecting nonces for sector 3\n");
-        p.push("Found Key A [aabbccddeeff]\n");
-        p.push("Found Key B [112233445566]\nrecovered KEY: [cafe12345678]\n");
+        p.push("\nINFO: block 15 recovered KEY: aabbccddeeff\n");
+        p.push("\nINFO: block 16 recovered KEY: 112233445566\n");
         p.flush();
         assert_eq!(
             p.take_keys(),
-            vec![
-                "aabbccddeeff".to_string(),
-                "112233445566".to_string(),
-                "cafe12345678".to_string()
-            ]
+            vec!["aabbccddeeff".to_string(), "112233445566".to_string()],
+            "必须能从真实 mfcuk 输出里取到密钥"
         );
+    }
+
+    /// 兼容分支：带方括号的 `Found Key A/B [hex]` 也要能收（换 patch 变体时用）。
+    #[test]
+    fn mfcuk_parser_also_accepts_bracketed_variant() {
+        let mut p = MfcukKeyParser::new();
+        p.push("Found Key A [cafe12345678]\n");
+        p.flush();
+        assert_eq!(p.take_keys(), vec!["cafe12345678".to_string()]);
     }
 
     #[test]
@@ -1051,5 +1080,17 @@ mod tests {
         p.push("Found Key A [aabbccddee]\nrecovered KEY: [zz]\n");
         p.flush();
         assert!(p.take_keys().is_empty(), "10 位 hex 与非法字符都不算命中");
+    }
+
+    /// 真实格式下也不能误收：位数不对、含非 hex、缺字段都必须漏过。
+    #[test]
+    fn mfcuk_parser_rejects_bad_hex_in_real_format() {
+        let mut p = MfcukKeyParser::new();
+        p.push("INFO: block 15 recovered KEY: aabbccddee\n"); // 10 位
+        p.push("INFO: block 16 recovered KEY: aabbccddeeff0\n"); // 13 位
+        p.push("INFO: block 17 recovered KEY: gghhiijjkkll\n"); // 非 hex
+        p.push("INFO: block 18 recovered KEY: \n"); // 空
+        p.flush();
+        assert!(p.take_keys().is_empty(), "真实格式下非法密钥不得被收进历史");
     }
 }
