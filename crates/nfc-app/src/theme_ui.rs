@@ -203,3 +203,112 @@ pub fn event_color(theme: Theme, kind: nfc_core::state::EventKind) -> Color32 {
         EventKind::Error => Paint(theme).color(theme.danger),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nfc_core::state::{DeviceState, EventKind, Indicator};
+
+    fn rgb(c: Color32) -> (u8, u8, u8) {
+        (c.r(), c.g(), c.b())
+    }
+
+    // ── 设备状态条四色（对标 index.js 的硬编码值）─────────────────
+
+    #[test]
+    fn device_dot_uses_original_four_colors() {
+        // 这四色在 index.js 里是硬编码、不走 CSS 变量，故此处同样写死并
+        // 用测试钉住：改错会让「已连接」显示成待机色之类，肉眼难发现。
+        let p = Paint(nfc_core::theme::dark());
+        assert_eq!(
+            rgb(p.device_dot(DeviceState::Connecting)),
+            (0xb6, 0xb2, 0x39)
+        );
+        assert_eq!(
+            rgb(p.device_dot(DeviceState::Connected)),
+            (0x54, 0xad, 0x6c)
+        );
+        assert_eq!(rgb(p.device_dot(DeviceState::Failed)), (0xcf, 0x41, 0x52));
+        assert_eq!(rgb(p.device_dot(DeviceState::None)), (0x60, 0x60, 0x60));
+    }
+
+    #[test]
+    fn device_dot_states_are_mutually_distinct() {
+        // 四态若有两态同色，用户无法从颜色区分（连接中 vs 失败尤其危险）。
+        let p = Paint(nfc_core::theme::dark());
+        let all = [
+            p.device_dot(DeviceState::Connecting),
+            p.device_dot(DeviceState::Connected),
+            p.device_dot(DeviceState::Failed),
+            p.device_dot(DeviceState::None),
+        ];
+        for i in 0..all.len() {
+            for j in (i + 1)..all.len() {
+                assert_ne!(all[i], all[j], "设备状态 {i} 与 {j} 颜色相同");
+            }
+        }
+    }
+
+    // ── 任务状态三色 ──────────────────────────────────────────────
+
+    #[test]
+    fn status_dot_branches() {
+        let p = Paint(nfc_core::theme::dark());
+        // 空闲时透明（原版 background-color: transparent）
+        assert_eq!(p.status_dot(Indicator::Free), Color32::TRANSPARENT);
+        assert_eq!(rgb(p.status_dot(Indicator::Running)), (0x00, 0xb0, 0x00));
+        assert_eq!(rgb(p.status_dot(Indicator::Error)), (0xff, 0x00, 0x00));
+    }
+
+    #[test]
+    fn status_dot_running_and_error_are_distinct() {
+        // 绿/红混淆会让「跑完了」与「出错了」看起来一样。
+        let p = Paint(nfc_core::theme::dark());
+        assert_ne!(
+            p.status_dot(Indicator::Running),
+            p.status_dot(Indicator::Error)
+        );
+    }
+
+    // ── 事件条着色：取自主题 token ────────────────────────────────
+
+    #[test]
+    fn event_color_maps_to_theme_tokens() {
+        let theme = nfc_core::theme::dark();
+        // 必须与主题 token 走同一转换（Paint::color），不能另写一套 RGB。
+        assert_eq!(
+            event_color(theme, EventKind::Key),
+            Paint(theme).color(theme.key_a)
+        );
+        assert_eq!(
+            event_color(theme, EventKind::Success),
+            Paint(theme).color(theme.console_fg)
+        );
+        assert_eq!(
+            event_color(theme, EventKind::Error),
+            Paint(theme).color(theme.danger)
+        );
+    }
+
+    // ── Paint 的 token 转换与明暗判定 ─────────────────────────────
+
+    #[test]
+    fn paint_color_converts_rgb_token() {
+        let t = nfc_core::theme::dark();
+        let token = Rgb::new(0x12, 0x34, 0x56);
+        assert_eq!(rgb(Paint(t).color(token)), (0x12, 0x34, 0x56));
+    }
+
+    #[test]
+    fn theme_modes_report_darkness_consistently() {
+        // is_dark 驱动 egui Visuals 的分支选择，判反会让浅色主题套上深色底。
+        assert!(
+            Paint(nfc_core::theme::dark()).is_dark(),
+            "深色主题应判为 dark"
+        );
+        assert!(
+            !Paint(nfc_core::theme::light()).is_dark(),
+            "浅色主题不应判为 dark"
+        );
+    }
+}

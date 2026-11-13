@@ -686,6 +686,34 @@ mod tests {
     }
 
     #[test]
+    fn prepare_format_confirmed_and_cancelled() {
+        // 格式化会重置全部扇区的访问控制位，是破坏性操作：必须弹确认，
+        // 且取消时绝不返回可执行结果。
+        let mut ok = crate::dialogs::MockDialog::new().with_confirm(true);
+        assert_eq!(prepare_format(&mut ok), PrepareOutcome::ReadyNoFile);
+        assert_eq!(ok.confirm_calls(), 1, "格式化必须弹一次确认");
+
+        let mut no = crate::dialogs::MockDialog::new().with_confirm(false);
+        assert_eq!(prepare_format(&mut no), PrepareOutcome::Cancelled);
+        assert_eq!(no.confirm_calls(), 1, "取消路径也应只弹一次");
+    }
+
+    /// 格式化确认框必须带「会重置访问控制位」的警示文案。
+    ///
+    /// `danger_request` 返回的是经 `i18n::t()` 翻译后的文案，故断言关键词
+    /// 而非 key 本身。
+    #[test]
+    fn format_confirm_warns_about_access_bits() {
+        let req = format_confirm();
+        assert!(
+            req.message.contains("访问控制位"),
+            "确认文案须讲清会重置访问控制位，实际: {:?}",
+            req.message
+        );
+        assert_eq!(req.title, i18n::t("dialog_title_danger_operation"));
+    }
+
+    #[test]
     fn prepare_lock_confirmed_and_cancelled() {
         let mut ok = crate::dialogs::MockDialog::new().with_confirm(true);
         assert_eq!(prepare_lock(&mut ok), PrepareOutcome::ReadyNoFile);
