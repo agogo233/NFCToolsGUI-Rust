@@ -72,9 +72,19 @@ impl Paths {
     }
 
     /// dump 默认文件名：`{uid}_{timestamp}.mfd`；uid 为空时退化为 `card`。
+    ///
+    /// **`uid` 来自 `mfoc` 的 stdout**（`take_uid` 只去空白，不校验字符集），
+    /// 而本函数的返回值会被 `dir.join()` 拼成落盘路径。任意读卡器都能打印
+    /// 一行伪造的 `UID (NFCID1): ../../x`，故此处必须把「不是纯 hex 的 uid」
+    /// 整体退化为 `card`——否则默认名可逃出 `dumpfiles/` 覆盖任意文件
+    /// （纵深防御第二道；第一道是 `dumpfiles::is_plain_name`）。
     pub fn dump_file_name(uid: &str, stamp: &str) -> String {
         let uid = uid.trim();
-        let uid = if uid.is_empty() { "card" } else { uid };
+        let uid = if uid.is_empty() || !uid.chars().all(|c| c.is_ascii_hexdigit()) {
+            "card"
+        } else {
+            uid
+        };
         format!("{uid}_{stamp}.mfd")
     }
 
@@ -207,10 +217,34 @@ fn detect_local_offset_secs() -> i64 {
     }
     let local = unsafe { local.assume_init() };
     let utc = unsafe { utc.assume_init() };
-    let sod = |t: &SysTime| -> i64 {
-        i64::from(t.hour) * 3600 + i64::from(t.minute) * 60 + i64::from(t.second)
+    // **必须用到日期**，不能只比「时分秒」。偏移跨过午夜时，钟点差会与
+    // 真实偏移差整整一天且**无法区分**：UTC+14 在 UTC 12:00 时本地是次日
+    // 02:00，钟点差 -36000，而 UTC-10 同为 -36000。
+    //
+    // 故与 POSIX 分支同法：先算「年内秒数」（含 day-of-year），相减后再归一。
+    // Windows 的 `SYSTEMTIME` 给的是 year/month/day，这里就地折算成
+    // 年积日，避免再引 `tm` 结构。
+    let soy = |t: &SysTime| -> i64 {
+        (days_from_civil(t.year as i64, t.month as i64, t.day as i64) * 86_400)
+            + i64::from(t.hour) * 3600
+            + i64::from(t.minute) * 60
+            + i64::from(t.second)
     };
-    normalize_offset(sod(&local) - sod(&utc))
+    normalize_offset(soy(&local) - soy(&utc))
+}
+
+/// 公历日期 → 自 1970-01-01 起的天数（Howard Hinnant 的 `days_from_civil`）。
+///
+/// 只用整数运算、无查表、正确处理闰年与世纪规则。仅被 Windows 时区探测使用。
+#[cfg_attr(not(windows), allow(dead_code))]
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400; // [0, 399]
+    let mp = (m + 9) % 12; // 3 月为 0
+    let doy = (153 * mp + 2) / 5 + d - 1; // [0, 365]
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+    era * 146_097 + doe - 719_468
 }
 
 /// 平台的本地偏移探测（POSIX：C 库 `localtime_r` / `gmtime_r`）。
@@ -262,9 +296,28 @@ fn detect_local_offset_secs() -> i64 {
             return 0;
         }
     };
-    // 用「当年内的秒数」相减；跨年瞬间 yday 差一年，由归一化吸收。
+    // **不能只用 `yday` 相减**：该差值是「按当年天数计的秒数」，跨年时两侧
+    // yday 相差近一整年（12/31 的 364 与 1/1 的 0），`normalize_offset` 按 ±1 天
+    // 回绕无法还原，得到的是乱值（实测 UTC+14 在 12/31 23:00 UTC 时算成 -36000）。
+    //
+    // 优先采用 glibc/POSIX 的 `tm_gmtoff`：它直接给出该刻相对 UTC 的偏移，
+    // 与日期无关，最可靠。musl 等不保证该字段（值任意），故只在其落在合法
+    // 区间时才信；否则走下面的绝对天差算法（两者结论一致）。
+    if (MIN_TZ_OFFSET..=MAX_TZ_OFFSET).contains(&local.gmtoff) {
+        return local.gmtoff;
+    }
+    // 回落：用「绝对日期的天序号 + 当日时刻」相减。
+    //
+    // **不能用 `yday`**：它是「当年第几天」，跨年时 12/31 的 364 与 1/1 的 0
+    // 相差近一整年，`normalize_offset` 按 ±1 天回绕还原不出来（UTC+14 会算成
+    // -36000）。`days_from_civil` 给的是自 1970-01-01 起的连续天序号，
+    // 跨年/跨闰日都自然正确，与 Windows 分支同一算法。
     let soy = |t: &Tm| -> i64 {
-        i64::from(t.yday) * 86_400
+        days_from_civil(
+            i64::from(t.year) + 1900,
+            i64::from(t.mon) + 1,
+            i64::from(t.mday),
+        ) * 86_400
             + i64::from(t.hour) * 3600
             + i64::from(t.min) * 60
             + i64::from(t.sec)
@@ -272,12 +325,26 @@ fn detect_local_offset_secs() -> i64 {
     normalize_offset(soy(&local) - soy(&utc))
 }
 
-/// 把「同刻本地/UTC 之差」归一化到 `(-86400, 86400]`（跨年 / 跨午夜时差一整日）。
+/// 时区偏移上限：UTC+14（`Pacific/Kiritimati`）是现实中的最大值 50400 秒。
+///
+/// 区间必须覆盖 `[-12:00, +14:00]`。此前对称压缩到 `±12:00`（43200），
+/// 把 UTC+12:45…UTC+14 的**真实**偏移误判成「跨了一整日」而减去 86400，
+/// 得到 -36000 之类的负偏移——这些时区的文件名时间戳整整差一天
+/// （实测 `TZ=Pacific/Kiritimati` 比系统 `date` 早一天）。
+const MAX_TZ_OFFSET: i64 = 50_400;
+/// 时区偏移下限：UTC-12 = -43200。
+const MIN_TZ_OFFSET: i64 = -43_200;
+
+/// 把「同刻本地/UTC 之差」归一化到 `(MIN_TZ_OFFSET, MAX_TZ_OFFSET]`
+/// （跨年 / 跨午夜时差一整日）。
+///
+/// 不对称区间是**必须**的：合法偏移集是 `[-43200, 50400]`，
+/// 用对称的 `±43200` 会把 UTC+12:45 以上的时区判成需要回绕。
 fn normalize_offset(mut d: i64) -> i64 {
-    while d <= -43_200 {
+    while d <= MIN_TZ_OFFSET {
         d += 86_400;
     }
-    while d > 43_200 {
+    while d > MAX_TZ_OFFSET {
         d -= 86_400;
     }
     d
@@ -368,6 +435,87 @@ mod tests {
         assert_eq!(normalize_offset(-3600 + 86_400), -3600);
     }
 
+    /// 回归：合法时区上界 UTC+14（50400）此前被对称区间 `±43200` 误回绕成
+    /// -36000，导致这些时区的文件名时间戳差一整天。
+    #[test]
+    fn normalize_offset_keeps_utc_plus_12_45_through_14() {
+        assert_eq!(normalize_offset(50_400), 50_400, "UTC+14 应原样保留");
+        assert_eq!(normalize_offset(45_900), 45_900, "UTC+12:45");
+        assert_eq!(normalize_offset(49_500), 49_500, "UTC+13:45");
+        assert_eq!(normalize_offset(-43_200), 43_200, "UTC-12 回绕为正 12:00");
+        assert_eq!(normalize_offset(50_401), 50_401 - 86_400, "越过上界才回绕");
+    }
+
+    /// 回归：跨年瞬间 `yday` 相减会差近一整年（12/31 的 364 与 1/1 的 0），
+    /// 按 ±1 天回绕**还原不出来**，UTC+14 会被算成 -36000（时间戳差一整天）。
+    /// 正确值应由该刻的真实偏移给出（POSIX 走 `tm_gmtoff`，Windows 走
+    /// `days_from_civil` 的绝对天差）。
+    #[test]
+    fn year_boundary_offset_is_not_corrupted_by_yday_wrap() {
+        // 用绝对天差构造：12/31 23:00 UTC 对应的本地时刻是次年 1/1 13:00(+14)
+        let utc_day = days_from_civil(2025, 12, 31);
+        let loc_day = days_from_civil(2026, 1, 1);
+        let utc = utc_day * 86_400 + 23 * 3_600;
+        let loc = loc_day * 86_400 + 13 * 3_600;
+        assert_eq!(normalize_offset(loc - utc), 50_400, "UTC+14 跨年");
+        // 反向：UTC-12 跨年（1/1 05:00 UTC → 12/31 17:00）
+        let utc2 = days_from_civil(2026, 1, 1) * 86_400 + 5 * 3_600;
+        let loc2 = days_from_civil(2025, 12, 31) * 86_400 + 17 * 3_600;
+        // -43200 与 43200 相差正好一整天，描述同一偏移；归一到区间内即为正确。
+        let off = normalize_offset(loc2 - utc2);
+        assert!(
+            off == -43_200 || off == 43_200,
+            "UTC-12 跨年应得 ±12:00，实际 {off}"
+        );
+        // 真正要防的是「差一整年」被算成无关的值：结果必须仍是 12 小时整。
+        assert_eq!(off.abs(), 43_200, "UTC-12 跨年偏移量应为 12 小时");
+    }
+
+    /// Windows 时区探测用 `days_from_civil` 折算年积日，其正确性必须独立可验。
+    #[test]
+    fn days_from_civil_matches_known_dates() {
+        assert_eq!(days_from_civil(1970, 1, 1), 0);
+        assert_eq!(days_from_civil(1970, 1, 2), 1);
+        assert_eq!(days_from_civil(1969, 12, 31), -1);
+        assert_eq!(days_from_civil(2000, 1, 1), 10_957);
+        assert_eq!(days_from_civil(2000, 3, 1), 11_017);
+        // 闰年：2/29 与 3/1 相差 1 天
+        assert_eq!(
+            days_from_civil(2024, 3, 1) - days_from_civil(2024, 2, 29),
+            1
+        );
+        // 非闰年 2/28 直接到 3/1
+        assert_eq!(
+            days_from_civil(2023, 3, 1) - days_from_civil(2023, 2, 28),
+            1
+        );
+        // 与 format_timestamp 的日期部分互证
+        assert_eq!(format_timestamp(0), "1970_01_01_00_00_00");
+        // 与既有 `civil_from_days` 必须互为逆函数（覆盖闰世纪边界）
+        for days in [-100_000i64, -1, 0, 1, 11_016, 36_524, 146_096, 146_097] {
+            let (y, m, d) = civil_from_days(days);
+            assert_eq!(
+                days_from_civil(y, m as i64, d as i64),
+                days,
+                "往返不一致 days={days} → {y}-{m}-{d}"
+            );
+        }
+    }
+
+    /// 回归：Windows 分支曾只比「时分秒」，跨午夜时把 UTC+14 算成 -36000。    /// 正确做法是叠加日差（local 比 utc 晚一天 → +86400）。
+    #[test]
+    fn windows_style_offset_uses_day_difference() {
+        let soyd = |h: i64| h * 3600;
+        // UTC+14 @ UTC 12:00 → 本地次日 02:00
+        assert_eq!(
+            normalize_offset(soyd(2) + 86_400 - soyd(12)),
+            50_400,
+            "UTC+14 跨午夜"
+        );
+        // UTC-10 @ 同时刻 → -36000，与上式**原始钟点差相同**但不能混淆
+        assert_eq!(normalize_offset(soyd(2) - soyd(12)), -36_000, "UTC-10");
+    }
+
     #[test]
     fn detected_local_offset_is_sane() {
         // 现实时区偏移在 ±14 小时内；探测失败时退回 0，也在范围内
@@ -438,6 +586,24 @@ mod tests {
         );
         assert_eq!(Paths::dump_file_name("   ", "x"), "card_x.mfd");
         assert_eq!(Paths::dump_file_name("  AABBCCDD  ", "x"), "AABBCCDD_x.mfd");
+    }
+
+    /// uid 直接来自工具 stdout，可能含路径分隔符 / `..`。
+    /// 默认文件名会被 `dir.join()` 拼成落盘路径，故非 hex 一律退化为 `card`。
+    #[test]
+    fn dump_name_rejects_non_hex_uid_to_block_path_traversal() {
+        // 恶意读卡器可打印伪造的 UID 行，逃出 dumpfiles/
+        assert_eq!(Paths::dump_file_name("../../escaped", "x"), "card_x.mfd");
+        assert_eq!(Paths::dump_file_name("..", "x"), "card_x.mfd");
+        assert_eq!(Paths::dump_file_name("/etc/passwd", "x"), "card_x.mfd");
+        assert_eq!(Paths::dump_file_name("C:evil", "x"), "card_x.mfd");
+        assert_eq!(Paths::dump_file_name("a/b", "x"), "card_x.mfd");
+        // 合法 UID 不受影响（大小写 hex 均原样保留）
+        assert_eq!(Paths::dump_file_name("a1b2c3d4", "x"), "a1b2c3d4_x.mfd");
+        assert_eq!(
+            Paths::dump_file_name("A1B2C3D4E5F607", "x"),
+            "A1B2C3D4E5F607_x.mfd"
+        );
     }
 
     #[test]
