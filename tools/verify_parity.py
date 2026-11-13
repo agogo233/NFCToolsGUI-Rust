@@ -1019,7 +1019,7 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     # 测试数
     s6s7_units = sum(rd(CORE / f"src/{f}").count("#[test]")
                      for f in ["tasks/card_write.rs", "tasks/hard_nested.rs", "tasks/dict_test.rs"])
-    check(s6s7_units == 77, "S6/S7 新增 77 个单测（含 S17/S18 增量 + S19 的 uid_prefix/非hex 判定 + found_key 进展判据）", f"实际 {s6s7_units}")
+    check(s6s7_units == 79, "S6/S7 新增 79 个单测（含 S17/S18 增量 + S19 的 uid_prefix/非hex 判定 + found_key 进展判据 + format-card 确认/取消与文案 2 项）", f"实际 {s6s7_units}")
     ints2 = rd(CORE / "tests/integration.rs")
     check(ints2.count("#[test]") == 58, "S6/S7 后集成测试 58", f"实际 {ints2.count('#[test]')}")
     check(ints2.count("fn s6_") == 7 and ints2.count("fn s7_") == 4, "S6/S7 新增 11 个集成测试",
