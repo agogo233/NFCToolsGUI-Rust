@@ -566,6 +566,17 @@ impl Engine {
                 self.hn_round = tasks::hard_nested::RoundContext::default();
                 self.hn_saving = false;
                 self.pending_save = None;
+                // 连接握手中点「停止」：`conn` 必须一并清掉。否则它会一直残留，
+                // 而 `pump` 见到 `conn.is_some()` 就整帧只推进连接（不推进
+                // 真实任务）；一旦之后有任务漏过 gate，就会被这个残留的连接流
+                // 吞掉、永远等不到 `finish`。当前 gate 的 `NotConnected` 分支
+                // 恰好挡住了这条路，但那是巧合而非约束 —— 在这里清掉才是根因修复。
+                //
+                // 设备状态回到「未连接」：握手没完成，UI 不该停在「正在连接」。
+                if self.conn.take().is_some() {
+                    state.apply(Event::DeviceState(crate::state::DeviceState::None));
+                    state.is_device_connected = false;
+                }
                 state.apply(Event::Status {
                     text: crate::i18n::t("indicator_free"),
                     indicator: Indicator::Free,
@@ -2149,6 +2160,71 @@ mod tests {
         );
         run_to_end(&mut e, &mut st, &p, 8);
         assert!(!e.is_running());
+    }
+
+    /// 守卫：连接握手期间点「停止」后，`conn` 会残留（`cancel-task` 不清它），
+    /// 此时**任何新任务必须被 gate 拒绝**，否则会出现一条无法自愈的卡死链。
+    ///
+    /// 危险链（当前被 `gate` 的 `NotConnected` 分支挡住，故此测试是**回归
+    /// 守卫**而非缺陷复现）：`cancel-task` 只清 `running` / `is_running_task`、
+    /// 不清 `conn`；若将来有人放宽 `gate`（比如让 `Connecting` 也放行某些
+    /// 工具），新任务就会 spawn 成功，而下一帧 `pump` 见 `conn.is_some()`
+    /// 便整帧走 `pump_conn` —— 把**新任务的输出**喂给连接判定，并调
+    /// `runner.exit()` 把它回收掉，`Engine::running` 再也不会被 `finish`，
+    /// 界面永远停在「运行中」。
+    ///
+    /// 断言两件事：① 派发被拒；② 收尾后不残留运行中。
+    #[test]
+    fn cancel_during_connect_does_not_strand_later_task() {
+        let (_d, p) = paths("cancel-conn");
+        // 握手输出给一段足以让 flow 认为「还在进行」的内容（不含判定标记）。
+        let mut e = Engine::new(Box::new(
+            MockToolRunner::new(vec![Chunk::stdout("Scanning...\n")]).with_scripts(vec![
+                vec![Chunk::stdout("Scanning...\n")],
+                // 新任务（read-IC）的输出
+                vec![Chunk::stdout("UID (NFCID1): 01020304050607\n")],
+            ]),
+        ));
+        let mut st = AppState::new();
+        let mut dlg = MockDialog::new();
+
+        e.dispatch(
+            Action::ConnUsb("/dev/ttyACM0".into()),
+            &mut st,
+            &p,
+            &mut dlg,
+        )
+        .unwrap();
+        assert!(e.is_running(), "握手应处于运行中");
+
+        // 握手途中停止
+        e.dispatch(Action::Plain("cancel-task"), &mut st, &p, &mut dlg)
+            .unwrap();
+        assert!(!st.is_running_task, "取消后任务位应清");
+
+        // 前提确认：`cancel-task` 必须把残留的连接流一并清掉（根因修复）。
+        assert!(
+            e.conn.is_none(),
+            "cancel 后 conn 必须被清，否则后续 pump 只推进连接、吞掉真实任务"
+        );
+
+        // conn 已清，此时新任务应被拒（设备未连上）；
+        // 无论拒或接，都不允许留下无法 finish 的 running。
+        let dispatched = e.dispatch(Action::Plain("read-IC"), &mut st, &p, &mut dlg);
+        assert_eq!(
+            dispatched,
+            Err(ToolError::NotConnected),
+            "设备未连接时新任务必须被拒"
+        );
+        assert!(
+            !e.running.is_some(),
+            "被拒的派发不应留下 running，否则永远等不到 finish"
+        );
+
+        // 收尾后也不能残留「运行中」。
+        run_to_end(&mut e, &mut st, &p, 40);
+        assert!(!e.is_running(), "收尾后不应残留运行中");
+        assert!(!st.is_running_task, "收尾后任务位应为 false");
     }
 
     /// 全新数据目录里没有 keys.txt，mfoc / nfc-mfdetect 会因 `fopen` 失败直接

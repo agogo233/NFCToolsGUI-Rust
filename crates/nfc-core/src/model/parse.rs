@@ -466,13 +466,15 @@ impl SingleKeyParser {
 // 同时保留 `Found Key A/B [hex]` 这条兼容分支：万一将来换成带 patch 的
 // mfcuk 变体、或用户用别的工具链，两种格式都能收。
 compile_re!(mfcuk_key_re, {
-    // 末尾 `(?:[0-9A-Fa-f]|$)` 的负向断言不能直接用（Rust regex 无 lookahead），
-    // 故改为「捕获 12 位后必须跟非 hex 或行尾」：少这一条，13 位 hex 会被
-    // 截断成前 12 位误收（13 位是真实可能出现的脏数据，如拼接错误）。
-    Regex::new(
-        r"(?:recovered\s+KEY:\s*|Found\s+Key\s+[AB]\s*\[)([0-9A-Fa-f]{12})(?:[^0-9A-Fa-f]|$)",
-    )
-    .expect("静态正则")
+    // 三个前缀都要支持，且方括号**可选**（真实输出无括号，兼容变体有）：
+    // - `recovered KEY: <hex>`（mfcuk.c:647 真实格式）
+    // - `recovered KEY: [<hex>]`（带 patch 的变体）
+    // - `Found Key A|B [<hex>]`（mfoc/mfdetect 风格，部分变体沿用）
+    //
+    // 末尾 `(?:[^0-9A-Fa-f]|$)` 是必需边界：Rust regex 无 lookahead，若不要求
+    // 「12 位后必须是非 hex 或行尾」，13 位 hex 会被截断成前 12 位误收。
+    Regex::new(r"(?:recovered\s+KEY:|Found\s+Key\s+[AB])\s*\[?([0-9A-Fa-f]{12})(?:[^0-9A-Fa-f]|$)")
+        .expect("静态正则")
 });
 
 /// `mfcuk` 输出解析。对标 MifareOneTool 的 `mfcuk -v 3 -C -R -1 -s 250 -S 250`
@@ -1055,6 +1057,26 @@ mod tests {
         p.push("Found Key A [cafe12345678]\n");
         p.flush();
         assert_eq!(p.take_keys(), vec!["cafe12345678".to_string()]);
+    }
+
+    /// `recovered KEY:` 前缀 + 方括号的组合（既非真实格式也非 mfoc 格式，
+    /// 但曾被 app selftest 当作样例数据使用）。三者都必须能收。
+    #[test]
+    fn mfcuk_parser_accepts_all_three_prefix_forms() {
+        let mut p = MfcukKeyParser::new();
+        p.push("recovered KEY: 4d3c2b1a0f1e\n"); // 真实：无前缀、无括号
+        p.push("recovered KEY: [112233445566]\n"); // 带括号
+        p.push("Found Key A [aabbccddeeff]\n"); // mfoc 风格
+        p.flush();
+        assert_eq!(
+            p.take_keys(),
+            vec![
+                "4d3c2b1a0f1e".to_string(),
+                "112233445566".to_string(),
+                "aabbccddeeff".to_string()
+            ],
+            "三种前缀形式都必须能收到"
+        );
     }
 
     #[test]

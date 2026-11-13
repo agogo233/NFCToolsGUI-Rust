@@ -3035,8 +3035,8 @@ fn c_run_mfcuk_flow() -> Result<(), String> {
     use nfc_core::runner::Chunk;
     let (_d, app) = app_with_temp_dumps("mfcuk");
     let mut app = app.with_mock_backend(vec![
-        // `MfcukKeyParser` 认 `recovered KEY: [xxx]` 行
-        Chunk::stdout("recovered KEY: [4d3c2b1a0f1e]"),
+        // 真实 mfcuk 输出格式（`mfcuk.c:647`）：`INFO: block N recovered KEY: <hex>`
+        Chunk::stdout("\nINFO: block 15 recovered KEY: 4d3c2b1a0f1e\n"),
     ]);
     app.exec("run-mfcuk", None);
     app.consume_pending();
