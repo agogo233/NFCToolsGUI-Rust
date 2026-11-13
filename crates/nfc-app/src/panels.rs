@@ -856,10 +856,7 @@ fn settings(ui: &mut Ui, app: &mut NfcApp) -> bool {
             ui.button(t("html_close")).clicked()
         })
         .inner;
-    if close {
-        return false;
-    }
-    true
+    !close
 }
 
 /// inputKeys 面板点「确定」后的处理。返回 `true` 表示**保持面板打开**。
@@ -1299,10 +1296,7 @@ fn phone_wristband(ui: &mut Ui, app: &mut NfcApp) -> bool {
             ui.button(t("html_close")).clicked()
         })
         .inner;
-    if close {
-        return false;
-    }
-    true
+    !close
 }
 
 /// 文本框 → 无符号扇区/块号（原版 `parseInt` 得 NaN 时兜底为 0，越界由引擎拦）。
