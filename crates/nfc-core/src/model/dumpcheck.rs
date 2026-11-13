@@ -364,8 +364,12 @@ pub fn problem_lines(sectors: &[Sector]) -> Vec<String> {
     }
 }
 
-/// 体检报告的展示行：问题逐条 + 值块提示；**无问题时返回
+/// 体检报告的展示行：问题逐条 + 值块提示；**两者都没有时返回
 /// `[html_check_all_ok]`**（调用方直接渲染，无需再判空）。
+///
+/// 问题与值块是**两个独立维度**：前者是「这里是错的」，后者是「这里是值块
+/// （数据可能被写坏）」。早先实现只在「没有任何问题」时才列值块，于是一张
+/// 有 ACL/BCC 问题的卡永远看不到值块标记——两类信息被错误耦合了。
 pub fn check_report(sectors: &[Sector]) -> Vec<String> {
     let issues = match check(sectors) {
         Ok(i) => i,
@@ -373,18 +377,17 @@ pub fn check_report(sectors: &[Sector]) -> Vec<String> {
         Err(fatal) => return fatal.iter().map(issue_text).collect(),
     };
     let mut lines: Vec<String> = issues.iter().map(issue_text).collect();
-    if lines.is_empty() {
-        // 值块提示（1K 卡才标：编辑器按 4 块一组渲染，组号 == 扇区号）
-        let is_1k = sectors.len() == 16;
-        for g in 0..sectors.len() {
-            if !value_block_lines(g, sectors, is_1k).is_empty() {
-                lines.push(format!(
-                    "{}{}：{}",
-                    t("html_sector"),
-                    g,
-                    t("html_value_block")
-                ));
-            }
+    // 值块提示（1K 卡才标：编辑器按 4 块一组渲染，组号 == 扇区号）。
+    // 与上面的问题列表**独立收集**，不再以 `lines.is_empty()` 为前提。
+    let is_1k = sectors.len() == 16;
+    for g in 0..sectors.len() {
+        if !value_block_lines(g, sectors, is_1k).is_empty() {
+            lines.push(format!(
+                "{}{}：{}",
+                t("html_sector"),
+                g,
+                t("html_value_block")
+            ));
         }
     }
     if lines.is_empty() {
@@ -614,6 +617,34 @@ mod tests {
         let lines = check_report(&s);
         assert_eq!(lines.len(), 1);
         assert!(lines[0].contains(t("html_value_block").as_str()));
+    }
+
+    /// 有 ACL 问题时，值块提示**也不能丢**：两者是独立维度。
+    ///
+    /// 早先实现只在「没有任何问题」时才列值块，于是带 ACL 问题的卡永远
+    /// 看不到值块标记（数据被写坏也无人提示）。
+    #[test]
+    fn check_report_keeps_value_hint_even_with_other_issues() {
+        let mut s = blank_1k();
+        s[4][1] = "00000001fffffffe0000000105fa05fa".to_string(); // 扇区 4 值块
+                                                                  // 同时制造一个 ACL 问题：把扇区 5 的尾块访问位写成非法值
+        s[5][3] = "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF".to_string();
+
+        let lines = check_report(&s);
+        assert!(
+            lines.len() >= 2,
+            "问题与值块提示应并存（各一条以上），实际: {lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains(t("html_value_block").as_str())),
+            "有其它问题时值块提示仍须出现，实际: {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l == &t("html_check_all_ok")),
+            "有问题时不该报「全部正常」，实际: {lines:?}"
+        );
     }
 
     #[test]
