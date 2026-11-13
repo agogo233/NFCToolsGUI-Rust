@@ -290,6 +290,12 @@ pub struct NfcToolRunner {
     bin_dir: PathBuf,
     conf_dir: PathBuf,
     job: Option<Job>,
+    /// 上一个 job 已被 `kill`、正在退出。
+    ///
+    /// `cancel-task` 会立刻清掉 `Engine::running`，用户随即可能发起下一个任务；
+    /// 但被 SIGKILL 的进程要过一会儿才真的消失，`try_wait` 此刻多半仍返回 `None`。
+    /// 置真后 `start` 不再因残留 job 判 `Busy`，而是把旧 job 丢掉重新 spawn。
+    killed: bool,
 }
 
 impl fmt::Debug for NfcToolRunner {
@@ -308,6 +314,7 @@ impl NfcToolRunner {
             bin_dir,
             conf_dir,
             job: None,
+            killed: false,
         }
     }
 
@@ -434,6 +441,12 @@ impl NfcToolRunner {
 impl ToolRunner for NfcToolRunner {
     fn start(&mut self, tool: &str, args: &[String], gs: &GateState) -> Result<(), ToolError> {
         gate(tool, *gs)?;
+        // 上一个 job 已被 kill：它正在退出，不该再挡住新任务。直接丢掉旧 job
+        //（reader 线程随管道关闭自行结束），新一轮照常 spawn。
+        if self.killed {
+            self.job = None;
+            self.killed = false;
+        }
         if self.job.is_some() {
             return Err(ToolError::Busy);
         }
@@ -459,6 +472,14 @@ impl ToolRunner for NfcToolRunner {
                 let _ = c.kill();
             }
         }
+        // 尽力立即回收：`cancel-task` 随后会清掉 `Engine::running`，若此刻不把
+        // job 放掉，用户**下一帧之前**再发起任务会被 `start` 判成 `Busy`
+        //（reader 线程要等下一次 pump 才把 `pending`/`ready` 归零）。
+        // `kill` 之后进程通常已退出，`try_wait` 一次即可；万一仍在退，就保留
+        // job 交给正常的 `pump`/`exit` 回收，不影响正确性。
+        // 标记「上一个 job 已被 kill」：等真正退出由 `exit()` 回收，但**不**让它
+        // 挡住下一个任务（`cancel-task` 后用户会立刻再点，见 `start`）。
+        self.killed = true;
     }
 
     fn is_running(&self) -> bool {
@@ -546,7 +567,10 @@ impl MockToolRunner {
 impl ToolRunner for MockToolRunner {
     fn start(&mut self, tool: &str, args: &[String], gs: &GateState) -> Result<(), ToolError> {
         gate(tool, *gs)?;
-        if self.job.is_some() {
+        // 上一次任务已被 kill：视为已收敛，允许立刻开始新任务（与
+        // `cancel-task` 之后马上发起新动作的真实操作对应）。残留的 job 只用于
+        // 让 `exit()` 仍能报出 Killed，不该再挡住下一次 `start`。
+        if self.job.is_some() && !self.killed {
             return Err(ToolError::Busy);
         }
         self.killed = false;
