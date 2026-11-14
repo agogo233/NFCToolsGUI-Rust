@@ -31,7 +31,7 @@
 
 ### 1. C 工具（`framework/bin`）
 
-9 个 C 工具源码已**纳入本仓库**（`framework/source/`，原为 `agogo233/NFCToolsGUI`
+10 个 C 工具源码已**纳入本仓库**（`framework/source/`，原为 `agogo233/NFCToolsGUI`
 的 git 子模块、是 `GSWXXN/*` 的 fork，现已 vendoring 进来），编译脚本 `compile.sh` 也在仓库根目录。
 工具需要 autoconf / libtool 等工具链，且 Linux 产物不能用于 Windows。
 
@@ -140,6 +140,9 @@ python3 tools/verify_parity.py  # 846 项静态门禁（parity 表 / 接线守�
 | [docs/02](docs/02-架构设计.md) | 架构设计 + **§6 与原版行为的偏离登记** |
 | [docs/03](docs/03-实施计划.md) | 实施计划（S0–S19） |
 | [docs/04](docs/04-测试计划.md) | 测试计划 + **§9 39 action parity 表** |
+| [docs/05](docs/05-手机手环操作区方案.md) | 手机/手环操作区方案 |
+| [docs/06](docs/06-界面改版实施方案.md) | 界面改版实施方案（三栏工作台） |
+| [docs/07](docs/07-功能链路测试验证.md) | 功能完整链路测试验证（端到端手册） |
 
 **改动前先看 docs/02 §6。** 那里登记了所有刻意偏离原版的地方及原因 ——
 包括危险确认框改为应用内、提示条用 UTC、文件名排序等。

@@ -11,7 +11,7 @@ NFCToolsGUI 的 Rust 重写版（AGPL-3.0）。与 PN532 交互的跨平台桌�
 
 ## 必备前置：C 工具 `framework/bin`
 
-9 个 C 工具（`nfc-list mfoc nfc-mfclassic nfc-mfdetect nfc-mfdict nfc-mflock nfc-mfsetuid libnfc-collect cropto1_bs`）由仓库内 vendored 源码编译，**不在 CI 里自动构建**（Linux 产物不能用于 Windows）。
+10 个 C 工具（`nfc-list mfoc nfc-mfclassic nfc-mfdetect nfc-mfdict nfc-mflock nfc-mfsetuid libnfc-collect cropto1_bs mfcuk`）由仓库内 vendored 源码编译，**不在 CI 里自动构建**（Linux 产物不能用于 Windows）。
 
 - 编译：`sh ./compile.sh`（Linux 需 `autoconf automake libtool pkg-config cmake patchelf libusb-1.0-0-dev libreadline-dev zlib1g-dev liblzma-dev`；Windows 走 MSYS2 MINGW64 shell）
 - 运行时定位：exe 同级的 `framework/bin` → 否则向上最多 5 层父目录 → 否则读 `NFC_FRAMEWORK_BIN` 环境变量
@@ -30,7 +30,7 @@ cargo test -p nfc-core --test real_tools --test tool_cli   # 需要 framework/bi
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --workspace --all-targets --features real-serial -- -D warnings   # CI 额外跑一次：RealSerial 平时不参与编译
 cargo fmt --all --check
-python3 tools/verify_parity.py     # 828 项静态门禁（39 action parity 表 + 接线守卫）
+python3 tools/verify_parity.py     # 846 项静态门禁（39 action parity 表 + 接线守卫）
 ./scripts/package.sh               # 构建 + 打包 out/NFCToolsGUI-win-x64.zip
 ./scripts/package.sh --check       # 只跑门禁与检测
 ```
@@ -71,6 +71,9 @@ python3 tools/verify_parity.py     # 828 项静态门禁（39 action parity 表 
 - `docs/02-架构设计.md` — 架构 + §6 偏离登记
 - `docs/03-实施计划.md` — S0–S19 实施计划
 - `docs/04-测试计划.md` — 测试计划 + §9 39 action parity 表
+- `docs/05-手机手环操作区方案.md` — 手机/手环操作区方案
+- `docs/06-界面改版实施方案.md` — 界面改版实施方案（三栏工作台）
+- `docs/07-功能链路测试验证.md` — 功能完整链路测试验证（端到端手册）
 - `PLAN.md` — 总计划
 
 ## 真机验收
