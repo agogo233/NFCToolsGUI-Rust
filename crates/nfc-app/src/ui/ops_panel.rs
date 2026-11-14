@@ -54,8 +54,12 @@ const fn btn(
     }
 }
 
-/// 四组操作按钮。selftest 的 `c_ops_groups` 逐项锁定这份清单：
-/// 13 个 action 与原三列完全一致，primary / danger 标注也一致。
+/// 四组操作按钮（P1-8 重组）：13 个 action 与原三列完全一致，仅重排：
+///   读卡组 3 个：read-IC=primary
+///   破解组 2 个：无 primary / danger
+///   写卡组 5 个：write-IC=primary、format-card=danger（CUID 写 / 手输卡号 /
+///     写 UID 本质都是写卡，从「更多」并入，减少来回跳组）
+///   更多组 3 个：手机/手环、全加密爆破、锁定 UFUID=danger
 pub const GROUPS: &[GroupDef] = &[
     GroupDef {
         no: "1",
@@ -110,24 +114,6 @@ pub const GROUPS: &[GroupDef] = &[
                 BtnStyle::Primary,
             ),
             btn(
-                "format-card",
-                "html_format_card",
-                "html_tip_format_card",
-                BtnStyle::Danger,
-            ),
-        ],
-    },
-    GroupDef {
-        no: "+",
-        title_key: "html_ops_more",
-        btns: &[
-            btn(
-                "open-phw-window",
-                "html_phw_open",
-                "html_tip_phw",
-                BtnStyle::Normal,
-            ),
-            btn(
                 "cuid-write",
                 "html_cuid_write",
                 "html_tip_cuid_write",
@@ -143,6 +129,24 @@ pub const GROUPS: &[GroupDef] = &[
                 "write-ufuid-uid",
                 "html_write_ufuid_uid",
                 "html_tip_write_ufuid_uid",
+                BtnStyle::Normal,
+            ),
+            btn(
+                "format-card",
+                "html_format_card",
+                "html_tip_format_card",
+                BtnStyle::Danger,
+            ),
+        ],
+    },
+    GroupDef {
+        no: "+",
+        title_key: "html_ops_more",
+        btns: &[
+            btn(
+                "open-phw-window",
+                "html_phw_open",
+                "html_tip_phw",
                 BtnStyle::Normal,
             ),
             btn(
@@ -225,11 +229,12 @@ fn group_head(ui: &mut Ui, app: &NfcApp, g: &GroupDef) {
 
 /// 分组完成条件（视觉提示）：
 /// 读卡组 = 已有本次会话的卡片快照；破解组 = 做过检测且未知密钥清零；
-/// 写卡 / 更多组暂无可靠的完成标志，保持待命。
+/// 写卡组 = 本次会话写卡成功过（docs/06 §5.1；取消/失败不置位，新卡重置）。
 fn group_done(app: &NfcApp, g: &GroupDef) -> bool {
     match g.no {
         "1" => app.card_snapshot.is_some(),
         "2" => !app.state.known_key_info.is_empty() && app.state.unknown_key_info.is_empty(),
+        "3" => app.write_done,
         _ => false,
     }
 }

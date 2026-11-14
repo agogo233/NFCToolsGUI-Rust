@@ -151,6 +151,11 @@ struct Running {
     cuid: bool,
     /// S18 全加密爆破：`run-mfcuk` 的密钥解析器（一轮可能出多把）。
     mfcuk: Option<crate::model::parse::MfcukKeyParser>,
+    /// P2-10：mfcuk 的扇区游标（`RECOVER: 0 1 2 ...`，mfcuk.c:1593-1601）。
+    /// `feed` 时随输出推进，`finish` 时清零。
+    mfcuk_cursor: Option<u32>,
+    /// P2-10：mfcuk 的总扇区数（1K=16 / 4K=40，按 `-M` 实际卡型定）。
+    mfcuk_total: u32,
     /// `dict-test-config-done` 的目标扇区与类型：命中密钥后据此从
     /// `unknown_key_info` 移除对应项（`command.js:396-399`）。
     dict_target: Option<(u8, crate::model::keys::KeyType)>,
@@ -359,6 +364,25 @@ impl Engine {
     /// 只读访问底层 runner（自测与诊断用）。
     pub fn runner(&self) -> &dyn ToolRunner {
         self.runner.as_ref()
+    }
+
+    /// HardNested autoRun 的 unknown 总数（P1-7 进度展示用；无任务时 0）。
+    pub fn hn_total_unknown(&self) -> usize {
+        self.hn.total_unknown()
+    }
+
+    /// P2-10：mfcuk 全加密爆破进度 `(当前扇区, 已确认总扇区)`。
+    ///
+    /// `mfcuk` 无进度行，只有逐扇区游标（`RECOVER: 0 1 2 ...`）。游标是
+    /// **0 起**的当前扇区号，展示时 +1 变成「正在处理第 n 个」；总扇区在
+    /// 游标推进中自然上探到 16（1K）或 40（4K）。无任务或尚无游标返回 `None`。
+    pub fn mfcuk_progress(&self) -> Option<(u32, u32)> {
+        let run = self.running.as_ref()?;
+        if run.name != "run-mfcuk" {
+            return None;
+        }
+        let cursor = run.mfcuk_cursor?; // 尚未输出任何扇区游标
+        Some((cursor + 1, run.mfcuk_total.max(cursor + 1)))
     }
 
     /// 执行一个动作。
@@ -706,6 +730,10 @@ impl Engine {
             // 这里只处理真正跑 `nfc-mfsetuid` 的 `done-input-uid-write`）。
             "done-input-uid-write" => self.input_uid_write(name, arg, state, dialog),
             // S18 全加密爆破：`mfcuk` 直接启动，密钥解析器挂在 Running 上。
+            // P2-10：mfcuk 先 VERIFY 后 RECOVER，两段都会打 `0 1 2 ...` 扇区
+            // 游标（mfcuk.c:1488/1593）。RECOVER 是主耗时段，这里以
+            // **第二次**出现的游标序列为准——实现上用 `mfcuk_cursor`
+            // 记录「本段已见到的最大扇区号」，游标回卷（进入下一段）时取 max。
             "run-mfcuk" => {
                 let args = tasks::card_write::mfcuk_args();
                 self.launch(
@@ -1431,6 +1459,57 @@ impl Engine {
         // S18 全加密爆破：mfcuk 一轮可出多把密钥，逐行收集
         if let Some(p) = run.mfcuk.as_mut() {
             p.push(text);
+        }
+        // P2-10：mfcuk 的扇区游标进度
+        Self::feed_mfcuk_cursor(run, text);
+    }
+
+    /// P2-10：mfcuk 的扇区游标。RECOVER 段每开一个扇区打一个扇区号
+    /// （mfcuk.c:1601 `printf(" %x", i)`；i<16 时 %x 与十进制同形，
+    /// 4K 卡 10..=15 扇区打成 a..f）。
+    ///
+    /// 提取规则（两步，避免把 `recovered KEY`、UID 等长 hex 的片段误当扇区）：
+    /// 1. chunk 含 `RECOVER:` / `VERIFY:`（mfcuk.c:1593/1488）→ 只解析
+    ///    冒号**之后**的部分；
+    /// 2. 其余 chunk 只在「整块都是空白/短 hex token」时解析（游标续行）。
+    ///
+    /// 值域 0..=39（1K=16 / 4K=40）；段内取 max，游标回卷即进入下一段。
+    fn feed_mfcuk_cursor(run: &mut Running, text: &str) {
+        if run.mfcuk.is_none() {
+            return;
+        }
+        let segment = if let Some(pos) = text.find("RECOVER:") {
+            &text[pos + "RECOVER:".len()..]
+        } else if let Some(pos) = text.find("VERIFY:") {
+            &text[pos + "VERIFY:".len()..]
+        } else {
+            // 游标续行：必须整块都是空白/短 hex token，杜绝混入的日志行
+            let trimmed = text.trim();
+            if trimmed.is_empty()
+                || !trimmed
+                    .split(|c: char| !c.is_ascii_hexdigit())
+                    .all(|t| t.is_empty() || (t.len() <= 2 && u32::from_str_radix(t, 16).map(|v| v <= 39).unwrap_or(false)))
+            {
+                return;
+            }
+            trimmed
+        };
+        for tok in segment.split(|c: char| !c.is_ascii_hexdigit()) {
+            if tok.is_empty() || tok.len() > 2 {
+                continue;
+            }
+            if let Ok(v) = u32::from_str_radix(tok, 16) {
+                if v <= 39 {
+                    let next = match run.mfcuk_cursor {
+                        Some(cur) if v < cur => cur, // 回卷：保持旧段最大值
+                        _ => v,
+                    };
+                    run.mfcuk_cursor = Some(next);
+                    if next + 1 > run.mfcuk_total {
+                        run.mfcuk_total = next + 1;
+                    }
+                }
+            }
         }
     }
 
@@ -3878,6 +3957,49 @@ mod tests {
 
         // 验证 collect parser 存在
         assert!(e.is_running(), "HardNested collect 应启动任务");
+    }
+
+    /// P2-10：mfcuk 扇区游标 → `mfcuk_progress()`。
+    ///
+    /// mfcuk 的真实输出形如 `RECOVER:  0 1 2 3 ...`（mfcuk.c:1593-1601，
+    /// `printf(" %x", i)`），UID 等长 hex 串会混在输出里，游标提取必须
+    /// 只认 0..=39 的短 token 且取段内 max。
+    #[test]
+    fn mfcuk_cursor_tracks_sector_progress() {
+        let (_d, p) = paths("mfcuk-progress");
+        // 先输出 UID（长 hex，不应被当成扇区），再输出游标 0..3
+        let runner = MockToolRunner::new(vec![
+            Chunk::stdout("UID: a1b2c3d4\n"),
+            Chunk::stdout("RECOVER:  0 1 2 3\n"),
+        ])
+        .with_exit(Some(0));
+        let mut e = Engine::new(Box::new(runner));
+        let mut st = connected();
+        let mut dlg = MockDialog::new();
+
+        e.dispatch(Action::Plain("run-mfcuk"), &mut st, &p, &mut dlg)
+            .unwrap();
+        assert!(e.is_running(), "mfcuk 任务应处于运行中");
+        // 直接喂 mfcuk 的真实输出片段（pump 会在排空后立即 finish，
+        // 那里就断言不到「运行中」的进度了）。
+        // 1) `RECOVER:` 段游标 0..3 → 正在处理第 4/4 个。
+        //    （UID 等长 hex 串混进输出也没关系：`a1b2c3d4` 不含非 hex 分隔，
+        //    会被当作一个 >39 的 token 忽略。）
+        e.feed("UID: a1b2c3d4\n", &mut st);
+        e.feed("RECOVER:  0 1 2 3\n", &mut st);
+        assert_eq!(e.mfcuk_progress(), Some((4, 4)), "游标应跟随扇区推进");
+        // 2) 游标继续推进 → (6, 6)
+        e.feed("4 5\n", &mut st);
+        assert_eq!(e.mfcuk_progress(), Some((6, 6)), "游标应继续上探");
+
+        // 非 mfcuk 任务一律 None
+        let runner2 = MockToolRunner::new(vec![Chunk::stdout("RECOVER: 0 1\n")]).with_exit(Some(0));
+        let mut e2 = Engine::new(Box::new(runner2));
+        let mut st2 = connected();
+        let mut dlg2 = MockDialog::new();
+        e2.dispatch(Action::Plain("read-IC"), &mut st2, &p, &mut dlg2)
+            .unwrap();
+        assert_eq!(e2.mfcuk_progress(), None, "非 mfcuk 任务无进度");
     }
 
     /// 测试 `pump_conn` 的连接流程：确保连接泵正确处理状态

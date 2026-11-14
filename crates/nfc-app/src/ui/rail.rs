@@ -78,6 +78,25 @@ fn task_card(ui: &mut Ui, app: &mut NfcApp) {
                 .size(12.0)
                 .color(paint.color(paint.text_secondary)),
         );
+        // P1-7：autoRun 的更具体进度（第 n/total 扇区 · 目标扇区 X）。
+        if let Some(line) = app.hard_nested_progress_line() {
+            ui.label(
+                RichText::new(line)
+                    .size(11.0)
+                    .color(paint.color(paint.text_secondary)),
+            );
+        }
+        // P2-10：mfcuk 扇区游标进度（任务本身无进度行，从游标推导）。
+        if let Some((cur, total)) = app.mfcuk_progress {
+            ui.label(
+                RichText::new(format!(
+                    "{} {cur}/{total}",
+                    t("html_mfcuk_sector_progress")
+                ))
+                .size(11.0)
+                .color(paint.color(paint.text_secondary)),
+            );
+        }
         ui.horizontal(|ui| {
             let dot = paint.status_dot(app.state.status.indicator);
             ui.colored_label(dot, RichText::new("●").size(10.0));
@@ -148,15 +167,36 @@ fn events_card(ui: &mut Ui, app: &mut NfcApp) {
                     );
                     return;
                 }
-                // 最新事件在最上（原事件条按时间正序追加，这里倒序展示）
+                // 最新事件在最上（原事件条按时间正序追加，这里倒序展示）。
+                // P2-12：转储保存类事件可点击 → 打开转储编辑器载入该 dump。
+                let mut open_dump: Option<String> = None;
+                let saved_prefix = t("event_dump_saved");
                 for e in app.state.events.iter().rev() {
                     let color = event_color(app.theme, e.kind);
-                    ui.horizontal(|ui| {
-                        ui.colored_label(color, RichText::new("●").size(7.0));
-                        ui.label(RichText::new(&e.text).size(12.0));
-                    })
-                    .response
-                    .on_hover_text(&e.text);
+                    let resp = ui
+                        .horizontal(|ui| {
+                            ui.colored_label(color, RichText::new("●").size(7.0));
+                            ui.label(RichText::new(&e.text).size(12.0));
+                        })
+                        .response
+                        .on_hover_text(&e.text);
+                    // 只有「转储文件已保存: <名>」这类 success 事件可点；
+                    // 文件名取前缀之后的部分，且必须仍在 dump_history 里
+                    // （防过期事件里的名字已被删除/改名）。
+                    let clickable = e.kind == nfc_core::state::EventKind::Success
+                        && e.text
+                            .strip_prefix(&saved_prefix)
+                            .is_some_and(|name| app.state.dump_history.iter().any(|h| h == name));
+                    if clickable {
+                        let name = e.text.strip_prefix(&saved_prefix).unwrap().to_owned();
+                        if resp.clicked() {
+                            open_dump = Some(name);
+                        }
+                        resp.on_hover_text(t("html_tip_open_event_dump"));
+                    }
+                }
+                if let Some(name) = open_dump {
+                    app.exec("open-dump-editor", Some(name));
                 }
             });
     });
@@ -220,12 +260,15 @@ fn console_card(ui: &mut Ui, app: &mut NfcApp, stacked: bool) {
                 .stick_to_bottom(!app.lock_scroll)
                 .max_height(body_h)
                 .show(ui, |ui| {
-                    let mut editable = app.state.log_view();
+                    // 只读展示：此前 `interactive(true)` + 每帧 clone 的副本，
+                    // 用户在控制台里打字看似能输入、实际不落任何状态（下一帧即丢）。
+                    // 控制台语义是「工具输出/回显」，编辑入口只有清空/复制/保存。
+                    let mut view = app.state.log_view();
                     ui.add(
-                        egui::TextEdit::multiline(&mut editable)
+                        egui::TextEdit::multiline(&mut view)
                             .desired_width(f32::INFINITY)
                             .font(egui::TextStyle::Monospace)
-                            .interactive(true),
+                            .interactive(false),
                     );
                 });
         });

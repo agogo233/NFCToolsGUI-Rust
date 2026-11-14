@@ -113,6 +113,7 @@ fn card_context(ui: &mut Ui, app: &mut NfcApp) {
     let paint = app.paint();
     let mut write_clicked = false;
     let mut editor_clicked = false;
+    let mut copied = false;
     Frame::NONE
         .fill(paint.color(paint.surface))
         .stroke(egui::Stroke::new(1.0, paint.color(paint.border)))
@@ -120,14 +121,22 @@ fn card_context(ui: &mut Ui, app: &mut NfcApp) {
         .inner_margin(egui::Margin::symmetric(12, 10))
         .show(ui, |ui| {
             let Some(snap) = app.card_snapshot.as_ref() else {
+                // 空态按连接状态分支：未连接时引导先连设备，而不是让用户
+                // 点了「一键解卡」再被门禁拦下。
                 ui.label(RichText::new(t("html_card_none")).strong());
+                let hint = if app.state.is_device_connected {
+                    t("html_card_none_hint")
+                } else {
+                    t("html_card_none_hint_not_connected")
+                };
                 ui.label(
-                    RichText::new(t("html_card_none_hint"))
+                    RichText::new(hint)
                         .size(12.0)
                         .color(paint.color(paint.text_secondary)),
                 );
                 return;
             };
+            let uid = snap.uid.clone();
             ui.horizontal(|ui| {
                 ui.label(
                     RichText::new(t("html_card_context"))
@@ -142,13 +151,25 @@ fn card_context(ui: &mut Ui, app: &mut NfcApp) {
                             .size(10.0)
                             .color(paint.color(paint.text_secondary)),
                     );
-                    ui.label(
-                        RichText::new(&snap.uid)
-                            .size(16.0)
-                            .strong()
-                            .color(paint.color(paint.uid))
-                            .font(egui::FontId::monospace(16.0)),
-                    );
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(&uid)
+                                .size(16.0)
+                                .strong()
+                                .color(paint.color(paint.uid))
+                                .font(egui::FontId::monospace(16.0)),
+                        );
+                        // 一键复制卡号：UID 是写卡/报障/记录最常被抄走的数据，
+                        // 之前只能手动选中逐字符拖选。
+                        if ui
+                            .small_button("⧉")
+                            .on_hover_text(t("html_tip_copy_uid"))
+                            .clicked()
+                        {
+                            ui.ctx().copy_text(uid.clone());
+                            copied = true;
+                        }
+                    });
                 });
                 ui.vertical(|ui| {
                     ui.label(
@@ -223,6 +244,9 @@ fn card_context(ui: &mut Ui, app: &mut NfcApp) {
             // 与 DumpSaved 引导条完全同参：走 write-IC 的确认框 + 备份安全闸。
             app.exec("write-IC", Some(arg));
         }
+    }
+    if copied {
+        app.push_event(nfc_core::state::EventKind::Success, &t("log_msg_uid_copied"));
     }
 }
 
@@ -325,6 +349,13 @@ fn editor_body(ui: &mut Ui, app: &mut NfcApp) {
             };
             let n = snap.groups.len();
             let mut toggle: Option<usize> = None;
+            // P2-11：detail 需要 &mut app（复制事件），而 snap 借用了
+            // app.card_snapshot。先把展开组的行数据 clone 出来，借用即断开。
+            let open_detail = app.open_sector.and_then(|i| {
+                snap.groups
+                    .get(i)
+                    .map(|g| (i, g.clone(), dump::group_has_trailer(i, n)))
+            });
             for (i, g) in snap.groups.iter().enumerate() {
                 let logical = dump::group_to_sector(i, n);
                 let has_trailer = dump::group_has_trailer(i, n);
@@ -391,9 +422,6 @@ fn editor_body(ui: &mut Ui, app: &mut NfcApp) {
                 if row.response.clicked() {
                     toggle = Some(i);
                 }
-                if app.open_sector == Some(i) {
-                    detail(ui, app, i, n, g, has_trailer);
-                }
             }
             if let Some(i) = toggle {
                 app.open_sector = if app.open_sector == Some(i) {
@@ -401,6 +429,10 @@ fn editor_body(ui: &mut Ui, app: &mut NfcApp) {
                 } else {
                     Some(i)
                 };
+            }
+            // 展开详情放在循环外：此时 snap 的借用已结束，可拿 &mut app。
+            if let Some((i, g, has_trailer)) = open_detail {
+                detail(ui, app, i, n, &g, has_trailer);
             }
         });
 }
@@ -414,10 +446,13 @@ fn cell(ui: &mut Ui, w: f32, text: &str, color: Color32, mono: bool) {
     ui.add_sized([w, 18.0], Label::new(rich).truncate());
 }
 
-/// 展开详情：该组 4 行的完整 hex + （真尾块组）ACL 权限解读。
-fn detail(ui: &mut Ui, app: &NfcApp, i: usize, groups: usize, g: &[String], has_trailer: bool) {
+/// 展开详情：该组 4 行的完整 hex + （真尾块组）ACL 权限解读 + 行级快捷操作。
+fn detail(ui: &mut Ui, app: &mut NfcApp, i: usize, groups: usize, g: &[String], has_trailer: bool) {
     let paint = app.paint();
     let base = dump::group_first_block(i, groups);
+    // P2-11：行级快捷操作（复制单块 / 整组 hex）。egui 闭包里拿不到 &mut app，
+    // 先记下要复制的文本，Frame 结束后统一 copy + 记事件。
+    let mut copied: Option<String> = None;
     Frame::NONE
         .fill(paint.color(paint.surface2))
         .show(ui, |ui| {
@@ -433,12 +468,33 @@ fn detail(ui: &mut Ui, app: &NfcApp, i: usize, groups: usize, g: &[String], has_
                             .size(12.0)
                             .font(egui::FontId::monospace(12.0)),
                     );
+                    if ui
+                        .small_button("⧉")
+                        .on_hover_text(t("html_tip_copy_hex"))
+                        .clicked()
+                    {
+                        copied = Some(line.clone());
+                    }
                 });
+            }
+            if ui
+                .small_button(RichText::new(t("html_copy_group")).size(11.0))
+                .on_hover_text(t("html_tip_copy_group"))
+                .clicked()
+            {
+                copied = Some(g.join(""));
             }
             if has_trailer {
                 acl_box(ui, app, &g[3]);
             }
         });
+    if let Some(hexline) = copied {
+        ui.ctx().copy_text(hexline);
+        app.push_event(
+            nfc_core::state::EventKind::Success,
+            &t("log_msg_hex_copied"),
+        );
+    }
 }
 
 /// ACL 权限解读：算法与 `dumpcheck::check_trailer_access` 同源

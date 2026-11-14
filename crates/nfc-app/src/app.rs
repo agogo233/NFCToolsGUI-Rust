@@ -160,6 +160,12 @@ pub struct NfcApp {
     pub card_snapshot: Option<crate::ui::workbench::CardSnapshot>,
     /// 扇区编辑器当前展开的组（None = 全部收起）。
     pub open_sector: Option<usize>,
+    /// 本次会话写卡已成功（左栏「写卡」组状态点=完成）。取消任务/失败不置位；
+    /// 重新读卡（新卡快照）时重置——写的是新卡，旧完成态不再成立。
+    pub write_done: bool,
+    /// P2-10：mfcuk 全加密爆破的进度 `(当前扇区, 总扇区)`。由每帧
+    /// `sync_task_flags` 从 engine 同步；`None` = 无任务或尚无游标输出。
+    pub mfcuk_progress: Option<(u32, u32)>,
 }
 
 impl NfcApp {
@@ -204,6 +210,8 @@ impl NfcApp {
             logo: None,
             card_snapshot: None,
             open_sector: None,
+            write_done: false,
+            mfcuk_progress: None,
         }
         .with_no_portal_warning()
     }
@@ -298,6 +306,24 @@ impl NfcApp {
         }
     }
 
+    /// 每帧从 engine 的最新状态同步派生 UI 标志（P1-5 / P2-10）。
+    ///
+    /// - `write_done`：日志出现「写卡成功」即置位。直接读**全量**日志尾巴，
+    ///   因为 pump 产生的日志不经过 `dispatch_one`。
+    /// - mfcuk 进度：engine 侧解析 `RECOVER: 0 1 2 ...` 的扇区游标（见
+    ///   `Engine::mfcuk_progress`），这里取来供任务卡画进度条。
+    fn sync_task_flags(&mut self) {
+        if !self.write_done
+            && self
+                .state
+                .log_buffer
+                .contains(&t("log_msg_write_success"))
+        {
+            self.write_done = true;
+        }
+        self.mfcuk_progress = self.engine.mfcuk_progress();
+    }
+
     /// 派发单个动作：预置本次批准 → dispatch → 清空批准。
     fn dispatch_one(&mut self, action: Action) {
         let r = self
@@ -308,6 +334,9 @@ impl NfcApp {
         if let Err(e) = r {
             self.on_dispatch_error(&e);
         }
+        // 写卡组状态点 / mfcuk 进度：统一在 tick 的 sync_task_flags 里
+        // 从 engine 最新状态派生（pump 产生的日志不经过本函数）。
+        self.sync_task_flags();
     }
 
     /// 把 engine 挂起的保存请求投递去弹框（每帧一次）。
@@ -385,13 +414,17 @@ impl NfcApp {
         };
         match reply.purpose {
             dialogs_host::FilePurpose::WriteDump => {
-                self.confirm = Some(dialogs_ui::ConfirmModal::new(
-                    dialogs_ui::ConfirmKind::WriteDump {
-                        dump: path.to_string_lossy().into_owned(),
-                    },
-                    &dialogs_ui::danger_title(),
-                    t("dialog_msg_confirm_write_dump"),
-                ));
+                // 写卡是覆盖性危险操作：统一挂 B6 随机码门槛。
+                self.confirm = Some(
+                    dialogs_ui::ConfirmModal::new(
+                        dialogs_ui::ConfirmKind::WriteDump {
+                            dump: path.to_string_lossy().into_owned(),
+                        },
+                        &dialogs_ui::danger_title(),
+                        t("dialog_msg_confirm_write_dump"),
+                    )
+                    .with_code(dialogs_ui::random_code()),
+                );
             }
             dialogs_host::FilePurpose::WriteUidDump => {
                 // 原版 `command.js:210-214` 把 block0 hex **显示给用户看**
@@ -409,11 +442,15 @@ impl NfcApp {
                     .unwrap_or_default();
                 match nfc_core::tasks::card_write::read_block0_hex(&path) {
                     Ok(hex) if nfc_core::tasks::card_write::block0_is_valid(&hex) => {
-                        self.confirm = Some(dialogs_ui::ConfirmModal::new(
-                            dialogs_ui::ConfirmKind::WriteUid { dump: full },
-                            &dialogs_ui::danger_title(),
-                            nfc_core::tasks::card_write::write_uid_confirm(&hex).message,
-                        ));
+                        // 写 UFUID 覆盖 0 块：挂 B6 随机码门槛。
+                        self.confirm = Some(
+                            dialogs_ui::ConfirmModal::new(
+                                dialogs_ui::ConfirmKind::WriteUid { dump: full },
+                                &dialogs_ui::danger_title(),
+                                nfc_core::tasks::card_write::write_uid_confirm(&hex).message,
+                            )
+                            .with_code(dialogs_ui::random_code()),
+                        );
                     }
                     Ok(_) => self.push_event(
                         EventKind::Error,
@@ -630,8 +667,10 @@ impl NfcApp {
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
         let dump_arg = Some(path.to_string_lossy().into_owned());
-        // 界面改版：落盘后重建中栏卡片快照（失败静默——selftest 会用假路径走到这里）
+        // 界面改版：落盘后重建中栏卡片快照（失败静默——selftest 会用假路径走到这里）。
+        // 新卡 → 旧会话的写卡完成态不再成立，重置左栏「写卡」组状态点。
         self.card_snapshot = crate::ui::workbench::build_snapshot(&path);
+        self.write_done = false;
         self.open_sector = if self.card_snapshot.is_some() {
             Some(0)
         } else {
@@ -665,12 +704,17 @@ impl NfcApp {
                 ));
             }
             Event::DumpSaved(path) => {
-                let name = path
-                    .file_name()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                // core 侧已落历史列表（`AppState::apply`），这里只补事件条。
-                self.push_event(EventKind::Success, &name);
+                // core 的 `DumpSaved` 会落历史列表 + 发一条同文本 success 事件；
+                // 这里把 core 那条**换成**带 `event_dump_saved` 前缀的版本
+                // （P2-12：事件卡据此把它变成可点击项，点击 → 打开转储编辑器）。
+                // 先照常转发给 core（落 dump_history），再把刚推的事件文本改写。
+                self.state.apply(Event::DumpSaved(path.clone()));
+                if let Some(ev) = self.state.events.last_mut() {
+                    if ev.kind == EventKind::Success && !ev.text.starts_with(&t("event_dump_saved"))
+                    {
+                        ev.text = format!("{}{}", t("event_dump_saved"), ev.text);
+                    }
+                }
                 self.on_dump_saved_ui(path);
             }
             Event::Status { indicator, .. } => {
@@ -828,6 +872,7 @@ impl NfcApp {
         // S11：无论有没有任务在跑都 pump 一次——kill 之后仍可能有残余输出，
         // 且 `exit()` 的观察契约要求 pump 先行。
         self.engine.pump(&mut self.state, &self.paths);
+        self.sync_task_flags();
 
         // S11-2：系统文件框在别的线程上阻塞着，这里每帧收一次结果。
         while let Some(reply) = self.dialogs_host.poll() {
@@ -1000,13 +1045,17 @@ impl NfcApp {
         let copy = nfc_core::paths::Paths::edited_copy_name(&name, &nfc_core::paths::timestamp());
         let path = self.paths.dumpfiles_dir().join(&copy);
         if self.write_editor_to(&path, false) {
-            self.confirm = Some(dialogs_ui::ConfirmModal::new(
-                dialogs_ui::ConfirmKind::WriteDump {
-                    dump: path.to_string_lossy().into_owned(),
-                },
-                &dialogs_ui::danger_title(),
-                t("dialog_msg_confirm_write_dump"),
-            ));
+            // 写卡是覆盖性危险操作：统一挂 B6 随机码门槛。
+            self.confirm = Some(
+                dialogs_ui::ConfirmModal::new(
+                    dialogs_ui::ConfirmKind::WriteDump {
+                        dump: path.to_string_lossy().into_owned(),
+                    },
+                    &dialogs_ui::danger_title(),
+                    t("dialog_msg_confirm_write_dump"),
+                )
+                .with_code(dialogs_ui::random_code()),
+            );
         }
     }
 
@@ -1045,6 +1094,29 @@ impl NfcApp {
             return None;
         }
         Some(format_duration(self.timer_second))
+    }
+
+    /// HardNested autoRun 的进度行（P1-7）：`第 n/total 扇区 · 目标扇区 X`。
+    ///
+    /// 数据源与 engine 状态条同源（`HardNestedRunner` 的 total/queue + config），
+    /// 仅供任务卡展示更具体的进度；非 autoRun 或无任务时返回 `None`。
+    pub fn hard_nested_progress_line(&self) -> Option<String> {
+        let cfg = self.state.hard_nested_task.config.as_ref()?;
+        if !cfg.auto_run {
+            return None;
+        }
+        let total = self.engine.hn_total_unknown();
+        if total == 0 {
+            return None;
+        }
+        let remaining = self.state.unknown_key_info.len();
+        let idx = nfc_core::tasks::hard_nested::HardNestedRunner::progress_text(remaining, total);
+        Some(format!(
+            "{} {idx} · {} {}",
+            t("html_hn_round"),
+            t("html_target_sector_info"),
+            cfg.target_sector
+        ))
     }
 
     /// 投递一个「选文件」请求，构造请求体并交给工作线程。
@@ -1231,22 +1303,30 @@ impl NfcApp {
                     if !plain && !abs {
                         self.push_event(EventKind::Error, "非法的转储文件名");
                     } else {
-                        self.confirm = Some(dialogs_ui::ConfirmModal::new(
-                            dialogs_ui::ConfirmKind::WriteDump { dump },
-                            &dialogs_ui::danger_title(),
-                            t("dialog_msg_confirm_write_dump"),
-                        ));
+                        // 写卡是覆盖性危险操作：统一挂 B6 随机码门槛。
+                        self.confirm = Some(
+                            dialogs_ui::ConfirmModal::new(
+                                dialogs_ui::ConfirmKind::WriteDump { dump },
+                                &dialogs_ui::danger_title(),
+                                t("dialog_msg_confirm_write_dump"),
+                            )
+                            .with_code(dialogs_ui::random_code()),
+                        );
                     }
                 }
                 None => self.open_file_for(dialogs_host::FilePurpose::WriteDump),
             },
             "write-ufuid-uid" => self.open_file_for(dialogs_host::FilePurpose::WriteUidDump),
             "lock-ufuid" => {
-                self.confirm = Some(dialogs_ui::ConfirmModal::new(
-                    dialogs_ui::ConfirmKind::Lock,
-                    &dialogs_ui::danger_title(),
-                    t("dialog_msg_card_will_be_locked"),
-                ));
+                // 锁 UFUID 不可逆：随机码门槛与格式化同档。
+                self.confirm = Some(
+                    dialogs_ui::ConfirmModal::new(
+                        dialogs_ui::ConfirmKind::Lock,
+                        &dialogs_ui::danger_title(),
+                        t("dialog_msg_card_will_be_locked"),
+                    )
+                    .with_code(dialogs_ui::random_code()),
+                );
             }
             // S17：手机/手环两个写动作此前**没有**应用内确认窗，engine 侧
             // `confirm_danger` 拿不到预置值一律返回 false，等于按钮点了没反应。
@@ -1256,13 +1336,16 @@ impl NfcApp {
                     self.pending.push(Action::Plain(name));
                     return;
                 };
-                self.confirm = Some(dialogs_ui::ConfirmModal::new(
-                    dialogs_ui::ConfirmKind::PhwWriteUid {
-                        block0: block0.clone(),
-                    },
-                    &dialogs_ui::danger_title(),
-                    nfc_core::tasks::phw::write_uid_confirm(&block0).message,
-                ));
+                self.confirm = Some(
+                    dialogs_ui::ConfirmModal::new(
+                        dialogs_ui::ConfirmKind::PhwWriteUid {
+                            block0: block0.clone(),
+                        },
+                        &dialogs_ui::danger_title(),
+                        nfc_core::tasks::phw::write_uid_confirm(&block0).message,
+                    )
+                    .with_code(dialogs_ui::random_code()),
+                );
             }
             "phw-write-data" => {
                 let Some(block0) = self.state.phw.block0.clone() else {
@@ -1271,19 +1354,22 @@ impl NfcApp {
                 };
                 let sector = self.state.phw.sector;
                 let block = self.state.phw.block;
-                self.confirm = Some(dialogs_ui::ConfirmModal::new(
-                    dialogs_ui::ConfirmKind::PhwWriteData {
-                        block0: block0.clone(),
-                        sector,
-                        block,
-                    },
-                    &dialogs_ui::danger_title(),
-                    nfc_core::tasks::phw::write_data_confirm(
-                        &block0,
-                        nfc_core::tasks::phw::SectorBlock { sector, block },
+                self.confirm = Some(
+                    dialogs_ui::ConfirmModal::new(
+                        dialogs_ui::ConfirmKind::PhwWriteData {
+                            block0: block0.clone(),
+                            sector,
+                            block,
+                        },
+                        &dialogs_ui::danger_title(),
+                        nfc_core::tasks::phw::write_data_confirm(
+                            &block0,
+                            nfc_core::tasks::phw::SectorBlock { sector, block },
+                        )
+                        .message,
                     )
-                    .message,
-                ));
+                    .with_code(dialogs_ui::random_code()),
+                );
             }
             "read-IC" | "detect-card-type" => match arg {
                 Some(a) => self.pending.push(Action::WithArg(name, a)),
@@ -1292,11 +1378,15 @@ impl NfcApp {
             // S17：格式化卡片补应用内确认窗（原版 `command.js:144-149` 直接开跑，
             // 误点即清空卡片）。确认后 engine 侧 `prepare_format` 再过一道闸。
             "format-card" => {
-                self.confirm = Some(dialogs_ui::ConfirmModal::new(
-                    dialogs_ui::ConfirmKind::FormatCard,
-                    &dialogs_ui::danger_title(),
-                    t("dialog_msg_confirm_format_card"),
-                ));
+                // 全卡访问位重置、不可逆：挂最高档 B6 随机码。
+                self.confirm = Some(
+                    dialogs_ui::ConfirmModal::new(
+                        dialogs_ui::ConfirmKind::FormatCard,
+                        &dialogs_ui::danger_title(),
+                        t("dialog_msg_confirm_format_card"),
+                    )
+                    .with_code(dialogs_ui::random_code()),
+                );
             }
             // command.js:538-556。默认文件名是**裸名**（原版无 path.join），
             // 过滤器 txt。日志内容先快照存住——弹窗是异步的，
@@ -1471,6 +1561,9 @@ impl NfcApp {
             // S18：全加密爆破（mfcuk）。纯启动，无文件框、无确认窗。
             "run-mfcuk" => self.pending.push(Action::Plain(name)),
             // 面板类（S10）与 about（S11）暂由后续里程碑接管
+            "open-card-registry" => {
+                panels::open(&mut self.state.panels, panels::Panel::CardRegistry);
+            }
             other => self.pending.push(Action::Plain(other)),
         }
     }
@@ -1794,11 +1887,13 @@ impl NfcApp {
     /// 返回按钮响应，供标题栏登记可点击区。
     fn tools_button(&mut self, ui: &mut Ui) -> egui::Response {
         /// 菜单项（action, i18n key）。S16：恢复原版 5 项；设置入口改由标题栏承担。
-        const ITEMS: [(&str, &str); 5] = [
+        /// P2-9：新增「卡历史档案」（registry.json 可查表）。
+        const ITEMS: [(&str, &str); 6] = [
             ("open-history-keys", "html_edit_history_key"),
             ("open-dump-editor", "html_dump_editor"),
             ("open-dump-comparator", "html_dump_comparator"),
             ("dump-history", "html_dump_history"),
+            ("open-card-registry", "html_card_registry_title"),
             ("open-about", "html_about"),
         ];
 

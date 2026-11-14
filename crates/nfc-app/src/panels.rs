@@ -46,6 +46,9 @@ const SIZE_PHW: [f32; 2] = [440.0, 420.0];
 /// S18：手输卡号写 UFUID 面板。
 const SIZE_UID_INPUT: [f32; 2] = [420.0, 300.0];
 
+/// P2-9：卡历史档案面板（registry.json 列表 + 快捷载入）。
+const SIZE_CARD_REGISTRY: [f32; 2] = [560.0, 520.0];
+
 /// 面板标识。顺序即绘制顺序（决定叠放层级）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Panel {
@@ -59,10 +62,12 @@ pub enum Panel {
     About,
     PhoneWristband,
     UidInput,
+    /// P2-9：卡历史档案（registry.json 列表）。
+    CardRegistry,
 }
 
 impl Panel {
-    const ALL: [Panel; 10] = [
+    const ALL: [Panel; 11] = [
         Panel::Settings,
         Panel::InputKeys,
         Panel::HardNested,
@@ -73,6 +78,7 @@ impl Panel {
         Panel::About,
         Panel::PhoneWristband,
         Panel::UidInput,
+        Panel::CardRegistry,
     ];
 
     /// 面板标题（走 i18n，与原版 `windows.js` 的 `title` 一致）。
@@ -95,6 +101,7 @@ impl Panel {
             Panel::About => "html_about",
             Panel::PhoneWristband => "html_phw_title",
             Panel::UidInput => "html_uid_input_title",
+            Panel::CardRegistry => "html_card_registry_title",
         }
     }
 
@@ -111,6 +118,7 @@ impl Panel {
             Panel::DumpHistory => SIZE_DUMP_HISTORY,
             Panel::PhoneWristband => SIZE_PHW,
             Panel::UidInput => SIZE_UID_INPUT,
+            Panel::CardRegistry => SIZE_CARD_REGISTRY,
         }
     }
 
@@ -126,6 +134,7 @@ impl Panel {
                 | Self::DumpComparator
                 | Self::DumpHistory
                 | Self::PhoneWristband
+                | Self::CardRegistry
         )
     }
 
@@ -142,6 +151,7 @@ impl Panel {
             Panel::About => p.about,
             Panel::PhoneWristband => p.phone_wristband,
             Panel::UidInput => p.uid_input,
+            Panel::CardRegistry => p.card_registry,
         }
     }
 
@@ -157,6 +167,7 @@ impl Panel {
             Panel::About => p.about = v,
             Panel::PhoneWristband => p.phone_wristband = v,
             Panel::UidInput => p.uid_input = v,
+            Panel::CardRegistry => p.card_registry = v,
         }
     }
 }
@@ -708,6 +719,7 @@ fn body(p: Panel, ui: &mut Ui, app: &mut NfcApp) -> bool {
         Panel::DumpHistory => dump_history(ui, app),
         Panel::PhoneWristband => phone_wristband(ui, app),
         Panel::UidInput => uid_input(ui, app),
+        Panel::CardRegistry => card_registry(ui, app),
     }
 }
 
@@ -937,6 +949,7 @@ fn hard_nested(ui: &mut Ui, app: &mut NfcApp) -> bool {
     }
     let no_config = f.no_config;
     let dis = f.others_disabled() || no_config;
+    let mut detect_now = false;
 
     ui.separator();
     scroll_body(ui, 56.0, |ui| {
@@ -985,8 +998,19 @@ fn hard_nested(ui: &mut Ui, app: &mut NfcApp) -> bool {
 
         if no_config {
             ui.colored_label(danger, t("html_detect_card_first"));
+            // 死路自救：没有检测结果时除了提示，再给一条直达「检测卡片加密」
+            // 的按钮——否则用户要自己关面板→点检测→再开面板。
+            // （此处只读 UI 状态，`app` 的可变借用已在上方 `f` 上；
+            // 点击动作放到闭包外用 flag 触发。）
+            if ui.button(t("html_detect_card")).clicked() {
+                detect_now = true;
+            }
         }
     });
+    if detect_now {
+        app.exec("detect-card-type", None);
+        return false;
+    }
 
     // docs/02 §6.42：known_key 12 位 hex + 两扇区 0..=39 前置校验，越界禁用「执行」+ 红字。
     let verr = f.validation_error();
@@ -1703,7 +1727,125 @@ fn render_diff_row(
     });
 }
 
-/// `dumpHistory.html`：文件列表 + 底部四个按钮。
+// ───────────────────────── P2-9 卡历史档案 ─────────────────────────
+
+/// 卡历史档案：读 `registry.json`（每次解卡自动追加，`engine::registry_append`）
+/// 展示 UID / 日期 / 已知密钥，并可按 UID 快捷查找对应 dump 载入编辑器。
+///
+/// registry 是**旁路可查表**：读失败（不存在/损坏）只显示空表提示，不报错弹窗。
+fn card_registry(ui: &mut Ui, app: &mut NfcApp) -> bool {
+    let path = app.paths.registry_file();
+    let registry = nfc_core::data::Registry::load(&path).unwrap_or_default();
+    let paint = app.paint();
+
+    if registry.is_empty() {
+        ui.vertical_centered(|ui| {
+            ui.add_space(24.0);
+            ui.label(t("html_card_registry_empty"));
+            ui.label(
+                RichText::new(t("html_card_registry_empty_hint"))
+                    .size(12.0)
+                    .color(paint.color(paint.text_secondary)),
+            );
+        });
+    } else {
+        let mut open_uid: Option<String> = None;
+        let list_h = (ui.available_height() - 8.0).max(120.0);
+        ScrollArea::vertical()
+            .max_height(list_h)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                egui::Grid::new("card-registry")
+                    .num_columns(4)
+                    .spacing(egui::vec2(12.0, 6.0))
+                    .striped(true)
+                    .show(ui, |ui| {
+                        ui.label(RichText::new("UID").strong().size(12.0));
+                        ui.label(
+                            RichText::new(t("html_current_file"))
+                                .strong()
+                                .size(12.0),
+                        );
+                        ui.label(
+                            RichText::new(t("html_detect_summary"))
+                                .strong()
+                                .size(12.0),
+                        );
+                        ui.label(
+                            RichText::new(t("html_phw_card_no"))
+                                .strong()
+                                .size(12.0),
+                        );
+                        ui.end_row();
+                        for r in &registry.registry {
+                            ui.label(
+                                RichText::new(&r.uid)
+                                    .monospace()
+                                    .size(12.0)
+                                    .color(paint.color(paint.uid)),
+                            );
+                            // 卡号 → dumpfiles 里按 UID 前缀匹配的 dump 文件
+                            let dump = if r.uid.len() >= 6 {
+                                nfc_core::dumpfiles::list(&app.paths.dumpfiles_dir())
+                                    .into_iter()
+                                    .find(|f| {
+                                        let stem = f.trim_end_matches(".mfd");
+                                        stem.eq_ignore_ascii_case(&r.uid)
+                                    })
+                            } else {
+                                None
+                            };
+                            match dump {
+                                Some(f) => {
+                                    if ui
+                                        .small_button(RichText::new(t("html_dump_editor")).size(11.0))
+                                        .on_hover_text(f.clone())
+                                        .clicked()
+                                    {
+                                        open_uid = Some(f);
+                                    }
+                                }
+                                None => {
+                                    ui.label(
+                                        RichText::new("-")
+                                            .size(12.0)
+                                            .color(paint.color(paint.text_secondary)),
+                                    );
+                                }
+                            }
+                            let keys = match (r.key_a.is_empty(), r.key_b.is_empty()) {
+                                (false, false) => "A+B",
+                                (false, true) => "A",
+                                (true, false) => "B",
+                                (true, true) => "-",
+                            };
+                            ui.label(RichText::new(keys).size(12.0));
+                            ui.label(
+                                RichText::new(&r.date)
+                                    .size(11.0)
+                                    .color(paint.color(paint.text_secondary)),
+                            );
+                            ui.end_row();
+                        }
+                    });
+            });
+        if let Some(f) = open_uid {
+            app.exec("open-dump-editor", Some(f));
+            return false;
+        }
+    }
+
+    ui.add_space(8.0);
+    ui.separator();
+    ui.add_space(4.0);
+    let close = ui
+        .with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.button(t("html_close")).clicked()
+        })
+        .inner;
+    !close
+}
+
 fn dump_history(ui: &mut Ui, app: &mut NfcApp) -> bool {
     // 列表来自 core 的 dumpfiles::list（只列 .mfd）
     // 目录随注入的 app.paths 走：`--selftest` 会把它换成临时目录，

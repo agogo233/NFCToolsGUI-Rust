@@ -120,6 +120,7 @@ impl HardNestedRunner {
     }
 
     /// unknown 总数（autoRun 时初始化）。
+    /// autoRun 的一轮该做什么。
     pub fn total_unknown(&self) -> usize {
         self.total_unknown
     }

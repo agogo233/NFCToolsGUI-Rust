@@ -122,7 +122,7 @@ pub struct DictTestConfig {
     pub start_position: u32,
 }
 
-/// 9 个面板的可见性（对标原版 8 个 BrowserWindow + S18 手输卡号面板）。
+/// 10 个面板的可见性（对标原版 8 个 BrowserWindow + S18 手输卡号 + 卡历史档案）。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Panels {
     pub settings: bool,
@@ -136,6 +136,8 @@ pub struct Panels {
     pub phone_wristband: bool,
     /// S18：手输卡号写 UFUID（`input-uid-write`）。
     pub uid_input: bool,
+    /// P2-9：卡历史档案（registry.json 的只读列表 + 快捷载入）。
+    pub card_registry: bool,
 }
 
 impl Panels {
@@ -150,6 +152,7 @@ impl Panels {
             || self.about
             || self.phone_wristband
             || self.uid_input
+            || self.card_registry
     }
 }
 

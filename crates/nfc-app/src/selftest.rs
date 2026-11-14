@@ -44,7 +44,7 @@ pub fn run() -> eframe::Result {
             c_nonces_no_portal_keeps_bin,
         ),
         // ── S9 模态面板 ──
-        ("5 个面板各自渲染一帧", c_panels_render),
+        ("全部面板各自渲染一帧", c_panels_render),
         ("settings 三态主题", c_theme_mode_three_states),
         ("settings 主题解析到调色板", c_theme_resolve),
         ("主题循环切换", c_theme_cycle),
@@ -254,8 +254,8 @@ fn c_ops_groups() -> Result<(), String> {
     // 四组共 13 个 action，与原三列按钮区完全一致，仅重排：
     //   读卡组 3 个，read-IC 带 `primary`
     //   破解组 2 个，无 primary / danger
-    //   写卡组 2 个，write-IC 带 `primary`、format-card 带 `danger`
-    //   更多组 6 个，lock-ufuid 带 `danger`
+    //   写卡组 5 个，write-IC 带 `primary`、format-card 带 `danger`
+    //   更多组 3 个，lock-ufuid 带 `danger`
     let expect: [(&[&str], &[&str], &[&str]); 4] = [
         (
             &["read-IC", "input-keys-read-IC", "detect-card-type"],
@@ -264,19 +264,18 @@ fn c_ops_groups() -> Result<(), String> {
         ),
         (&["hard-nested", "dict-test"], &[], &[]),
         (
-            &["write-IC", "format-card"],
+            &[
+                "write-IC",
+                "cuid-write",
+                "input-uid-write",
+                "write-ufuid-uid",
+                "format-card",
+            ],
             &["write-IC"],
             &["format-card"],
         ),
         (
-            &[
-                "open-phw-window",
-                "cuid-write",
-                "input-uid-write",
-                "write-ufuid-uid",
-                "run-mfcuk",
-                "lock-ufuid",
-            ],
+            &["open-phw-window", "run-mfcuk", "lock-ufuid"],
             &[],
             &["lock-ufuid"],
         ),
@@ -560,6 +559,26 @@ fn c_dump_saved_guidance() -> Result<(), String> {
     if !app.state.panels.dump_editor {
         return Err("落盘后未自动打开转储编辑器".into());
     }
+    // P2-12：该 success 事件应可点击 → 打开转储编辑器（同名 dump）。
+    // 直接调用事件卡渲染路径不可行（需 egui 交互），这里只验证前置条件：
+    // 事件文本带 `event_dump_saved` 前缀 + 名字在 dump_history 里。
+    // （无头环境可能额外混入一条「无门户」error 事件，找 success 那条。）
+    let ev = app
+        .state
+        .events
+        .iter()
+        .find(|e| {
+            e.kind == nfc_core::state::EventKind::Success
+                && e.text.starts_with(&nfc_core::i18n::t("event_dump_saved"))
+        })
+        .ok_or("未找到可点击的转储保存事件")?;
+    let name = ev
+        .text
+        .strip_prefix(&nfc_core::i18n::t("event_dump_saved"))
+        .unwrap();
+    if !app.state.dump_history.iter().any(|h| h == name) {
+        return Err(format!("事件文件名 {name} 不在 dump_history"));
+    }
     Ok(())
 }
 
@@ -681,7 +700,7 @@ fn detected_state() -> nfc_core::state::AppState {
 }
 
 fn c_panels_render() -> Result<(), String> {
-    // 8 个面板全开，各画一帧，确保没有 panic / 借用冲突
+    // 全部面板各自画一帧，确保没有 panic / 借用冲突
     for p in [
         Panel::Settings,
         Panel::InputKeys,
@@ -692,6 +711,8 @@ fn c_panels_render() -> Result<(), String> {
         Panel::DumpHistory,
         Panel::About,
         Panel::PhoneWristband,
+        Panel::UidInput,
+        Panel::CardRegistry,
     ] {
         let mut app = NfcApp::new(detected_state());
         let _ = panel_harness(&mut app, p)?;
@@ -958,6 +979,9 @@ fn c_hard_nested_no_config() -> Result<(), String> {
         return Err("无配置时未用 HTML 默认值".into());
     }
     let _ = panel_harness(&mut app, Panel::HardNested)?;
+    // no_config 时面板内应有「先去检测」直达按钮（P1-6 死路自救）：
+    // 未连接设备时 detect-card-type 会被门禁拦下（pending 不入队），
+    // 这里只验证面板渲染与状态不 panic，按钮语义由 UI 点击路径覆盖。
     Ok(())
 }
 
@@ -1109,7 +1133,7 @@ fn c_about_open_source() -> Result<(), String> {
 }
 
 fn c_panels_independent() -> Result<(), String> {
-    // 面板开关应互不影响：开 settings 不应带上 about
+    // 面板开关应互不影响：开 settings 不应带上 about / 卡历史档案
     let mut app = NfcApp::new(nfc_core::state::AppState::new());
     app.exec("open-settings-window", None);
     if !app.state.panels.settings {
@@ -1121,6 +1145,7 @@ fn c_panels_independent() -> Result<(), String> {
         Panel::DictTest,
         Panel::About,
         Panel::DumpEditor,
+        Panel::CardRegistry,
     ] {
         if other.is_open(&app.state.panels) {
             return Err(format!("开 settings 顺带开了 {other:?}"));
@@ -1130,6 +1155,11 @@ fn c_panels_independent() -> Result<(), String> {
     app.exec("open-about", None);
     if !app.state.panels.about || !app.state.panels.settings {
         return Err("about 与 settings 未并存".into());
+    }
+    // open-card-registry 是工具菜单里的独立一项（P2-9）
+    app.exec("open-card-registry", None);
+    if !app.state.panels.card_registry {
+        return Err("卡历史档案面板未打开".into());
     }
     // 显式关闭只关一个
     panels::close(&mut app.state.panels, Panel::Settings);
@@ -2296,6 +2326,10 @@ fn c_write_ic_flow() -> Result<(), String> {
     if !matches!(c.kind, ConfirmKind::WriteDump { .. }) {
         return Err(format!("确认类型错: {:?}", c.kind));
     }
+    // B6：写卡确认窗必须挂随机码门槛
+    if c.code.is_none() {
+        return Err("写卡确认窗缺 B6 随机码".into());
+    }
     if !app.pending.is_empty() {
         return Err("确认窗未点就派发了".into());
     }
@@ -2387,6 +2421,10 @@ fn c_lock_ufuid_flow() -> Result<(), String> {
     if c.message.is_empty() {
         return Err("确认正文为空".into());
     }
+    // B6：锁卡不可逆，必须挂随机码门槛
+    if c.code.is_none() {
+        return Err("lock-ufuid 确认窗缺 B6 随机码".into());
+    }
     app.on_confirm_result(c, true);
     app.consume_pending();
     let (tool, args, _) = app
@@ -2412,6 +2450,10 @@ fn c_write_uid_flow() -> Result<(), String> {
     let c = app.confirm.take().ok_or("应有确认窗")?;
     if !matches!(c.kind, ConfirmKind::WriteUid { .. }) {
         return Err(format!("确认类型错: {:?}", c.kind));
+    }
+    // B6：写 UFUID 须挂随机码门槛
+    if c.code.is_none() {
+        return Err("write-uid 确认窗缺 B6 随机码".into());
     }
     app.on_confirm_result(c, true);
     app.consume_pending();
@@ -2496,6 +2538,10 @@ fn c_phw_write_uid_confirm_flow() -> Result<(), String> {
     if c.message.is_empty() {
         return Err("确认正文为空".into());
     }
+    // B6：手机/手环写 UID 位须挂随机码门槛
+    if c.code.is_none() {
+        return Err("phw-write-uid 确认窗缺 B6 随机码".into());
+    }
     // 未确认 → 不启动任何工具
     app.on_confirm_result(c, false);
     app.consume_pending();
@@ -2533,6 +2579,10 @@ fn c_phw_write_data_confirm_flow() -> Result<(), String> {
     if !matches!(c.kind, ConfirmKind::PhwWriteData { .. }) {
         return Err(format!("确认类型错: {:?}", c.kind));
     }
+    // B6：手机/手环写数据扇区须挂随机码门槛
+    if c.code.is_none() {
+        return Err("phw-write-data 确认窗缺 B6 随机码".into());
+    }
     app.on_confirm_result(c, true);
     app.consume_pending();
     let (tool, args, _) = app.engine.runner().started_last().ok_or("第一段未启动")?;
@@ -2567,6 +2617,10 @@ fn c_format_card_confirm_required() -> Result<(), String> {
     let c = app.confirm.take().ok_or("格式化应有确认窗")?;
     if !matches!(c.kind, ConfirmKind::FormatCard) {
         return Err(format!("确认类型错: {:?}", c.kind));
+    }
+    // B6：格式化不可逆，必须挂随机码门槛
+    if c.code.is_none() {
+        return Err("格式化确认窗缺 B6 随机码".into());
     }
     // 取消确认 → 不派发
     app.on_confirm_result(c, false);
@@ -2698,6 +2752,10 @@ fn c_write_uid_shows_block0() -> Result<(), String> {
     match &c.kind {
         ConfirmKind::WriteUid { dump } if dump == &p.to_string_lossy() => {}
         other => return Err(format!("载荷不是完整路径: {other:?}")),
+    }
+    // B6：写 UFUID 同样须挂随机码门槛
+    if c.code.is_none() {
+        return Err("write-ufuid-uid 确认窗缺 B6 随机码".into());
     }
     Ok(())
 }
