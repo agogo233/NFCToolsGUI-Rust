@@ -25,6 +25,7 @@ mod dialogs_ui;
 mod panels;
 mod selftest;
 mod theme_ui;
+mod ui;
 
 use app::NfcApp;
 

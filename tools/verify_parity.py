@@ -136,6 +136,41 @@ PANEL_VALIDATION_EXTRA = {
 NO_PORTAL_EXTRA = {
     "log_msg_nonce_kept_at",
 }
+# 界面改版（docs/06）：三栏工作台 / 卡片档案 / 扇区编辑器 ACL 解读新增文案。
+REDESIGN_EXTRA = {
+    "html_ops_more",
+    "html_step_idle",
+    "html_step_done",
+    "html_card_context",
+    "html_card_none",
+    "html_card_none_hint",
+    "html_card_type",
+    "html_card_type_unknown",
+    "html_sector_editor",
+    "html_acl",
+    "html_legend_unknown",
+    "html_block",
+    "html_acl_ok",
+    "html_acl_corrupt",
+    "html_rail_device",
+    "html_rail_task",
+    "html_acl_data_perm_0",
+    "html_acl_data_perm_1",
+    "html_acl_data_perm_2",
+    "html_acl_data_perm_3",
+    "html_acl_data_perm_4",
+    "html_acl_data_perm_5",
+    "html_acl_data_perm_6",
+    "html_acl_data_perm_7",
+    "html_acl_trailer_perm_0",
+    "html_acl_trailer_perm_1",
+    "html_acl_trailer_perm_2",
+    "html_acl_trailer_perm_3",
+    "html_acl_trailer_perm_4",
+    "html_acl_trailer_perm_5",
+    "html_acl_trailer_perm_6",
+    "html_acl_trailer_perm_7",
+}
 # S18 从「上游独有」挪回的 20 个 key：两版共有且文案逐字一致。
 S18_MIGRATED = {
     "dialog_msg_invalid_uid_input",
@@ -367,10 +402,10 @@ def h_i18n() -> None:
     keys = json.loads(rd(REPO / "assets/locales/zh-CN.json"))
     orig_zh_keys = set(rd_json(ORIG / "src/locales/zh-CN.json")) if not ORIG_MISSING else set()
     check(
-        len(keys) == 194 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(DUMP_VIEW_EXTRA) + len(PANEL_VALIDATION_EXTRA) + len(S18_MIGRATED) + len(NO_PORTAL_EXTRA),
-        f"H zh-CN.json {194 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(DUMP_VIEW_EXTRA) + len(PANEL_VALIDATION_EXTRA) + len(S18_MIGRATED) + len(NO_PORTAL_EXTRA)} key"
+        len(keys) == 194 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(DUMP_VIEW_EXTRA) + len(PANEL_VALIDATION_EXTRA) + len(S18_MIGRATED) + len(NO_PORTAL_EXTRA) + len(REDESIGN_EXTRA),
+        f"H zh-CN.json {194 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(DUMP_VIEW_EXTRA) + len(PANEL_VALIDATION_EXTRA) + len(S18_MIGRATED) + len(NO_PORTAL_EXTRA) + len(REDESIGN_EXTRA)} key"
         f"（基础 194 + S16 补 {len(S16_EXTRA)} + S17 补 {len(S17_EXTRA)}"
-        f" + S18 新增 {len(S18_EXTRA)} + MFOC_PROBES 补 {len(MFOC_PROBES_EXTRA)} + LOG_COPY 补 {len(LOG_COPY_EXTRA)} + DUMP_VIEW 补 {len(DUMP_VIEW_EXTRA)} + 面板校验补 {len(PANEL_VALIDATION_EXTRA)} + S18 迁移 {len(S18_MIGRATED)} + 无门户收尾补 {len(NO_PORTAL_EXTRA)}）",
+        f" + S18 新增 {len(S18_EXTRA)} + MFOC_PROBES 补 {len(MFOC_PROBES_EXTRA)} + LOG_COPY 补 {len(LOG_COPY_EXTRA)} + DUMP_VIEW 补 {len(DUMP_VIEW_EXTRA)} + 面板校验补 {len(PANEL_VALIDATION_EXTRA)} + S18 迁移 {len(S18_MIGRATED)} + 无门户收尾补 {len(NO_PORTAL_EXTRA)} + 界面改版补 {len(REDESIGN_EXTRA)}）",
         f"实际 {len(keys)}",
     )
     # S8 新增的 3 个 settings 按钮文案（原版 settings.html 硬编码英文，无 i18n key，
@@ -598,14 +633,14 @@ def m_contract() -> None:
         str(st.count("while cut < len && !self.log_buffer.is_char_boundary(cut)")),
     )
     # UI 只渲染尾部窗口，保存 / 复制仍取全量（§6.35 同源保真）
-    app = rd(APP / "src/app.rs")
+    app = "\n".join(rd(p) for p in sorted(APP.glob("src/**/*.rs")))
     check(
-        "let mut editable = self.state.log_view();" in app,
+        "let mut editable = app.state.log_view();" in app,
         "M 日志区渲染 log_view 尾部窗口",
     )
     check(
-        "ui.ctx().copy_text(self.state.log_buffer.clone());" in app
-        and "let text = self.state.log_buffer.clone();" in app,
+        "ui.ctx().copy_text(app.state.log_buffer.clone());" in app
+        and "let text = app.state.log_buffer.clone();" in app,
         "M 保存 / 复制日志取全量 log_buffer（不受窗口限制）",
     )
 
@@ -1030,7 +1065,7 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
           "S6/S7 tasks/mod.rs 导出三个新模块")
 
     # ── S8 主窗口 UI ──────────────────────────────────────────────
-    app = rd(APP / "src/app.rs")
+    app = "\n".join(rd(p) for p in sorted(APP.glob("src/**/*.rs")))
     panels = rd(APP / "src/panels.rs")
     tui = rd(APP / "src/theme_ui.rs")
     main = rd(APP / "src/main.rs")
@@ -1080,7 +1115,7 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     wj = rd(ORIG / "src/windows.js")
     mj = rd(ORIG / "src/main.js")
     pa = rd(APP / "src/panels.rs")
-    ap = rd(APP / "src/app.rs")
+    ap = "\n".join(rd(p) for p in sorted(APP.glob("src/**/*.rs")))
     stf9 = rd(APP / "src/selftest.rs")
 
     check_orig('value="ffffffffffff,"' in ik and 'INPUT_KEYS_DEFAULT: &str = "ffffffffffff,"' in pa,
@@ -1182,8 +1217,8 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     # 按 ("名字", 标识符) 配对计数：标识符不一定以 `c_` 开头
     #（`case_phone_wristband` 就是一条），只数 `c_` 会少算 1 项。
     n_cases = len(re.findall(r'\(\s*\n?\s*"[^"]+",\s*\n?\s*[a-z][a-z0-9_]*\s*,?\s*\n?\s*\)', _vec))
-    check(n_cases == 99,
-          "S9-S18 UI selftest 99 项（79 原有 + S18 增 5 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1 + 连接收尾 cancel 1 + 重命名行渲染不提交 1 + 无门户收尾/重复回传 3 + R1 系统级关窗 1 + 导出空文件防护 1 + inputKeys 空输入 1 + 重命名同帧提交 1 + 无门户保存日志不留快照 1）",
+    check(n_cases == 101,
+          "S9-S19 UI selftest 101 项（79 原有 + S18 增 5 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1 + 连接收尾 cancel 1 + 重命名行渲染不提交 1 + 无门户收尾/重复回传 3 + R1 系统级关窗 1 + 导出空文件防护 1 + inputKeys 空输入 1 + 重命名同帧提交 1 + 无门户保存日志不留快照 1 + 界面改版 2）",
           f"实际 {n_cases}")
 
     # ── S10 dump 三面板 ──────────────────────────────────────────
@@ -1313,8 +1348,8 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     # selftest
     _vec2 = stf9[stf9.index("vec![") : stf9.index("];", stf9.index("vec!["))]
     n11 = len(re.findall(r'\(\s*\n?\s*"[^"]+",\s*\n?\s*[a-z][a-z0-9_]*\s*,?\s*\n?\s*\)', _vec2))
-    check(n11 == 99,
-          "S11-S18 UI selftest 99 项（含 S18 新增 5 项 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1 + 连接收尾 cancel 1 + 重命名行渲染不提交 1 + 无门户收尾/重复回传 3 + R1 系统级关窗 1 + 导出空文件防护 1 + inputKeys 空输入 1 + 重命名同帧提交 1 + 无门户保存日志不留快照 1）",
+    check(n11 == 101,
+          "S11-S19 UI selftest 101 项（含 S18 新增 5 项 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1 + 连接收尾 cancel 1 + 重命名行渲染不提交 1 + 无门户收尾/重复回传 3 + R1 系统级关窗 1 + 导出空文件防护 1 + inputKeys 空输入 1 + 重命名同帧提交 1 + 无门户保存日志不留快照 1 + 界面改版 2）",
           f"实际 {n11}")
 
     # ── S11-2 系统文件对话框 + 写卡接线 ───────────────────────────
@@ -1780,7 +1815,7 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     # 自动执行提示、文件框等待文案、检测结果“已知/未知”、历史重命名、
     # 控制台按钮悬停说明（§6.28 P1）
     # （docs/02 §6.25 续 / §6.28 / S16 偏离登记）。
-    LOCAL_EXTRA = S8_EXTRA | S11_EXTRA | S12_EXTRA | S15_EXTRA | S16_EXTRA | S17_EXTRA | S18_EXTRA | MFOC_PROBES_EXTRA | LOG_COPY_EXTRA | DUMP_VIEW_EXTRA | PANEL_VALIDATION_EXTRA | NO_PORTAL_EXTRA
+    LOCAL_EXTRA = S8_EXTRA | S11_EXTRA | S12_EXTRA | S15_EXTRA | S16_EXTRA | S17_EXTRA | S18_EXTRA | MFOC_PROBES_EXTRA | LOG_COPY_EXTRA | DUMP_VIEW_EXTRA | PANEL_VALIDATION_EXTRA | NO_PORTAL_EXTRA | REDESIGN_EXTRA
     # 原版对拍基线（ORIG_REF）漂移时上游会新增 key，对应本重写**没有**的功能/结构。
     # 搬运这些文案没有意义（没有代码会 t() 它们），故显式登记为「上游有、我们不做」。
     # 若将来真要做对应功能，把 key 从这里挪进 LOCAL_EXTRA 即可。
@@ -1854,8 +1889,8 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
           "R i18n key 名不得以标点结尾（疑似误建的新 key）",
           f"{[k for k in i18n_asset if k[-1:] in {':', '.', ',', ' ', '-', '_'}]}")
     # 本地补的 key 数量原本写死在 Rust 测试与此处两处，已漂移过一次。双向钉死。
-    check(len(LOCAL_EXTRA) == 14 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(DUMP_VIEW_EXTRA) + len(PANEL_VALIDATION_EXTRA) + len(NO_PORTAL_EXTRA),
-          "R 本地补的 i18n key 恰为 66 个", f"实际 {len(LOCAL_EXTRA)}")
+    check(len(LOCAL_EXTRA) == 14 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(DUMP_VIEW_EXTRA) + len(PANEL_VALIDATION_EXTRA) + len(NO_PORTAL_EXTRA) + len(REDESIGN_EXTRA),
+          "R 本地补的 i18n key 恰为 98 个", f"实际 {len(LOCAL_EXTRA)}")
     cd = rd(CORE / "src/command.rs")
     # rustfmt 会把字段拆成多行，故用 DOTALL 匹配整个结构体字面量
     specs = re.findall(

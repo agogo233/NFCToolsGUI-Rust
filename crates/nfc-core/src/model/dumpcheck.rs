@@ -78,6 +78,33 @@ fn read_reversed_access_bits(ac: [u8; 4]) -> [u8; 4] {
     ]
 }
 
+/// 访问控制位的前向 + 反向解码结果（扇区编辑器「ACL 解读」用）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AccessDecode {
+    /// 前向解码（`dumpTools.js` ReadAC）。
+    pub forward: [u8; 4],
+    /// 反向解码（ReadRAC）。合法 ACL 应与 `forward` 一致。
+    pub reversed: [u8; 4],
+}
+
+impl AccessDecode {
+    /// 前向与反向一致才视为有效；不一致即原版 `AclCorrupt`。
+    pub fn consistent(&self) -> bool {
+        self.forward == self.reversed
+    }
+}
+
+/// 解码尾块字节 6..10 的访问控制位。
+///
+/// 与 [`check_trailer_access`] 同源（同一套 ReadAC / ReadRAC 位序），
+/// 供 GUI 扇区编辑器展示每块的访问权限。
+pub fn decode_access(ac: [u8; 4]) -> AccessDecode {
+    AccessDecode {
+        forward: read_access_bits(ac),
+        reversed: read_reversed_access_bits(ac),
+    }
+}
+
 /// 尾块字节 6..10 的访问位问题；正常返回 `None`。`dumpTools.js:126-140`。
 fn check_trailer_access(trailer: &[u8]) -> Option<IssueCode> {
     let ac = [trailer[6], trailer[7], trailer[8], trailer[9]];
@@ -508,6 +535,21 @@ mod tests {
         let ac = [0xff, 0x07, 0x80, 0x69];
         assert_eq!(read_access_bits(ac), [0, 0, 0, 1]);
         assert_eq!(read_reversed_access_bits(ac), [0, 0, 0, 1]);
+    }
+
+    #[test]
+    fn decode_access_reference_values() {
+        // 出厂默认 ACL：数据块全开放、尾块 001
+        let d = decode_access([0xff, 0x07, 0x80, 0x69]);
+        assert_eq!(d.forward, [0, 0, 0, 1]);
+        assert!(d.consistent());
+        // 常见值块保护 ACL：数据块只读
+        let d = decode_access([0x08, 0x77, 0x8f, 0x69]);
+        assert_eq!(d.forward, [6, 6, 6, 3]);
+        assert!(d.consistent());
+        // 全 0 尾块：前后向不一致 → AclCorrupt（与 broken_trailer 用例同源）
+        let d = decode_access([0, 0, 0, 0]);
+        assert!(!d.consistent());
     }
 
     #[test]

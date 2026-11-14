@@ -108,7 +108,7 @@ cargo run -p nfc-app --release
 
 ```bash
 cargo run -p nfc-core -- --selftest   # 14 项核心行为
-cargo run -p nfc-app  -- --selftest   # 99 项界面 + 接线（S8 主窗口 + S9 面板 + S10 三面板 + S11 接线 + S13 设备层，S14/S18/S19 另增）
+cargo run -p nfc-app  -- --selftest   # 101 项界面 + 接线（S8 主窗口 + S9 面板 + S10 三面板 + S11 接线 + S13 设备层，S14/S18/S19 另增，界面改版 2）
 ```
 
 ### 平台依赖
@@ -121,10 +121,10 @@ cargo run -p nfc-app  -- --selftest   # 99 项界面 + 接线（S8 主窗口 + S
 ## 开发
 
 ```bash
-cargo test --workspace          # 597 项（含 15 项真实 C 工具测试——缺 framework/bin 时自动跳过；6 项原版解析套件）
+cargo test --workspace          # 599 项（含 15 项真实 C 工具测试——缺 framework/bin 时自动跳过；6 项原版解析套件）
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
-python3 tools/verify_parity.py  # 828 项静态门禁（parity 表 / 接线守卫）
+python3 tools/verify_parity.py  # 846 项静态门禁（parity 表 / 接线守卫）
 ```
 
 `tools/verify_parity.py` 把关键不变量钉在源码文本上——它会核对

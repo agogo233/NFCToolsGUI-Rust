@@ -70,6 +70,39 @@ pub fn to_sector_lines(bytes: &[u8]) -> Result<Vec<Sector>, DumpError> {
         .collect())
 }
 
+/// 编辑器组序号（[`to_sector_lines`] 的分组）→ 逻辑扇区号。
+///
+/// 1K / Mini：组即扇区；4K：前 32 组各对应一个 4 块扇区，第 32 组起
+/// 每 4 组构成一个 16 块大扇区。扇区编辑器按逻辑扇区着色密钥状态时
+/// 用本函数做映射（容量口径与 `dumpcheck::sector_count` 一致）。
+pub fn group_to_sector(group: usize, groups: usize) -> usize {
+    if groups <= 32 || group < 32 {
+        group
+    } else {
+        32 + (group - 32) / 4
+    }
+}
+
+/// 该编辑器组是否含有尾块（密钥 / 访问控制位所在行）。
+///
+/// 4K 大扇区仅第 4 组的最后一行是尾块，其余组的第 4 行仍是数据块。
+pub fn group_has_trailer(group: usize, groups: usize) -> bool {
+    if groups <= 32 || group < 32 {
+        true
+    } else {
+        (group - 32) % 4 == 3
+    }
+}
+
+/// 编辑器组序号 → 该组首行的全局块号（展开详情的「块 N」标注）。
+pub fn group_first_block(group: usize, groups: usize) -> usize {
+    if groups <= 32 || group < 32 {
+        group * 4
+    } else {
+        128 + (group - 32) * 4
+    }
+}
+
 /// 扇区 × 行 → bytes（`to_sector_lines` 的逆运算）。
 pub fn from_sector_lines(sectors: &[Sector]) -> Result<Vec<u8>, DumpError> {
     if sectors.is_empty() {
@@ -350,6 +383,27 @@ mod tests {
     /// 造一个 n 扇区的合法 dump。
     fn make(n: usize) -> Vec<u8> {
         (0..n * SECTOR_SIZE).map(|i| (i % 251) as u8).collect()
+    }
+
+    #[test]
+    fn group_mapping_matches_card_layouts() {
+        // 1K：16 组与逻辑扇区一一对应，组组含尾块
+        for g in 0..16 {
+            assert_eq!(group_to_sector(g, 16), g);
+            assert!(group_has_trailer(g, 16));
+            assert_eq!(group_first_block(g, 16), g * 4);
+        }
+        // 4K：64 组；32 号起每 4 组构成一个大扇区，仅第 4 组含尾块
+        assert_eq!(group_to_sector(32, 64), 32);
+        assert_eq!(group_to_sector(35, 64), 32);
+        assert_eq!(group_to_sector(63, 64), 39);
+        assert!(!group_has_trailer(32, 64));
+        assert!(group_has_trailer(35, 64));
+        assert!(!group_has_trailer(62, 64));
+        assert_eq!(group_first_block(35, 64), 128 + 12);
+        // Mini：5 组
+        assert_eq!(group_to_sector(4, 5), 4);
+        assert!(group_has_trailer(4, 5));
     }
 
     #[test]

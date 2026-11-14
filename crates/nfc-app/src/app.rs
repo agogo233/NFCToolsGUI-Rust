@@ -1,9 +1,10 @@
-//! S8 主窗口：自绘标题栏 + 引导条 + 三列按钮 + 控制台（事件/日志/任务条）。
+//! 主窗口：自绘标题栏 + 引导条 + 三栏工作台（docs/06 界面改版）。
 //!
-//! S16 重排后布局自上而下：
-//! `title_bar`（logo + 应用名 + 设备下拉/状态胶囊 + 右侧控制） →
-//! `missing_tools_bar` → `guidance_bar` → `button_area` → `console`
-//! （控制台头部 + 最近事件 + 日志 + 任务条）。
+//! 布局：`title_bar`（logo + 应用名 + 设备下拉/状态胶囊 + 右侧控制） →
+//! `missing_tools_bar` → `guidance_bar` → 左 [`crate::ui::ops_panel`]
+//! （操作按钮组）+ 中 [`crate::ui::workbench`]（卡片档案 / 扇区编辑器）
+//! + 右 [`crate::ui::rail`]（设备 / 任务 / 事件 / 控制台）。
+//! 窗口可用宽 <1280px 时三栏退化为纵向堆叠。
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -20,7 +21,7 @@ use nfc_core::theme::Theme;
 use crate::dialogs_host::{self, DialogHost};
 use crate::dialogs_ui;
 use crate::panels;
-use crate::theme_ui::{self, event_color};
+use crate::theme_ui;
 
 /// 原版日志首行（`index.html:141`）。
 pub const LOG_GREETING: &str = "Hello cardman!";
@@ -30,20 +31,6 @@ const EVENT_MAX: usize = 30;
 pub const HOTPLUG_INTERVAL: Duration = Duration::from_millis(500);
 /// 计时器步进间隔（`index.js:40` `setInterval(..., 1000)`）。
 pub const TICK: Duration = Duration::from_secs(1);
-
-/// 事件列表展开时的高度（px）。S16：默认折叠为“最近事件”一行，展开才显示全量。
-pub const EVENT_LIST_MAX_H: f32 = 96.0;
-/// S16：控制台头部（标题 + 工具按钮）高度。
-pub const CONSOLE_HEADER_H: f32 = 30.0;
-/// S16：任务条（状态 / 进度 / 计时）高度。
-pub const TASK_BAR_H: f32 = 32.0;
-/// S16：日志最小可见高度，防止最小窗口把日志挤没。
-pub const LOG_MIN_H: f32 = 120.0;
-/// 控制台最小预留高度：头部 + 最近事件一行 + 日志最小 120 + 任务条 32 +
-/// 间距与内边距的保守和。主操作区滚动 `max_height` 以此为界，
-/// 保证最小窗口 / 缺工具条时任务条/进度条始终可见。
-/// 事件列表展开时 `draw` 会按 `EVENT_LIST_MAX_H` 动态追加预留。
-pub const CONSOLE_RESERVE_H: f32 = 232.0;
 
 /// 主题模式三态（对标 Electron `nativeTheme.themeSource`）。
 ///
@@ -101,8 +88,6 @@ pub struct NfcApp {
     pub cold_guided: bool,
     /// 锁滚动（`index.js:3` `isLockScroll`）。
     pub lock_scroll: bool,
-    /// S16：控制台事件列表是否展开（默认折叠为“最近事件”）。
-    pub events_expanded: bool,
     /// 任务计时器已启动（`index.js:4` `isTimerRunning`）。
     pub timer_running: bool,
     /// 计时秒数（`index.js:6`）。
@@ -170,6 +155,10 @@ pub struct NfcApp {
     /// 自绘标题栏左上角的 logo 纹理。生产路径由 `main.rs` 注入，
     /// 测试 / 无头环境为 `None`（只少个标识，不影响任何功能）。
     pub logo: Option<egui::TextureHandle>,
+    /// 界面改版：解卡落盘后的卡片快照（中栏卡片档案 / 扇区编辑器数据源）。
+    pub card_snapshot: Option<crate::ui::workbench::CardSnapshot>,
+    /// 扇区编辑器当前展开的组（None = 全部收起）。
+    pub open_sector: Option<usize>,
 }
 
 impl NfcApp {
@@ -187,7 +176,6 @@ impl NfcApp {
             guidance: None,
             cold_guided: false,
             lock_scroll: false,
-            events_expanded: false,
             timer_running: false,
             timer_second: 0,
             last_tick: now,
@@ -213,6 +201,8 @@ impl NfcApp {
             warned_no_portal: false,
             file_dialogs_ok: dialogs_host::file_dialogs_supported(),
             logo: None,
+            card_snapshot: None,
+            open_sector: None,
         }
         .with_no_portal_warning()
     }
@@ -639,6 +629,13 @@ impl NfcApp {
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
         let dump_arg = Some(path.to_string_lossy().into_owned());
+        // 界面改版：落盘后重建中栏卡片快照（失败静默——selftest 会用假路径走到这里）
+        self.card_snapshot = crate::ui::workbench::build_snapshot(&path);
+        self.open_sector = if self.card_snapshot.is_some() {
+            Some(0)
+        } else {
+            None
+        };
         self.guidance = Some((
             name,
             vec![
@@ -1501,11 +1498,6 @@ pub fn format_duration(total: u32) -> String {
     format!("{h:02}:{m:02}:{s:02}")
 }
 
-/// 控制台头部的普通按钮：文案 + 悬停说明。
-fn tip_button(ui: &mut Ui, text: &str, tip: &str) -> bool {
-    ui.button(text).on_hover_text(tip).clicked()
-}
-
 /// 标题栏的可拖拽空白区间：`bar` 去掉 `blockers` 覆盖的横向范围。
 ///
 /// 拖拽区必须避开所有可点击控件：egui 命中测试会把压在最上层的纯拖拽
@@ -1558,25 +1550,35 @@ impl NfcApp {
             self.missing_tools_bar(ui);
         }
         self.guidance_bar(ui);
-        // 主操作区包一层垂直滚动：窗口过矮（820×640 / 缺工具条）时按钮区自身
-        // 滚动，而不是把最底部的任务条/进度条挤出视口。
-        // 为控制台预留最小高度；内容不足 max_height 时按内容收缩，空间全给控制台。
-        // 事件列表展开时事件区多占 EVENT_LIST_MAX_H，`log_h` 的 `LOG_MIN_H` 下限
-        // 吸收不了这 96px，故预留要跟着加大，否则任务条仍会被挤出视口。
-        let reserve = CONSOLE_RESERVE_H
-            + if self.events_expanded {
-                EVENT_LIST_MAX_H
-            } else {
-                0.0
-            };
-        let actions_max_h = (ui.available_height() - reserve - 6.0).max(160.0);
-        ScrollArea::vertical()
-            .id_salt("main-actions")
-            .max_height(actions_max_h)
-            .auto_shrink([false, true])
-            .show(ui, |ui| self.button_area(ui));
-        ui.add_space(6.0);
-        self.console(ui);
+        // 界面改版（docs/06）：三栏工作台。egui 0.36 的面板从父 Ui 切分空间
+        // （`Panel::show(self, ui, ..)`，见 egui containers/panel.rs；
+        // 0.36 起 SidePanel/TopBottomPanel 合并为 `egui::Panel`），
+        // CentralPanel 必须最后添加。可用宽不足 1280 时退化为纵向堆叠，
+        // 保证 820×640 最小窗口下扇区表仍有全宽可用。
+        let stacked = ui.available_rect_before_wrap().width() < 1280.0;
+        if stacked {
+            ScrollArea::vertical()
+                .id_salt("stacked-main")
+                .max_height(ui.available_height())
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    crate::ui::ops_panel::draw(ui, self);
+                    ui.add_space(8.0);
+                    crate::ui::workbench::draw(ui, self, true);
+                    ui.add_space(8.0);
+                    crate::ui::rail::draw(ui, self, true);
+                });
+        } else {
+            egui::Panel::left("nfc-ops")
+                .exact_size(236.0)
+                .show(ui, |ui| crate::ui::ops_panel::draw(ui, self));
+            egui::Panel::right("nfc-rail")
+                .exact_size(340.0)
+                .show(ui, |ui| crate::ui::rail::draw(ui, self, false));
+            egui::CentralPanel::default().show(ui, |ui| {
+                crate::ui::workbench::draw(ui, self, false);
+            });
+        }
     }
 
     /// `framework/bin` 缺失时的红条（S12 交付项：启动自检引导）。
@@ -1888,465 +1890,6 @@ impl NfcApp {
                     }
                 });
             });
-    }
-
-    /// 三列按钮区（`index.html:73-95`）：读卡 / 破解 / 写卡。
-    ///
-    /// S16：三列改为卡片化，按“工作流步骤”编号；按钮增加二级样式；破解列
-    /// 增加检测结果摘要；写卡列把手机/手环独立成“工作流”分组，UFUID 组仍
-    /// 放在最后并以危险按钮收尾。
-    fn button_area(&mut self, ui: &mut Ui) {
-        /// 列内元素：按钮、分组小标题，或检测结果摘要。
-        enum Item<'a> {
-            Btn(&'a str, String, BtnStyle, &'a str),
-            Group(&'a str),
-            DetectSummary,
-        }
-        /// 按钮样式档位。S16 在原版三档之外补了“次主操作”。
-        #[derive(Clone, Copy, PartialEq)]
-        enum BtnStyle {
-            Normal,
-            Primary,
-            Secondary,
-            Danger,
-        }
-
-        let known = self.state.known_key_info.len();
-        let unknown = self.state.unknown_key_info.len();
-        let cols: [(String, Vec<Item<'_>>); 3] = [
-            (
-                t("html_read_area"),
-                vec![
-                    Item::Btn(
-                        "read-IC",
-                        t("html_read_card"),
-                        BtnStyle::Primary,
-                        "html_tip_read_ic",
-                    ),
-                    Item::Btn(
-                        "input-keys-read-IC",
-                        t("html_read_card_with_known_key"),
-                        BtnStyle::Normal,
-                        "html_tip_read_known_key",
-                    ),
-                    Item::Btn(
-                        "detect-card-type",
-                        t("html_detect_card"),
-                        BtnStyle::Secondary,
-                        "html_tip_detect_card",
-                    ),
-                ],
-            ),
-            (
-                t("html_crack_area"),
-                vec![
-                    Item::Btn(
-                        "hard-nested",
-                        t("html_hard_nested"),
-                        BtnStyle::Normal,
-                        "html_tip_hard_nested",
-                    ),
-                    Item::Btn(
-                        "dict-test",
-                        t("html_test_dictionary"),
-                        BtnStyle::Normal,
-                        "html_tip_dict_test",
-                    ),
-                    Item::DetectSummary,
-                ],
-            ),
-            (
-                t("html_write_area"),
-                vec![
-                    Item::Btn(
-                        "write-IC",
-                        t("html_write_card"),
-                        BtnStyle::Primary,
-                        "html_tip_write_ic",
-                    ),
-                    Item::Btn(
-                        "format-card",
-                        t("html_format_card"),
-                        BtnStyle::Danger,
-                        "html_tip_format_card",
-                    ),
-                    Item::Group("html_workflow_group"),
-                    Item::Btn(
-                        "open-phw-window",
-                        t("html_phw_open"),
-                        BtnStyle::Normal,
-                        "html_tip_phw",
-                    ),
-                    Item::Group("html_ufuid_group"),
-                    Item::Btn(
-                        "write-ufuid-uid",
-                        t("html_write_ufuid_uid"),
-                        BtnStyle::Normal,
-                        "html_tip_write_ufuid_uid",
-                    ),
-                    Item::Btn(
-                        "lock-ufuid",
-                        t("html_lock_ufuid"),
-                        BtnStyle::Danger,
-                        "html_tip_lock_ufuid",
-                    ),
-                    // S18：CUID 空卡写入 / 手输卡号 / 全加密爆破
-                    Item::Btn(
-                        "cuid-write",
-                        t("html_cuid_write"),
-                        BtnStyle::Normal,
-                        "html_tip_cuid_write",
-                    ),
-                    Item::Btn(
-                        "input-uid-write",
-                        t("html_write_uid_input"),
-                        BtnStyle::Normal,
-                        "html_tip_write_uid_input",
-                    ),
-                    Item::Btn(
-                        "run-mfcuk",
-                        t("html_mfcuk_run"),
-                        BtnStyle::Normal,
-                        "html_tip_mfcuk_run",
-                    ),
-                ],
-            ),
-        ];
-        let paint = self.paint();
-        let primary = paint.color(paint.primary);
-        let danger_fill = paint.color(paint.danger_strong);
-        let text_inverse = paint.color(paint.text_inverse);
-        let surface = paint.color(paint.surface);
-        let surface2 = paint.color(paint.surface2);
-        let text = paint.color(paint.text);
-        let text_secondary = paint.color(paint.text_secondary);
-        let divider = paint.color(paint.divider);
-
-        ui.spacing_mut().item_spacing.x = nfc_core::theme::SPACING[2];
-        ui.columns(cols.len(), |cols_ui| {
-            for (i, (title, items)) in cols.iter().enumerate() {
-                let ui = &mut cols_ui[i];
-                Frame::NONE
-                    .fill(surface)
-                    .corner_radius(egui::CornerRadius::same(nfc_core::theme::RADIUS[1] as u8))
-                    .inner_margin(egui::Margin::symmetric(12, 10))
-                    .show(ui, |ui| {
-                        ui.set_min_height(220.0);
-                        ui.spacing_mut().item_spacing.y = 6.0;
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                RichText::new(format!("{} {}", i + 1, title))
-                                    .strong()
-                                    .size(nfc_core::theme::FONT_SIZE[3]),
-                            );
-                        });
-                        ui.add_space(8.0);
-                        for item in items {
-                            match item {
-                                Item::Btn(action, label, style, tip) => {
-                                    let (fill, fg, h, fs, strong, secondary) = match style {
-                                        BtnStyle::Primary => {
-                                            (primary, text_inverse, 40.0, 15.0, true, false)
-                                        }
-                                        BtnStyle::Secondary => (
-                                            egui::Color32::TRANSPARENT,
-                                            primary,
-                                            34.0,
-                                            13.0,
-                                            false,
-                                            true,
-                                        ),
-                                        BtnStyle::Danger => {
-                                            (danger_fill, text_inverse, 34.0, 13.0, false, false)
-                                        }
-                                        BtnStyle::Normal => {
-                                            (surface2, text, 30.0, 13.0, false, false)
-                                        }
-                                    };
-                                    let w = ui.available_width();
-                                    let mut label = RichText::new(label).color(fg).size(fs);
-                                    if strong {
-                                        label = label.strong();
-                                    }
-                                    let mut btn = egui::Button::new(label)
-                                        .fill(fill)
-                                        .min_size(egui::vec2(w, h));
-                                    if secondary {
-                                        btn = btn.stroke(egui::Stroke::new(1.0, primary));
-                                    }
-                                    // 按 `command` 门禁置灰：未连接设备 / 有任务运行中 /
-                                    // 正在连接时不响应点击，并在悬停时说明原因——
-                                    // 取代「点了之后才在日志里看到报错」。
-                                    let gate = nfc_core::command::spec(action)
-                                        .map(|s| nfc_core::command::gate(s, &self.state));
-                                    let enabled = match &gate {
-                                        Some(Err(_)) => false,
-                                        Some(Ok(())) | None => true,
-                                    };
-                                    let reason = match &gate {
-                                        Some(Err(e)) => t(e.i18n_key()),
-                                        _ => String::new(),
-                                    };
-                                    let r = if enabled {
-                                        ui.add_enabled(true, btn).on_hover_text(t(tip))
-                                    } else {
-                                        ui.add_enabled(false, btn).on_disabled_hover_text(reason)
-                                    };
-                                    if r.clicked() {
-                                        self.exec(action, None);
-                                    }
-                                }
-                                Item::Group(label) => {
-                                    ui.add_space(6.0);
-                                    let full = ui.max_rect();
-                                    let r = ui
-                                        .vertical_centered(|ui| {
-                                            ui.label(
-                                                RichText::new(t(label))
-                                                    .color(text_secondary)
-                                                    .size(nfc_core::theme::FONT_SIZE[0]),
-                                            );
-                                        })
-                                        .response
-                                        .rect;
-                                    let y = r.center().y;
-                                    let stroke = egui::Stroke::new(1.0, divider);
-                                    ui.painter().hline(
-                                        egui::Rangef::new(full.left(), r.left() - 8.0),
-                                        y,
-                                        stroke,
-                                    );
-                                    ui.painter().hline(
-                                        egui::Rangef::new(r.right() + 8.0, full.right()),
-                                        y,
-                                        stroke,
-                                    );
-                                    ui.add_space(2.0);
-                                }
-                                Item::DetectSummary => {
-                                    ui.add_space(8.0);
-                                    Frame::NONE
-                                        .fill(surface2)
-                                        .corner_radius(egui::CornerRadius::same(
-                                            nfc_core::theme::RADIUS[0] as u8,
-                                        ))
-                                        .inner_margin(egui::Margin::symmetric(8, 6))
-                                        .show(ui, |ui| {
-                                            ui.label(
-                                                RichText::new(t("html_detect_summary"))
-                                                    .strong()
-                                                    .size(nfc_core::theme::FONT_SIZE[0]),
-                                            );
-                                            if known == 0 && unknown == 0 {
-                                                ui.label(
-                                                    RichText::new(t("html_not_detected"))
-                                                        .color(text_secondary)
-                                                        .size(nfc_core::theme::FONT_SIZE[0]),
-                                                );
-                                            } else {
-                                                ui.label(
-                                                    RichText::new(format!(
-                                                        "{} {known} / {} {unknown}",
-                                                        t("html_detect_known"),
-                                                        t("html_detect_unknown")
-                                                    ))
-                                                    .size(nfc_core::theme::FONT_SIZE[0]),
-                                                );
-                                            }
-                                        });
-                                }
-                            }
-                            ui.add_space(6.0);
-                        }
-                    });
-            }
-        });
-    }
-
-    /// S16：控制台 = 头部工具条 + 最近事件（可展开）+ 日志 + 任务条。
-    fn console(&mut self, ui: &mut Ui) {
-        let paint = self.paint();
-        self.console_header(ui);
-        self.event_strip(ui);
-
-        // 日志高度吃掉剩余空间；再扣任务条、间距与日志卡片的内边距。
-        let log_h = (ui.available_height() - TASK_BAR_H - 16.0 - 12.0).max(LOG_MIN_H);
-        self.log_panel(ui, log_h, paint);
-        ui.add_space(4.0);
-        self.task_bar(ui, paint);
-    }
-
-    /// 控制台头部：左侧标题，右侧自动滚动 / 停止 / 复制 / 保存 / 清空。
-    fn console_header(&mut self, ui: &mut Ui) {
-        let paint = self.paint();
-        let danger = paint.color(paint.danger);
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(t("html_console"))
-                    .strong()
-                    .size(nfc_core::theme::FONT_SIZE[2]),
-            );
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if tip_button(ui, &t("html_clear_log"), &t("html_tip_clear_log")) {
-                    self.state.log_buffer.clear();
-                }
-                if tip_button(ui, &t("html_save_log"), &t("html_tip_save_log")) {
-                    let text = self.state.log_buffer.clone();
-                    self.exec("save-log", Some(text));
-                }
-                if tip_button(ui, &t("html_copy_log"), &t("html_tip_copy_log")) {
-                    ui.ctx().copy_text(self.state.log_buffer.clone());
-                }
-                let stop =
-                    egui::Button::new(RichText::new(t("html_stop_task")).color(danger).strong());
-                if ui
-                    .add_enabled(self.state.is_running_task, stop)
-                    .on_hover_text(t("html_tip_stop_task"))
-                    .on_disabled_hover_text(t("html_tip_stop_idle"))
-                    .clicked()
-                {
-                    self.exec("cancel-task", None);
-                }
-                // S16：把“锁滚动/自动滚动”改成带勾选状态的自动滚动开关。
-                let mut auto = !self.lock_scroll;
-                if ui
-                    .checkbox(&mut auto, t("html_unlock_scroll"))
-                    .on_hover_text(t("html_tip_autoscroll"))
-                    .changed()
-                {
-                    self.lock_scroll = !auto;
-                }
-            });
-        });
-    }
-
-    /// 最近事件一行 + 可展开的全量事件列表。
-    fn event_strip(&mut self, ui: &mut Ui) {
-        if self.state.events.is_empty() {
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(t("html_no_events"))
-                        .color(self.paint().color(self.paint().text_secondary)),
-                );
-            });
-            return;
-        }
-
-        let last = self.state.events.last().expect("events 非空");
-        let tag = match last.kind {
-            EventKind::Key => t("html_event_key"),
-            EventKind::Success => t("html_event_success"),
-            EventKind::Error => t("html_event_error"),
-        };
-        let color = event_color(self.theme, last.kind);
-        let latest = RichText::new(format!("[{tag}] {} {}", event_stamp(), last.text)).color(color);
-
-        ui.horizontal(|ui| {
-            // 右侧先放展开/收起，再把最新事件截断在中间，避免长事件把按钮挤没。
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let toggle = if self.events_expanded {
-                    t("html_collapse")
-                } else {
-                    t("html_expand")
-                };
-                if ui.small_button(toggle).clicked() {
-                    self.events_expanded = !self.events_expanded;
-                }
-                ui.add(egui::Label::new(latest).truncate())
-                    .on_hover_text(&last.text);
-                ui.label(
-                    RichText::new(t("html_events"))
-                        .strong()
-                        .size(nfc_core::theme::FONT_SIZE[0]),
-                );
-            });
-        });
-
-        if self.events_expanded {
-            ScrollArea::vertical()
-                .id_salt("event-list")
-                .stick_to_bottom(!self.lock_scroll)
-                .max_height(EVENT_LIST_MAX_H)
-                .auto_shrink([false, true])
-                .show(ui, |ui| {
-                    for e in &self.state.events {
-                        let tag = match e.kind {
-                            EventKind::Key => t("html_event_key"),
-                            EventKind::Success => t("html_event_success"),
-                            EventKind::Error => t("html_event_error"),
-                        };
-                        let color = event_color(self.theme, e.kind);
-                        ui.label(
-                            RichText::new(format!("[{tag}] {} {}", event_stamp(), e.text))
-                                .color(color),
-                        )
-                        .on_hover_text(&e.text);
-                    }
-                });
-        }
-    }
-
-    /// 日志区：`console_bg` 卡片 + 可选中复制的多行等宽输入，保留自动滚底 / 锁滚动。
-    /// 只渲染尾部窗口（`log_view`），避免每帧 clone + 布局 1MB 文本导致卡帧；
-    /// 保存 / 复制仍取全量 `log_buffer`。
-    fn log_panel(&mut self, ui: &mut Ui, log_h: f32, paint: theme_ui::Paint) {
-        Frame::NONE
-            .fill(paint.color(paint.console_bg))
-            .corner_radius(egui::CornerRadius::same(nfc_core::theme::RADIUS[0] as u8))
-            .inner_margin(egui::Margin::symmetric(8, 6))
-            .show(ui, |ui| {
-                let mut editable = self.state.log_view();
-                ScrollArea::vertical()
-                    .id_salt("log")
-                    .stick_to_bottom(!self.lock_scroll)
-                    .max_height(log_h)
-                    .show(ui, |ui| {
-                        ui.add(
-                            egui::TextEdit::multiline(&mut editable)
-                                .desired_width(f32::INFINITY)
-                                .font(egui::TextStyle::Monospace)
-                                .interactive(true),
-                        );
-                    });
-            });
-    }
-
-    /// 任务条：状态 + 进度 + 计时；系统文件框等待提示也挂在这里。
-    fn task_bar(&mut self, ui: &mut Ui, paint: theme_ui::Paint) {
-        let dot = paint.status_dot(self.state.status.indicator);
-        let text = if self.state.status.text.is_empty() {
-            t("indicator_free")
-        } else {
-            self.state.status.text.clone()
-        };
-        let timer = self.timer_text().unwrap_or_else(|| "--:--:--".to_owned());
-        let frac = self
-            .state
-            .progress
-            .map_or(0.0, |p| p.clamp(0.0, 100.0) / 100.0);
-
-        ui.horizontal(|ui| {
-            ui.horizontal(|ui| {
-                ui.colored_label(dot, RichText::new("●").size(10.0))
-                    .on_hover_text(&text);
-                ui.label(text.clone()).on_hover_text(&text);
-                if let Some(p) = self.dialogs_host.pending_purpose() {
-                    ui.separator();
-                    dialogs_ui::pending_hint(ui, p.pending_text());
-                }
-            });
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.label(format!("{} {timer}", t("html_timer")));
-                ui.separator();
-                let progress = egui::ProgressBar::new(frac).fill(paint.color(paint.primary));
-                let progress = if self.state.progress.is_some() {
-                    progress.show_percentage()
-                } else {
-                    progress
-                };
-                ui.add(progress);
-            });
-        });
     }
 }
 

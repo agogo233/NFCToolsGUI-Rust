@@ -20,7 +20,7 @@ pub fn run() -> eframe::Result {
     let cases: Vec<(&str, Case)> = vec![
         // ── S8 主窗口 ──
         ("控件存在", c_widgets_exist),
-        ("三列布局", c_three_columns),
+        ("操作按钮分组", c_ops_groups),
         ("日志区可滚动", c_log_scrollable),
         ("底栏可见", c_bottom_bar),
         ("无 {{}} 残留", c_no_template_leftover),
@@ -151,6 +151,9 @@ pub fn run() -> eframe::Result {
             c_dump_saved_guidance_carries_dump_id,
         ),
         ("编辑器入口拒绝路径穿越", c_editor_rejects_traversal),
+        // ── 界面改版（docs/06）──
+        ("卡片快照构建", c_card_snapshot),
+        ("ACL 解读解码", c_acl_decode),
     ];
 
     let total = cases.len();
@@ -246,39 +249,63 @@ fn c_widgets_exist() -> Result<(), String> {
     Ok(())
 }
 
-fn c_three_columns() -> Result<(), String> {
-    // 对照主操作区 `button_area` 逐条锁定（不再逐字对齐原版 index.html：
-    // S16 起卡片重排、S18 增 3 个写卡按钮）：
-    //   读卡列 3 个，其中 read-IC 带 `primary`
-    //   破解列 2 个，无 primary / danger
-    //   写卡列 8 个，其中 write-IC 带 `primary`、format-card 与 lock-ufuid 带 `danger`
-    let expect: [(&[&str], &[&str]); 3] = [
+fn c_ops_groups() -> Result<(), String> {
+    // 对照左栏操作面板 `ui::ops_panel::GROUPS` 逐条锁定（docs/06 界面改版）：
+    // 四组共 13 个 action，与原三列按钮区完全一致，仅重排：
+    //   读卡组 3 个，read-IC 带 `primary`
+    //   破解组 2 个，无 primary / danger
+    //   写卡组 2 个，write-IC 带 `primary`、format-card 带 `danger`
+    //   更多组 6 个，lock-ufuid 带 `danger`
+    let expect: [(&[&str], &[&str], &[&str]); 4] = [
         (
             &["read-IC", "input-keys-read-IC", "detect-card-type"],
             &["read-IC"],
+            &[],
         ),
-        (&["hard-nested", "dict-test"], &[]),
+        (&["hard-nested", "dict-test"], &[], &[]),
+        (
+            &["write-IC", "format-card"],
+            &["write-IC"],
+            &["format-card"],
+        ),
         (
             &[
-                "write-IC",
-                "format-card",
                 "open-phw-window",
-                "write-ufuid-uid",
-                "lock-ufuid",
                 "cuid-write",
                 "input-uid-write",
+                "write-ufuid-uid",
                 "run-mfcuk",
+                "lock-ufuid",
             ],
-            &["write-IC", "format-card", "lock-ufuid"],
+            &[],
+            &["lock-ufuid"],
         ),
     ];
-    for (i, (actions, marked)) in expect.iter().enumerate() {
-        if actions.len() != [3usize, 2, 8][i] {
-            return Err(format!("第 {i} 列按钮数 {} 不符", actions.len()));
+    let groups = crate::ui::ops_panel::GROUPS;
+    if groups.len() != expect.len() {
+        return Err(format!("操作组数 {} ≠ {}", groups.len(), expect.len()));
+    }
+    for (gi, (actions, primary, danger)) in expect.iter().enumerate() {
+        let g = &groups[gi];
+        if g.btns.len() != actions.len() {
+            return Err(format!(
+                "第 {gi} 组按钮数 {} ≠ {}",
+                g.btns.len(),
+                actions.len()
+            ));
         }
-        for m in *marked {
-            if !actions.contains(m) {
-                return Err(format!("高亮项 {m} 不在第 {i} 列"));
+        for (bi, b) in g.btns.iter().enumerate() {
+            if b.action != actions[bi] {
+                return Err(format!(
+                    "第 {gi} 组第 {bi} 个动作 {} ≠ {}",
+                    b.action, actions[bi]
+                ));
+            }
+            if primary.contains(&b.action) && b.style != crate::ui::ops_panel::BtnStyle::Primary {
+                return Err(format!("动作 {} 应为 primary", b.action));
+            }
+            if danger.contains(&b.action) && b.style != crate::ui::ops_panel::BtnStyle::Danger {
+                return Err(format!("动作 {} 应为 danger", b.action));
             }
         }
     }
@@ -297,14 +324,62 @@ fn c_log_scrollable() -> Result<(), String> {
 }
 
 fn c_bottom_bar() -> Result<(), String> {
-    // S16：事件条 / 控制台 / 任务条常量必须为正；设备状态条已并入标题栏。
-    if crate::app::EVENT_LIST_MAX_H <= 0.0
-        || crate::app::CONSOLE_HEADER_H <= 0.0
-        || crate::app::TASK_BAR_H <= 0.0
-        || crate::app::LOG_MIN_H <= 0.0
-        || crate::app::CONSOLE_RESERVE_H <= 0.0
-    {
-        return Err("S16 控制台高度常量非正".into());
+    // 界面改版：右栏事件 / 控制台高度常量必须为正（原 S16 底栏常量随代码
+    // 迁往 `ui::rail`，`CONSOLE_HEADER_H` / `TASK_BAR_H` / `CONSOLE_RESERVE_H`
+    // 因底栏布局取消而退役）。
+    if crate::ui::rail::EVENT_LIST_MAX_H <= 0.0 || crate::ui::rail::LOG_MIN_H <= 0.0 {
+        return Err("右栏高度常量非正".into());
+    }
+    Ok(())
+}
+
+fn c_card_snapshot() -> Result<(), String> {
+    use crate::ui::workbench;
+    // 1K：16 组 + UID 解析（块 0 前 4 字节，第 5 字节 BCC 自洽）
+    let mut bytes = vec![0u8; 1024];
+    bytes[0..4].copy_from_slice(&[0x04, 0xa3, 0xb2, 0xc1]);
+    bytes[4] = 0x04 ^ 0xa3 ^ 0xb2 ^ 0xc1;
+    let snap = workbench::snapshot_from_bytes(&bytes, "p".to_owned(), "x.mfd".to_owned())
+        .ok_or("1K 快照构建失败")?;
+    if snap.groups.len() != 16 {
+        return Err(format!("1K 应为 16 组，实际 {}", snap.groups.len()));
+    }
+    if snap.uid != "04:A3:B2:C1" {
+        return Err(format!("UID 解析错误: {}", snap.uid));
+    }
+    if snap.card_type != "MIFARE Classic 1K" {
+        return Err(format!("卡型错误: {}", snap.card_type));
+    }
+    // 4K：64 组（与 `to_sector_lines` / 转储编辑器同口径）
+    let snap = workbench::snapshot_from_bytes(&vec![0u8; 4096], "p".to_owned(), "y.mfd".to_owned())
+        .ok_or("4K 快照构建失败")?;
+    if snap.groups.len() != 64 {
+        return Err(format!("4K 应为 64 组，实际 {}", snap.groups.len()));
+    }
+    // Mini：5 组
+    let snap = workbench::snapshot_from_bytes(&vec![0u8; 320], "p".to_owned(), "z.mfd".to_owned())
+        .ok_or("Mini 快照构建失败")?;
+    if snap.groups.len() != 5 {
+        return Err(format!("Mini 应为 5 组，实际 {}", snap.groups.len()));
+    }
+    Ok(())
+}
+
+fn c_acl_decode() -> Result<(), String> {
+    // 出厂默认 ACL：数据块全开放、尾块 001
+    let d = nfc_core::model::dumpcheck::decode_access([0xff, 0x07, 0x80, 0x69]);
+    if d.forward != [0, 0, 0, 1] || !d.consistent() {
+        return Err(format!("默认 ACL 解码错误: {:?}", d.forward));
+    }
+    // 常见值块保护 ACL：数据块只读
+    let d = nfc_core::model::dumpcheck::decode_access([0x08, 0x77, 0x8f, 0x69]);
+    if d.forward != [6, 6, 6, 3] || !d.consistent() {
+        return Err(format!("值块保护 ACL 解码错误: {:?}", d.forward));
+    }
+    // 全 0 尾块：前后向解码不一致 → AclCorrupt
+    let d = nfc_core::model::dumpcheck::decode_access([0, 0, 0, 0]);
+    if d.consistent() {
+        return Err("全 0 尾块应判 ACL 损坏".into());
     }
     Ok(())
 }
@@ -1772,7 +1847,7 @@ fn connected_app() -> NfcApp {
 }
 
 fn c_pending_is_consumed_not_dropped() -> Result<(), String> {
-    // 回归：S8–S10 每帧 `pending.clear()`，所有按钮点了都没反应。
+    // 回归：S8–S10 曾每帧清空待派发队列，所有按钮点了都没反应。
     // 这里断言「未连接时 read-IC 被门禁拒绝并留下 error 事件」——
     // 只有真正 dispatch 过才会有事件。
     let mut app = NfcApp::new(nfc_core::state::AppState::new()); // 未连接
