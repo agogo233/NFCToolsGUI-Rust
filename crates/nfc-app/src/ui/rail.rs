@@ -11,7 +11,7 @@ use nfc_core::theme;
 
 use crate::app::NfcApp;
 use crate::dialogs_ui;
-use crate::theme_ui::event_color;
+use crate::theme_ui::{self, event_color};
 
 /// 事件时间线最高显示高度（px）。原 S16 事件展开高度，沿用。
 pub const EVENT_LIST_MAX_H: f32 = 96.0;
