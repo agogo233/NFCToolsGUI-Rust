@@ -4,6 +4,7 @@
 //! `missing_tools_bar` → `guidance_bar` → 左 [`crate::ui::ops_panel`]
 //! （操作按钮组）+ 中 [`crate::ui::workbench`]（卡片档案 / 扇区编辑器）
 //! + 右 [`crate::ui::rail`]（设备 / 任务 / 事件 / 控制台）。
+//!
 //! 窗口可用宽不足 1280px 时三栏退化为纵向堆叠。
 
 use std::collections::VecDeque;
