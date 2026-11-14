@@ -4,7 +4,7 @@
 //! `missing_tools_bar` → `guidance_bar` → 左 [`crate::ui::ops_panel`]
 //! （操作按钮组）+ 中 [`crate::ui::workbench`]（卡片档案 / 扇区编辑器）
 //! + 右 [`crate::ui::rail`]（设备 / 任务 / 事件 / 控制台）。
-//! 窗口可用宽 <1280px 时三栏退化为纵向堆叠。
+//! 窗口可用宽不足 1280px 时三栏退化为纵向堆叠。
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -1487,11 +1487,6 @@ fn open_in_os(target: &std::path::Path) -> Result<(), String> {
 
 /// 事件条时间戳（`index.js:118` 的 `HH:MM:SS`，本地时区，S18 F3 修正）。
 ///
-/// 实现委托 [`nfc_core::paths::event_stamp`]（原版 `getHours()` 即本地时区）。
-pub fn event_stamp() -> String {
-    nfc_core::paths::event_stamp()
-}
-
 /// 秒 → `HH:MM:SS`（`index.js:43-47`）。
 pub fn format_duration(total: u32) -> String {
     let (h, m, s) = (total / 3600, (total / 60) % 60, total % 60);

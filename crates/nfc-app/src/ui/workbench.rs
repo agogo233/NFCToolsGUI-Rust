@@ -476,8 +476,7 @@ fn acl_box(ui: &mut Ui, app: &NfcApp, trailer: &str) {
         .size(11.0)
         .color(paint.color(paint.text_secondary)),
     );
-    for j in 0..4 {
-        let c = d.forward[j];
+    for (j, &c) in d.forward.iter().enumerate() {
         let perm = if j < 3 {
             t(&format!("html_acl_data_perm_{c}"))
         } else {
