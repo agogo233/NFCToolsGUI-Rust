@@ -351,13 +351,15 @@ fn c_card_snapshot() -> Result<(), String> {
         return Err(format!("卡型错误: {}", snap.card_type));
     }
     // 4K：64 组（与 `to_sector_lines` / 转储编辑器同口径）
-    let snap = workbench::snapshot_from_bytes(&vec![0u8; 4096], "p".to_owned(), "y.mfd".to_owned())
+    let bytes_4k = vec![0u8; 4096];
+    let snap = workbench::snapshot_from_bytes(&bytes_4k, "p".to_owned(), "y.mfd".to_owned())
         .ok_or("4K 快照构建失败")?;
     if snap.groups.len() != 64 {
         return Err(format!("4K 应为 64 组，实际 {}", snap.groups.len()));
     }
     // Mini：5 组
-    let snap = workbench::snapshot_from_bytes(&vec![0u8; 320], "p".to_owned(), "z.mfd".to_owned())
+    let bytes_mini = vec![0u8; 320];
+    let snap = workbench::snapshot_from_bytes(&bytes_mini, "p".to_owned(), "z.mfd".to_owned())
         .ok_or("Mini 快照构建失败")?;
     if snap.groups.len() != 5 {
         return Err(format!("Mini 应为 5 组，实际 {}", snap.groups.len()));

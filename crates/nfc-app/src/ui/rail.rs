@@ -29,9 +29,8 @@ pub fn draw(ui: &mut Ui, app: &mut NfcApp, stacked: bool) {
     console_card(ui, app, stacked);
 }
 
-/// 右栏卡片统一外观。
-fn card(ui: &mut Ui, app: &NfcApp, inner: impl FnOnce(&mut Ui)) {
-    let paint = app.paint();
+/// 右栏卡片统一外观。paint 由调用方先取好（避免闭包与 `app` 借用冲突）。
+fn card(ui: &mut Ui, paint: theme_ui::Paint, inner: impl FnOnce(&mut Ui)) {
     Frame::NONE
         .fill(paint.color(paint.surface))
         .stroke(egui::Stroke::new(1.0, paint.color(paint.border)))
@@ -41,7 +40,7 @@ fn card(ui: &mut Ui, app: &NfcApp, inner: impl FnOnce(&mut Ui)) {
 }
 
 fn device_card(ui: &mut Ui, app: &mut NfcApp) {
-    card(ui, app, |ui| {
+    card(ui, app.paint(), |ui| {
         let paint = app.paint();
         ui.horizontal(|ui| {
             ui.label(
@@ -71,7 +70,7 @@ fn device_card(ui: &mut Ui, app: &mut NfcApp) {
 }
 
 fn task_card(ui: &mut Ui, app: &mut NfcApp) {
-    card(ui, app, |ui| {
+    card(ui, app.paint(), |ui| {
         let paint = app.paint();
         ui.label(
             RichText::new(t("html_rail_task"))
@@ -128,7 +127,7 @@ fn task_card(ui: &mut Ui, app: &mut NfcApp) {
 }
 
 fn events_card(ui: &mut Ui, app: &mut NfcApp) {
-    card(ui, app, |ui| {
+    card(ui, app.paint(), |ui| {
         let paint = app.paint();
         ui.label(
             RichText::new(t("html_events"))

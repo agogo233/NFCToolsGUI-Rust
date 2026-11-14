@@ -147,7 +147,7 @@ fn card_context(ui: &mut Ui, app: &mut NfcApp) {
                             .size(16.0)
                             .strong()
                             .color(paint.color(paint.uid))
-                            .font(egui::TextStyle::Monospace),
+                            .font(egui::FontId::monospace()),
                     );
                 });
                 ui.vertical(|ui| {
@@ -191,7 +191,7 @@ fn card_context(ui: &mut Ui, app: &mut NfcApp) {
                     ui.label(
                         RichText::new(&snap.file_name)
                             .size(12.0)
-                            .font(egui::TextStyle::Monospace),
+                            .font(egui::FontId::monospace()),
                     );
                 });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -409,7 +409,7 @@ fn editor_body(ui: &mut Ui, app: &mut NfcApp) {
 fn cell(ui: &mut Ui, w: f32, text: &str, color: Color32, mono: bool) {
     let mut rich = RichText::new(text).size(12.0).color(color);
     if mono {
-        rich = rich.font(egui::TextStyle::Monospace);
+        rich = rich.font(egui::FontId::monospace());
     }
     ui.add_sized([w, 18.0], Label::new(rich).truncate());
 }
@@ -431,7 +431,7 @@ fn detail(ui: &mut Ui, app: &NfcApp, i: usize, groups: usize, g: &[String], has_
                     ui.label(
                         RichText::new(spaced(line))
                             .size(12.0)
-                            .font(egui::TextStyle::Monospace),
+                            .font(egui::FontId::monospace()),
                     );
                 });
             }
@@ -462,7 +462,7 @@ fn acl_box(ui: &mut Ui, app: &NfcApp, trailer: &str) {
             RichText::new(format!("[{:?}] ≠ [{:?}]", d.forward, d.reversed))
                 .size(11.0)
                 .color(paint.color(theme::STATUS_ERR))
-                .font(egui::TextStyle::Monospace),
+                .font(egui::FontId::monospace()),
         );
         return;
     }
@@ -488,7 +488,7 @@ fn acl_box(ui: &mut Ui, app: &NfcApp, trailer: &str) {
                 RichText::new(format!("{}{} C={}", t("html_block"), j, c))
                     .size(11.0)
                     .color(paint.color(paint.text_secondary))
-                    .font(egui::TextStyle::Monospace),
+                    .font(egui::FontId::monospace()),
             );
             ui.label(RichText::new(perm).size(11.0));
         });
