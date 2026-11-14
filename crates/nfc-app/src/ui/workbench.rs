@@ -121,19 +121,9 @@ fn card_context(ui: &mut Ui, app: &mut NfcApp) {
         .inner_margin(egui::Margin::symmetric(12, 10))
         .show(ui, |ui| {
             let Some(snap) = app.card_snapshot.as_ref() else {
-                // 空态按连接状态分支：未连接时引导先连设备，而不是让用户
-                // 点了「一键解卡」再被门禁拦下。
+                // 空态只留一行：连接引导上移到标题栏状态胶囊的悬停提示
+                // （app::device_status_chip），这里不再重复占用一整行。
                 ui.label(RichText::new(t("html_card_none")).strong());
-                let hint = if app.state.is_device_connected {
-                    t("html_card_none_hint")
-                } else {
-                    t("html_card_none_hint_not_connected")
-                };
-                ui.label(
-                    RichText::new(hint)
-                        .size(12.0)
-                        .color(paint.color(paint.text_secondary)),
-                );
                 return;
             };
             let uid = snap.uid.clone();

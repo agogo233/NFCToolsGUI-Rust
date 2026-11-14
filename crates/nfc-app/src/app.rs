@@ -166,6 +166,9 @@ pub struct NfcApp {
     /// P2-10：mfcuk 全加密爆破的进度 `(当前扇区, 总扇区)`。由每帧
     /// `sync_task_flags` 从 engine 同步；`None` = 无任务或尚无游标输出。
     pub mfcuk_progress: Option<(u32, u32)>,
+    /// 右下角拖拽抓角的进行时状态：`(拖拽起点指针位置, 起始窗口尺寸)`。
+    /// 自绘标题栏下部分平台原生边缘热区难命中，抓角是常驻可见的缩放兜底。
+    pub resize_drag: Option<(egui::Vec2, egui::Vec2)>,
 }
 
 impl NfcApp {
@@ -212,6 +215,7 @@ impl NfcApp {
             open_sector: None,
             write_done: false,
             mfcuk_progress: None,
+            resize_drag: None,
         }
         .with_no_portal_warning()
     }
@@ -1678,6 +1682,8 @@ impl NfcApp {
                 crate::ui::workbench::draw(ui, self, false);
             });
         }
+        // 右下角缩放抓手（含最小尺寸钳制），各档位通用。
+        self.resize_grip(ui);
     }
 
     /// `framework/bin` 缺失时的红条（S12 交付项：启动自检引导）。
@@ -2005,7 +2011,67 @@ impl NfcApp {
                 ui.label(RichText::new(&text).size(12.0));
             },
         );
-        inner.response.on_hover_text(&text);
+        // 引导文案上移（用户反馈）：未连接/失败时胶囊悬停即见完整引导，
+        // 工作台空态不再重复占用一整行（见 workbench::card_context）。
+        let tip = match self.state.device_state {
+            DeviceState::None | DeviceState::Failed => t("html_card_none_hint_not_connected"),
+            _ => text.clone(),
+        };
+        inner.response.on_hover_text(tip);
+    }
+
+    /// 右下角自绘拖拽抓角：`with_decorations(false)` 后部分平台原生边缘
+    /// 热区难以命中，这里给一个常驻可见的缩放兜底——按住拖动即改窗口
+    /// 尺寸（`ViewportCommand::InnerSize`），钳制在最小尺寸与合理上限之间。
+    fn resize_grip(&mut self, ui: &mut Ui) {
+        // 最大化时窗口尺寸由系统接管，抓角不再调窗（拖了也会被平台还原）。
+        if is_maximized(ui.ctx()) {
+            return;
+        }
+        let min = egui::vec2(crate::WIN_MIN_W, crate::WIN_MIN_H);
+        let max = egui::vec2(3840.0, 2160.0);
+        egui::Area::new(egui::Id::new("resize-grip"))
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::RIGHT_BOTTOM, egui::Vec2::ZERO)
+            .show(ui.ctx(), |ui| {
+                let (rect, resp) =
+                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::drag());
+                if resp.hovered() || resp.dragged() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeNwSe);
+                }
+                let cur = ui
+                    .ctx()
+                    .input(|i| i.viewport().inner_rect.map(|r| r.size()))
+                    .unwrap_or_else(|| ui.ctx().input(|i| i.viewport_rect()).size());
+                if resp.drag_started() {
+                    self.resize_drag = Some((resp.interact_pointer_pos().unwrap_or_default(), cur));
+                }
+                if resp.drag_stopped() {
+                    self.resize_drag = None;
+                }
+                if resp.dragged() {
+                    if let Some((start, size)) = self.resize_drag {
+                        if let Some(pos) = resp.interact_pointer_pos() {
+                            let new = (size + (pos - start)).clamp(min, max);
+                            ui.ctx()
+                                .send_viewport_cmd(egui::ViewportCommand::InnerSize(new));
+                        }
+                    }
+                }
+                // 双斜线 grip：次级色常显，悬停/拖动提亮为主文字色。
+                let paint = self.paint();
+                let c = if resp.hovered() || resp.dragged() {
+                    paint.color(paint.text)
+                } else {
+                    paint.color(paint.text_secondary)
+                };
+                let st = egui::Stroke::new(1.5, c);
+                let rb = rect.right_bottom();
+                ui.painter()
+                    .line_segment([rb - egui::vec2(4.0, 12.0), rb - egui::vec2(12.0, 4.0)], st);
+                ui.painter()
+                    .line_segment([rb - egui::vec2(4.0, 7.0), rb - egui::vec2(7.0, 4.0)], st);
+            });
     }
 
     /// S15：冷启动引导。未连接设备时展示一次「请先选择设备并连接」+
