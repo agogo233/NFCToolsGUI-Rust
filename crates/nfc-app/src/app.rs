@@ -168,7 +168,7 @@ pub struct NfcApp {
     pub mfcuk_progress: Option<(u32, u32)>,
     /// 右下角拖拽抓角的进行时状态：`(拖拽起点指针位置, 起始窗口尺寸)`。
     /// 自绘标题栏下部分平台原生边缘热区难命中，抓角是常驻可见的缩放兜底。
-    pub resize_drag: Option<(egui::Vec2, egui::Vec2)>,
+    pub resize_drag: Option<(egui::Pos2, egui::Vec2)>,
 }
 
 impl NfcApp {
