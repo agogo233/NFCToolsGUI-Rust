@@ -15,7 +15,7 @@
 | [03-Ultralight-NTAG.md](03-Ultralight-NTAG.md) | MIFARE Ultralight / NTAG 页布局、UID、锁定、认证 | 手机/手环「写数据扇区」、Ultralight 卡识别 |
 | [04-UID与Gen卡.md](04-UID与Gen卡.md) | UID/BCC 结构、Gen1a/Gen2 可改 UID 卡（魔卡） | `write-ufuid-uid`、`lock-ufuid`、`nfc-mfsetuid`/`nfc-mflock` |
 | [05-NDEF.md](05-NDEF.md) | NDEF 消息/TLV 记录、URI/文本记录格式 | 手机/手环操作区、NFC 数据交换 |
-| [06-PN532.md](06-PN532.md) | PN532 主机接口（UART/SPI/I²C）、命令集、寄存器 | 硬件层：PN532 与 PC 的串口/SPI 通信 |
+| [06-PN532.md](06-PN532.md) | PN532 主机接口（UART/SPI/I²C）、帧格式、命令集 | 硬件层：PN532 与 PC 的串口/SPI 通信 |
 
 ## 来源与核对原则
 
@@ -30,7 +30,7 @@
 3. **开源工具源码**（已 vendored 于 `framework/source/`）用于核对工具实际行为：
    - `libnfc`（底层库：`nfc-list`/`nfc-mfdetect` 等）
    - `mfoc`（普通密钥恢复）
-   - `hardnested` + `crapto1`（HardNested 攻击）
+   - `cropto1_bs` + `crapto1`（HardNested 攻击）
    - `libnfc_collect`（nonce 收集）
    - `nfc-mfsetuid` / `nfc-mflock`（Gen1a UID 改写）
    - `mfcuk`（MIFARE Classic 工具集）

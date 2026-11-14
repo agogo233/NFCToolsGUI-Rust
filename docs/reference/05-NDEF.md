@@ -137,17 +137,18 @@ NFC Forum Type 2 Tag（Ultralight/NTAG）的 NDEF 数据存放在**用户内存*
 ### 4.4 例：写入 `https://example.com` 到 NTAG213
 
 URI 记录载荷 = `[04]["example.com"]` = 1（URI 码）+ 11（"example.com"）= 12 字节。
-NDEF 消息 = `[01 01 0C 55 04 65 78 61 6D 70 6C 65 2E 63 6F 6D]`（16 字节）。
+NDEF 记录头 = `D1`（MB=1, ME=1, SR=1, TNF=1）。
+NDEF 消息 = `[D1 01 0C 55 04 65 78 61 6D 70 6C 65 2E 63 6F 6D]`（16 字节）。
 
 ```
 页 3 (CC):   E1 10 12 00      ← NFC Forum v1.0, 内存 12h, 访问 00h
-页 4 起:     [03][10][01 01 0C 55 04 65 78 61 6D 70 6C 65 2E 63 6F 6D][FE]...
+页 4 起:     [03][10][D1 01 0C 55 04 65 78 61 6D 70 6C 65 2E 63 6F 6D][FE]...
               T  L   │  │  │  │  │   └── "example.com" (11 B)
               │  │   │  │  │  └── URI 码 04h = "https://"
               │  │   │  │  └── TYPE 'U' (55h)
               │  │   │  └── PAYLOAD LENGTH = 0Ch (12 B)
               │  │   └── TYPE LENGTH = 01h
-              │  └── MB=1 ME=1 SR=1 TNF=1 (Well Known)
+              │  └── D1 = MB=1 ME=1 SR=1 TNF=1 (Well Known)
               └── 长度 10h (16 B)
 ```
 
