@@ -1486,9 +1486,11 @@ impl Engine {
             // 游标续行：必须整块都是空白/短 hex token，杜绝混入的日志行
             let trimmed = text.trim();
             if trimmed.is_empty()
-                || !trimmed
-                    .split(|c: char| !c.is_ascii_hexdigit())
-                    .all(|t| t.is_empty() || (t.len() <= 2 && u32::from_str_radix(t, 16).map(|v| v <= 39).unwrap_or(false)))
+                || !trimmed.split(|c: char| !c.is_ascii_hexdigit()).all(|t| {
+                    t.is_empty()
+                        || (t.len() <= 2
+                            && u32::from_str_radix(t, 16).map(|v| v <= 39).unwrap_or(false))
+                })
             {
                 return;
             }

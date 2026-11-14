@@ -246,7 +246,10 @@ fn card_context(ui: &mut Ui, app: &mut NfcApp) {
         }
     }
     if copied {
-        app.push_event(nfc_core::state::EventKind::Success, &t("log_msg_uid_copied"));
+        app.push_event(
+            nfc_core::state::EventKind::Success,
+            &t("log_msg_uid_copied"),
+        );
     }
 }
 

@@ -165,27 +165,48 @@ pub const GROUPS: &[GroupDef] = &[
     },
 ];
 
-/// 画左栏全部分组。
-pub fn draw(ui: &mut Ui, app: &mut NfcApp) {
+/// 画左栏全部分组。`icon_mode` 为真时压成 56px 图标条：
+/// 按钮只留一个代表字（悬停给全名 + 提示），组头只留步骤徽标。
+pub fn draw(ui: &mut Ui, app: &mut NfcApp, icon_mode: bool) {
     for g in GROUPS {
-        group_card(ui, app, g);
+        group_card(ui, app, g, icon_mode);
         ui.add_space(8.0);
     }
 }
 
-fn group_card(ui: &mut Ui, app: &mut NfcApp, g: &GroupDef) {
+/// 图标条模式下每个动作的代表字（窄窗 56px 左栏用；悬停仍给全名）。
+fn icon_char(action: &str) -> &'static str {
+    match action {
+        "read-IC" => "读",
+        "input-keys-read-IC" => "钥",
+        "detect-card-type" => "检",
+        "hard-nested" => "破",
+        "dict-test" => "典",
+        "write-IC" => "写",
+        "cuid-write" => "C",
+        "input-uid-write" => "输",
+        "write-ufuid-uid" => "U",
+        "format-card" => "格",
+        "open-phw-window" => "手",
+        "run-mfcuk" => "爆",
+        "lock-ufuid" => "锁",
+        _ => "•",
+    }
+}
+
+fn group_card(ui: &mut Ui, app: &mut NfcApp, g: &GroupDef, icon_mode: bool) {
     let paint = app.paint();
     Frame::NONE
         .fill(paint.color(paint.surface))
         .stroke(egui::Stroke::new(1.0, paint.color(paint.border)))
         .corner_radius(egui::CornerRadius::same(nfc_core::theme::RADIUS[1] as u8))
-        .inner_margin(egui::Margin::symmetric(10, 10))
+        .inner_margin(egui::Margin::symmetric(if icon_mode { 6 } else { 10 }, 10))
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 6.0;
-            group_head(ui, app, g);
+            group_head(ui, app, g, icon_mode);
             ui.separator();
             for b in g.btns {
-                action_button(ui, app, b);
+                action_button(ui, app, b, icon_mode);
             }
         });
 }
@@ -193,15 +214,30 @@ fn group_card(ui: &mut Ui, app: &mut NfcApp, g: &GroupDef) {
 /// 组头：步骤徽标 + 组名 + 状态（待命 / 完成）。
 ///
 /// 状态仅为视觉提示，不参与门禁；运行中的进度在右栏任务卡展示。
-fn group_head(ui: &mut Ui, app: &NfcApp, g: &GroupDef) {
+/// 图标条模式下只画居中的步骤徽标（组名/状态随全名进悬停提示）。
+fn group_head(ui: &mut Ui, app: &NfcApp, g: &GroupDef, icon_mode: bool) {
     let paint = app.paint();
     let done = group_done(app, g);
+    let (bg, fg) = if done {
+        (theme::STATUS_OK, paint.text_inverse)
+    } else {
+        (paint.surface2, paint.text_secondary)
+    };
+    if icon_mode {
+        ui.vertical_centered(|ui| {
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
+            ui.painter().rect_filled(rect, 6.0, paint.color(bg));
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                g.no,
+                egui::FontId::proportional(11.0),
+                paint.color(fg),
+            );
+        });
+        return;
+    }
     ui.horizontal(|ui| {
-        let (bg, fg) = if done {
-            (theme::STATUS_OK, paint.text_inverse)
-        } else {
-            (paint.surface2, paint.text_secondary)
-        };
         let (rect, _) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
         ui.painter().rect_filled(rect, 6.0, paint.color(bg));
         ui.painter().text(
@@ -239,8 +275,61 @@ fn group_done(app: &NfcApp, g: &GroupDef) -> bool {
     }
 }
 
-fn action_button(ui: &mut Ui, app: &mut NfcApp, b: &BtnDef) {
+fn action_button(ui: &mut Ui, app: &mut NfcApp, b: &BtnDef, icon_mode: bool) {
     let paint = app.paint();
+    // 门禁：未连接设备 / 有任务运行中 / 正在连接 → 置灰，并在悬停时说明原因
+    // （取代「点了之后才在日志里看到报错」，与原三列按钮区一致）。
+    let gate = nfc_core::command::spec(b.action).map(|s| nfc_core::command::gate(s, &app.state));
+    let enabled = match &gate {
+        Some(Err(_)) => false,
+        Some(Ok(())) | None => true,
+    };
+    let reason = match &gate {
+        Some(Err(e)) => t(e.i18n_key()),
+        _ => String::new(),
+    };
+    if icon_mode {
+        // 56px 图标条：单字方块按钮，悬停给「全名 + 提示」，门禁与常规模一致。
+        let (fill, fg, stroke) = match b.style {
+            BtnStyle::Primary => (paint.primary, paint.text_inverse, None),
+            BtnStyle::Normal => (paint.surface2, paint.text, None),
+            BtnStyle::Ghost => (paint.surface, paint.text, Some((1.0, paint.border))),
+            BtnStyle::Danger => (paint.surface, paint.danger, Some((1.5, paint.danger))),
+        };
+        let (rect, resp) = ui.allocate_exact_size(egui::vec2(38.0, 30.0), egui::Sense::click());
+        let painter = ui.painter();
+        painter.rect_filled(rect, 6.0, paint.color(fill));
+        if let Some((sw, sc)) = stroke {
+            painter.rect_stroke(
+                rect,
+                egui::CornerRadius::same(6u8),
+                egui::Stroke::new(sw, paint.color(sc)),
+                egui::StrokeKind::Inside,
+            );
+        }
+        let fg_color = if enabled {
+            paint.color(fg)
+        } else {
+            paint.color(fg).gamma_multiply(0.45)
+        };
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            icon_char(b.action),
+            egui::FontId::proportional(15.0),
+            fg_color,
+        );
+        let tip = format!("{}\n{}", t(b.label_key), t(b.tip_key));
+        let resp = if enabled {
+            resp.on_hover_text(tip)
+        } else {
+            resp.on_disabled_hover_text(reason)
+        };
+        if resp.clicked() {
+            app.exec(b.action, None);
+        }
+        return;
+    }
     let w = ui.available_width();
     let (h, fs, strong) = match b.style {
         BtnStyle::Primary => (38.0, 14.0, true),
@@ -264,17 +353,6 @@ fn action_button(ui: &mut Ui, app: &mut NfcApp, b: &BtnDef) {
     if let Some((sw, sc)) = stroke {
         button = button.stroke(egui::Stroke::new(sw, paint.color(sc)));
     }
-    // 门禁：未连接设备 / 有任务运行中 / 正在连接 → 置灰，并在悬停时说明原因
-    // （取代「点了之后才在日志里看到报错」，与原三列按钮区一致）。
-    let gate = nfc_core::command::spec(b.action).map(|s| nfc_core::command::gate(s, &app.state));
-    let enabled = match &gate {
-        Some(Err(_)) => false,
-        Some(Ok(())) | None => true,
-    };
-    let reason = match &gate {
-        Some(Err(e)) => t(e.i18n_key()),
-        _ => String::new(),
-    };
     let resp = if enabled {
         ui.add_enabled(true, button).on_hover_text(t(b.tip_key))
     } else {

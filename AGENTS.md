@@ -30,7 +30,7 @@ cargo test -p nfc-core --test real_tools --test tool_cli   # 需要 framework/bi
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --workspace --all-targets --features real-serial -- -D warnings   # CI 额外跑一次：RealSerial 平时不参与编译
 cargo fmt --all --check
-python3 tools/verify_parity.py     # 846 项静态门禁（39 action parity 表 + 接线守卫）
+python3 tools/verify_parity.py     # 848 项静态门禁（39 action parity 表 + 接线守卫）
 ./scripts/package.sh               # 构建 + 打包 out/NFCToolsGUI-win-x64.zip
 ./scripts/package.sh --check       # 只跑门禁与检测
 ```

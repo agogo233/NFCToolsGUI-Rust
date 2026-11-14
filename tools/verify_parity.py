@@ -171,6 +171,28 @@ REDESIGN_EXTRA = {
     "html_acl_trailer_perm_6",
     "html_acl_trailer_perm_7",
 }
+# 标题栏最大化/还原钮（响应式四档配套，原型 docs/design/ui-responsive-tiers-proposal.html）。
+MAXIMIZE_EXTRA = {
+    "html_maximize",
+    "html_restore",
+}
+# 功能按钮体验优化（98c06b7）：卡历史档案 / 一键复制 UID·hex / mfcuk 扇区进度 /
+# HardNested 轮次 / 未连接空态引导等新增文案。
+UX_POLISH_EXTRA = {
+    "html_card_registry_title",
+    "html_card_registry_empty",
+    "html_card_registry_empty_hint",
+    "log_msg_uid_copied",
+    "html_tip_copy_uid",
+    "html_tip_open_event_dump",
+    "html_tip_copy_hex",
+    "html_copy_group",
+    "html_tip_copy_group",
+    "log_msg_hex_copied",
+    "html_mfcuk_sector_progress",
+    "html_card_none_hint_not_connected",
+    "html_hn_round",
+}
 # S18 从「上游独有」挪回的 20 个 key：两版共有且文案逐字一致。
 S18_MIGRATED = {
     "dialog_msg_invalid_uid_input",
@@ -402,10 +424,10 @@ def h_i18n() -> None:
     keys = json.loads(rd(REPO / "assets/locales/zh-CN.json"))
     orig_zh_keys = set(rd_json(ORIG / "src/locales/zh-CN.json")) if not ORIG_MISSING else set()
     check(
-        len(keys) == 194 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(DUMP_VIEW_EXTRA) + len(PANEL_VALIDATION_EXTRA) + len(S18_MIGRATED) + len(NO_PORTAL_EXTRA) + len(REDESIGN_EXTRA),
-        f"H zh-CN.json {194 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(DUMP_VIEW_EXTRA) + len(PANEL_VALIDATION_EXTRA) + len(S18_MIGRATED) + len(NO_PORTAL_EXTRA) + len(REDESIGN_EXTRA)} key"
+        len(keys) == 194 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(DUMP_VIEW_EXTRA) + len(PANEL_VALIDATION_EXTRA) + len(S18_MIGRATED) + len(NO_PORTAL_EXTRA) + len(REDESIGN_EXTRA) + len(MAXIMIZE_EXTRA) + len(UX_POLISH_EXTRA),
+        f"H zh-CN.json {194 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(DUMP_VIEW_EXTRA) + len(PANEL_VALIDATION_EXTRA) + len(S18_MIGRATED) + len(NO_PORTAL_EXTRA) + len(REDESIGN_EXTRA) + len(MAXIMIZE_EXTRA) + len(UX_POLISH_EXTRA)} key"
         f"（基础 194 + S16 补 {len(S16_EXTRA)} + S17 补 {len(S17_EXTRA)}"
-        f" + S18 新增 {len(S18_EXTRA)} + MFOC_PROBES 补 {len(MFOC_PROBES_EXTRA)} + LOG_COPY 补 {len(LOG_COPY_EXTRA)} + DUMP_VIEW 补 {len(DUMP_VIEW_EXTRA)} + 面板校验补 {len(PANEL_VALIDATION_EXTRA)} + S18 迁移 {len(S18_MIGRATED)} + 无门户收尾补 {len(NO_PORTAL_EXTRA)} + 界面改版补 {len(REDESIGN_EXTRA)}）",
+        f" + S18 新增 {len(S18_EXTRA)} + MFOC_PROBES 补 {len(MFOC_PROBES_EXTRA)} + LOG_COPY 补 {len(LOG_COPY_EXTRA)} + DUMP_VIEW 补 {len(DUMP_VIEW_EXTRA)} + 面板校验补 {len(PANEL_VALIDATION_EXTRA)} + S18 迁移 {len(S18_MIGRATED)} + 无门户收尾补 {len(NO_PORTAL_EXTRA)} + 界面改版补 {len(REDESIGN_EXTRA)} + 最大化钮补 {len(MAXIMIZE_EXTRA)} + 体验优化补 {len(UX_POLISH_EXTRA)}）",
         f"实际 {len(keys)}",
     )
     # S8 新增的 3 个 settings 按钮文案（原版 settings.html 硬编码英文，无 i18n key，
@@ -428,6 +450,10 @@ def h_i18n() -> None:
         check(k in keys, f"H zh-CN 含 S18 迁移 {k}")
     for k in NO_PORTAL_EXTRA:
         check(k in keys, f"H zh-CN 含无门户收尾 {k}")
+    for k in MAXIMIZE_EXTRA:
+        check(k in keys, f"H zh-CN 含最大化钮 {k}")
+    for k in UX_POLISH_EXTRA:
+        check(k in keys, f"H zh-CN 含体验优化 {k}")
     for k in S18_MIGRATED:
         # 必须走 check_orig：原版不在本机时 orig_zh_keys 是空集（第 346 行），
         # 用 check 会把「查不到原版」误判成「key 是误造的」→ 20 项假失败。
@@ -632,10 +658,10 @@ def m_contract() -> None:
         "M 截断 / 视图起点均校正字符边界（enforce_log_cap + log_view）",
         str(st.count("while cut < len && !self.log_buffer.is_char_boundary(cut)")),
     )
-    # UI 只渲染尾部窗口，保存 / 复制仍取全量（§6.35 同源保真）
+    # UI 只渲染尾部窗口（98c06b7 起控制台改只读展示，变量名 view），保存 / 复制仍取全量（§6.35 同源保真）
     app = "\n".join(rd(p) for p in sorted(APP.glob("src/**/*.rs")))
     check(
-        "let mut editable = app.state.log_view();" in app,
+        "let mut view = app.state.log_view();" in app,
         "M 日志区渲染 log_view 尾部窗口",
     )
     check(
@@ -1815,7 +1841,7 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     # 自动执行提示、文件框等待文案、检测结果“已知/未知”、历史重命名、
     # 控制台按钮悬停说明（§6.28 P1）
     # （docs/02 §6.25 续 / §6.28 / S16 偏离登记）。
-    LOCAL_EXTRA = S8_EXTRA | S11_EXTRA | S12_EXTRA | S15_EXTRA | S16_EXTRA | S17_EXTRA | S18_EXTRA | MFOC_PROBES_EXTRA | LOG_COPY_EXTRA | DUMP_VIEW_EXTRA | PANEL_VALIDATION_EXTRA | NO_PORTAL_EXTRA | REDESIGN_EXTRA
+    LOCAL_EXTRA = S8_EXTRA | S11_EXTRA | S12_EXTRA | S15_EXTRA | S16_EXTRA | S17_EXTRA | S18_EXTRA | MFOC_PROBES_EXTRA | LOG_COPY_EXTRA | DUMP_VIEW_EXTRA | PANEL_VALIDATION_EXTRA | NO_PORTAL_EXTRA | REDESIGN_EXTRA | MAXIMIZE_EXTRA | UX_POLISH_EXTRA
     # 原版对拍基线（ORIG_REF）漂移时上游会新增 key，对应本重写**没有**的功能/结构。
     # 搬运这些文案没有意义（没有代码会 t() 它们），故显式登记为「上游有、我们不做」。
     # 若将来真要做对应功能，把 key 从这里挪进 LOCAL_EXTRA 即可。
@@ -1889,8 +1915,8 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
           "R i18n key 名不得以标点结尾（疑似误建的新 key）",
           f"{[k for k in i18n_asset if k[-1:] in {':', '.', ',', ' ', '-', '_'}]}")
     # 本地补的 key 数量原本写死在 Rust 测试与此处两处，已漂移过一次。双向钉死。
-    check(len(LOCAL_EXTRA) == 14 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(DUMP_VIEW_EXTRA) + len(PANEL_VALIDATION_EXTRA) + len(NO_PORTAL_EXTRA) + len(REDESIGN_EXTRA),
-          "R 本地补的 i18n key 恰为 98 个", f"实际 {len(LOCAL_EXTRA)}")
+    check(len(LOCAL_EXTRA) == 14 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(DUMP_VIEW_EXTRA) + len(PANEL_VALIDATION_EXTRA) + len(NO_PORTAL_EXTRA) + len(REDESIGN_EXTRA) + len(MAXIMIZE_EXTRA) + len(UX_POLISH_EXTRA),
+          "R 本地补的 i18n key 恰为 113 个", f"实际 {len(LOCAL_EXTRA)}")
     cd = rd(CORE / "src/command.rs")
     # rustfmt 会把字段拆成多行，故用 DOTALL 匹配整个结构体字面量
     specs = re.findall(

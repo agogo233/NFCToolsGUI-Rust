@@ -47,8 +47,10 @@ const CJK_FONT_CANDIDATES: &[&str] = &[
 ];
 
 /// 原版窗口尺寸（`main.js` BrowserWindow）。
-const WIN_W: f32 = 1000.0;
-const WIN_H: f32 = 700.0;
+// 默认窗口 1366×800：≥1280 逻辑宽的首屏直接呈现三栏工作台
+// （响应式四档见 docs/design/ui-responsive-tiers-proposal.html）。
+const WIN_W: f32 = 1366.0;
+const WIN_H: f32 = 800.0;
 /// S15：可缩放后的最小尺寸（挡住「挤成一条」的极端尺寸）。
 const WIN_MIN_W: f32 = 820.0;
 const WIN_MIN_H: f32 = 640.0;

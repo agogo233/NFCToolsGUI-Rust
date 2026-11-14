@@ -1761,21 +1761,9 @@ fn card_registry(ui: &mut Ui, app: &mut NfcApp) -> bool {
                     .striped(true)
                     .show(ui, |ui| {
                         ui.label(RichText::new("UID").strong().size(12.0));
-                        ui.label(
-                            RichText::new(t("html_current_file"))
-                                .strong()
-                                .size(12.0),
-                        );
-                        ui.label(
-                            RichText::new(t("html_detect_summary"))
-                                .strong()
-                                .size(12.0),
-                        );
-                        ui.label(
-                            RichText::new(t("html_phw_card_no"))
-                                .strong()
-                                .size(12.0),
-                        );
+                        ui.label(RichText::new(t("html_current_file")).strong().size(12.0));
+                        ui.label(RichText::new(t("html_detect_summary")).strong().size(12.0));
+                        ui.label(RichText::new(t("html_phw_card_no")).strong().size(12.0));
                         ui.end_row();
                         for r in &registry.registry {
                             ui.label(
@@ -1798,7 +1786,9 @@ fn card_registry(ui: &mut Ui, app: &mut NfcApp) -> bool {
                             match dump {
                                 Some(f) => {
                                     if ui
-                                        .small_button(RichText::new(t("html_dump_editor")).size(11.0))
+                                        .small_button(
+                                            RichText::new(t("html_dump_editor")).size(11.0),
+                                        )
                                         .on_hover_text(f.clone())
                                         .clicked()
                                     {

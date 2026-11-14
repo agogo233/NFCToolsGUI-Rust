@@ -89,12 +89,9 @@ fn task_card(ui: &mut Ui, app: &mut NfcApp) {
         // P2-10：mfcuk 扇区游标进度（任务本身无进度行，从游标推导）。
         if let Some((cur, total)) = app.mfcuk_progress {
             ui.label(
-                RichText::new(format!(
-                    "{} {cur}/{total}",
-                    t("html_mfcuk_sector_progress")
-                ))
-                .size(11.0)
-                .color(paint.color(paint.text_secondary)),
+                RichText::new(format!("{} {cur}/{total}", t("html_mfcuk_sector_progress")))
+                    .size(11.0)
+                    .color(paint.color(paint.text_secondary)),
             );
         }
         ui.horizontal(|ui| {

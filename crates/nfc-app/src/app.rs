@@ -313,12 +313,7 @@ impl NfcApp {
     /// - mfcuk 进度：engine 侧解析 `RECOVER: 0 1 2 ...` 的扇区游标（见
     ///   `Engine::mfcuk_progress`），这里取来供任务卡画进度条。
     fn sync_task_flags(&mut self) {
-        if !self.write_done
-            && self
-                .state
-                .log_buffer
-                .contains(&t("log_msg_write_success"))
-        {
+        if !self.write_done && self.state.log_buffer.contains(&t("log_msg_write_success")) {
             self.write_done = true;
         }
         self.mfcuk_progress = self.engine.mfcuk_progress();
@@ -1628,6 +1623,11 @@ fn title_bar_drag_spans(bar: egui::Rect, blockers: &[egui::Rect]) -> Vec<egui::R
 
 // ───────────────────────────── 布局 ─────────────────────────────
 
+/// 当前视口是否最大化（读 winit 回传的窗口态；拿不到时按非最大化处理）。
+fn is_maximized(ctx: &egui::Context) -> bool {
+    ctx.input(|i| i.viewport().maximized.unwrap_or(false))
+}
+
 impl NfcApp {
     /// 主窗口内容。自绘标题栏故不用 egui 的 `TopBottomPanel`——
     /// 那会额外画一条分隔线，与原版「无边框、整体自绘」不符。
@@ -1639,30 +1639,40 @@ impl NfcApp {
             self.missing_tools_bar(ui);
         }
         self.guidance_bar(ui);
-        // 界面改版（docs/06）：三栏工作台。egui 0.36 的面板从父 Ui 切分空间
-        // （`Panel::show(self, ui, ..)`，见 egui containers/panel.rs；
-        // 0.36 起 SidePanel/TopBottomPanel 合并为 `egui::Panel`），
-        // CentralPanel 必须最后添加。可用宽不足 1280 时退化为纵向堆叠，
-        // 保证 820×640 最小窗口下扇区表仍有全宽可用。
-        let stacked = ui.available_rect_before_wrap().width() < 1280.0;
-        if stacked {
+        // 界面改版（docs/06）+ 响应式四档（docs/design/ui-responsive-tiers-proposal.html）。
+        // egui 0.36 的面板从父 Ui 切分空间（`Panel::show(self, ui, ..)`），
+        // CentralPanel 必须最后添加。按可用宽分四档：
+        //   ≥1280        标准三栏（左 236 / 右 340）
+        //   1060~1279    压缩三栏（右栏 clamp(280, 余量, 340)）
+        //   820~1059     图标条两栏（左 56 仅图标 + 右 280）
+        //   <820         纵向堆叠（820 为最小窗宽，此档兜底极端缩放环境）
+        let w = ui.available_rect_before_wrap().width();
+        if w < 820.0 {
             ScrollArea::vertical()
                 .id_salt("stacked-main")
                 .max_height(ui.available_height())
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
-                    crate::ui::ops_panel::draw(ui, self);
+                    crate::ui::ops_panel::draw(ui, self, false);
                     ui.add_space(8.0);
                     crate::ui::workbench::draw(ui, self, true);
                     ui.add_space(8.0);
                     crate::ui::rail::draw(ui, self, true);
                 });
         } else {
+            let icon_mode = w < 1060.0;
+            let rail_w = if w >= 1280.0 {
+                340.0
+            } else if icon_mode {
+                280.0
+            } else {
+                (w - 236.0 - 560.0).clamp(280.0, 340.0)
+            };
             egui::Panel::left("nfc-ops")
-                .exact_size(236.0)
-                .show(ui, |ui| crate::ui::ops_panel::draw(ui, self));
+                .exact_size(if icon_mode { 56.0 } else { 236.0 })
+                .show(ui, |ui| crate::ui::ops_panel::draw(ui, self, icon_mode));
             egui::Panel::right("nfc-rail")
-                .exact_size(340.0)
+                .exact_size(rail_w)
                 .show(ui, |ui| crate::ui::rail::draw(ui, self, false));
             egui::CentralPanel::default().show(ui, |ui| {
                 crate::ui::workbench::draw(ui, self, false);
@@ -1740,6 +1750,9 @@ impl NfcApp {
                         if close.clicked() {
                             self.close_requested = true;
                         }
+                        // 最大化/还原（自绘方块图标）；代码顺序 close → max → min
+                        // 在 right_to_left 布局下呈现为视觉上的「最小化 最大化 关闭」。
+                        blockers.push(self.maximize_button(ui).interact_rect);
                         let minimize = ui
                             .add_sized(
                                 [32.0, 24.0],
@@ -1772,6 +1785,12 @@ impl NfcApp {
             );
             if drag.drag_started_by(egui::PointerButton::Primary) {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
+            // 双击标题栏空白区切换最大化（Windows 桌面习惯；与最大化钮同一命令）。
+            if drag.double_clicked() {
+                let cur = is_maximized(ui.ctx());
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::Maximized(!cur));
             }
         }
     }
@@ -1814,6 +1833,58 @@ impl NfcApp {
         let resp = resp.on_hover_text(tip);
         if resp.clicked() {
             self.cycle_theme();
+        }
+        resp
+    }
+
+    /// 标题栏最大化 / 还原钮。自绘方块图标（最大化=单框、还原=前后双框），
+    /// 不依赖系统字体的 ❐/□ 字形（跨平台字体覆盖不稳，与主题小圆钮同一思路）。
+    /// 点击发 `ViewportCommand::Maximized`，当前态读 winit 回传的视口信息。
+    fn maximize_button(&self, ui: &mut Ui) -> egui::Response {
+        let paint = self.paint();
+        let maximized = is_maximized(ui.ctx());
+        let (rect, resp) = ui.allocate_exact_size(egui::vec2(30.0, 26.0), egui::Sense::click());
+        let painter = ui.painter();
+        let stroke = egui::Stroke::new(1.5, paint.color(paint.text));
+        if maximized {
+            // 还原态：左上后框 + 右下前框（前框先垫底色遮住后框重叠段）。
+            let back =
+                egui::Rect::from_min_size(rect.min + egui::vec2(7.0, 3.0), egui::vec2(12.0, 12.0));
+            let front =
+                egui::Rect::from_min_size(rect.min + egui::vec2(4.0, 6.0), egui::vec2(12.0, 12.0));
+            painter.rect_stroke(
+                back,
+                egui::CornerRadius::same(2u8),
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            painter.rect_filled(front, 2.0, paint.color(paint.surface));
+            painter.rect_stroke(
+                front,
+                egui::CornerRadius::same(2u8),
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+        } else {
+            let square = egui::Rect::from_min_size(
+                rect.center() - egui::vec2(6.0, 6.0),
+                egui::vec2(12.0, 12.0),
+            );
+            painter.rect_stroke(
+                square,
+                egui::CornerRadius::same(2u8),
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+        }
+        let resp = resp.on_hover_text(t(if maximized {
+            "html_restore"
+        } else {
+            "html_maximize"
+        }));
+        if resp.clicked() {
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
         }
         resp
     }
