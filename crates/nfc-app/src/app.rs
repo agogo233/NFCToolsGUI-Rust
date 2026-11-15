@@ -1694,6 +1694,8 @@ impl NfcApp {
         let paint = self.paint();
         Frame::NONE
             .fill(paint.color(paint.danger))
+            // 与引导条（RADIUS[1]）统一，避免同为通栏提示条却一圆一直。
+            .corner_radius(egui::CornerRadius::same(nfc_core::theme::RADIUS[1] as u8))
             .inner_margin(egui::Margin::symmetric(8, 6))
             .show(ui, |ui| {
                 ui.vertical(|ui| {
@@ -1721,6 +1723,8 @@ impl NfcApp {
         let mut blockers: Vec<egui::Rect> = Vec::new();
         let bar = Frame::NONE
             .fill(paint.color(paint.toolbar))
+            // 顶部两角随系统窗口圆角自然收边，避免标题栏直角割裂观感。
+            .corner_radius(egui::CornerRadius::same(nfc_core::theme::RADIUS[1] as u8))
             .inner_margin(egui::Margin::symmetric(10, 6))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -1918,6 +1922,9 @@ impl NfcApp {
             .add_enabled_ui(!self.connecting_now(), |ui| {
                 egui::ComboBox::from_id_salt("usb-port")
                     .width(220.0)
+                    // width 只是最小宽：长设备名会把按钮撑宽、挤爆标题栏，
+                    // truncate 锁死在 220 内（全名在弹开列表里可见）。
+                    .truncate()
                     .selected_text(
                         current
                             .as_deref()

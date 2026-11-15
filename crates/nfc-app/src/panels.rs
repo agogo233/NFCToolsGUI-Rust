@@ -686,6 +686,9 @@ pub fn show(ctx: &Context, app: &mut NfcApp) {
         let mut win = egui::Window::new(t(p.title()))
             .resizable(p.resizable())
             .collapsible(false)
+            // 点击标题栏 ✕ 后快速淡出（egui 自带 ✕ 无背景按压反馈，
+            // 淡出动画补上「点了有反应」的观感）。依赖 `.open(&mut open)`。
+            .fade_out(true)
             .default_size([w, h])
             .min_width(320.0)
             .min_height(160.0)
@@ -1248,12 +1251,13 @@ fn phone_wristband(ui: &mut Ui, app: &mut NfcApp) -> bool {
     scroll_body(ui, 56.0, |ui| {
         egui::Frame::NONE
             .fill(paint.color(paint.surface2))
-            .corner_radius(CornerRadius::same(nfc_core::theme::RADIUS[0] as u8))
-            .inner_margin(Margin::symmetric(8, 6))
+            .corner_radius(egui::CornerRadius::same(nfc_core::theme::RADIUS[0] as u8))
+            .inner_margin(egui::Margin::symmetric(8, 6))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(t("html_phw_card_no")).strong());
-                    ui.label(RichText::new(&card_no).monospace());
+                    // 32 位 hex 压线面板宽度，截断防溢出（卡号定长，正常不截）。
+                    ui.label(RichText::new(&card_no).monospace().truncate());
                 });
             });
 
@@ -1393,7 +1397,7 @@ fn dump_editor(ui: &mut Ui, app: &mut NfcApp) -> bool {
                 // 替代行尾「!」——框住比一个感叹号更难看漏
                 let mut frame = egui::Frame::NONE
                     .inner_margin(egui::Margin::symmetric(6, 4))
-                    .corner_radius(egui::CornerRadius::same(4));
+                    .corner_radius(egui::CornerRadius::same(nfc_core::theme::RADIUS[0] as u8));
                 if invalid {
                     frame = frame.stroke(egui::Stroke::new(1.5, danger));
                 }
@@ -1511,7 +1515,11 @@ fn dump_editor(ui: &mut Ui, app: &mut NfcApp) -> bool {
         .clone()
         .unwrap_or_else(|| "-".to_owned());
     ui.horizontal(|ui| {
-        ui.label(format!("{}{name}", t("html_current_file")));
+        // 文件名可能很长（含用户自定义名），截断防溢出，全名悬停可见。
+        ui.label(
+            RichText::new(format!("{}{name}", t("html_current_file"))).truncate(),
+        )
+        .on_hover_text(&name);
         // 显示方式切换（docs/02 §6.40）：连续 hex ↔ 每字节空一格的大写。
         // 放在文件条上而不是按钮行——底部已 7 个按钮且窄窗口会换行，
         // 再加一个只会更挤；且它属于「怎么显示」，和打开 / 保存 / 写卡
@@ -1630,26 +1638,26 @@ fn dump_comparator(ui: &mut Ui, app: &mut NfcApp) -> bool {
     // 顶部选文件条（`dumpComparator.html:12-18`）
     ui.horizontal(|ui| {
         ui.label(format!("{} (A): ", t("html_dump")));
-        ui.label(
-            app.forms
-                .comparator
-                .a_name
-                .clone()
-                .unwrap_or_else(|| t("html_choose_file")),
-        );
+        let name = app
+            .forms
+            .comparator
+            .a_name
+            .clone()
+            .unwrap_or_else(|| t("html_choose_file"));
+        ui.label(RichText::new(&name).truncate()).on_hover_text(name);
         if ui.button("…").clicked() {
             app.exec("dump-comparator-choose-file", Some("A".to_owned()));
         }
     });
     ui.horizontal(|ui| {
         ui.label(format!("{} (B): ", t("html_dump")));
-        ui.label(
-            app.forms
-                .comparator
-                .b_name
-                .clone()
-                .unwrap_or_else(|| t("html_choose_file")),
-        );
+        let name = app
+            .forms
+            .comparator
+            .b_name
+            .clone()
+            .unwrap_or_else(|| t("html_choose_file"));
+        ui.label(RichText::new(&name).truncate()).on_hover_text(name);
         if ui.button("…").clicked() {
             app.exec("dump-comparator-choose-file", Some("B".to_owned()));
         }

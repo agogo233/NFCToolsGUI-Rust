@@ -3,7 +3,7 @@
 //! 全部由原底部控制台区迁入：`log_view` 尾部窗口渲染、自动滚动、
 //! 事件上限（`EVENT_MAX`，定义在 `app.rs` 的 `NfcApp::push_event` 侧）等行为保持不变。
 
-use egui::{Align, Frame, Layout, RichText, ScrollArea, Ui};
+use egui::{Align, Frame, Layout, RichText, ScrollArea, Sense, Ui};
 
 use nfc_core::i18n::t;
 use nfc_core::state::DeviceState;
@@ -102,7 +102,8 @@ fn task_card(ui: &mut Ui, app: &mut NfcApp) {
             } else {
                 app.state.status.text.clone()
             };
-            ui.label(text);
+            // 工具输出文本长度不可控，截断防溢出，全名走悬停提示。
+            ui.label(RichText::new(&text).truncate()).on_hover_text(text);
             if let Some(p) = app.dialogs_host.pending_purpose() {
                 dialogs_ui::pending_hint(ui, p.pending_text());
             }
@@ -168,14 +169,22 @@ fn events_card(ui: &mut Ui, app: &mut NfcApp) {
                 // P2-12：转储保存类事件可点击 → 打开转储编辑器载入该 dump。
                 let mut open_dump: Option<String> = None;
                 let saved_prefix = t("event_dump_saved");
-                for e in app.state.events.iter().rev() {
+                for (k, e) in app.state.events.iter().rev().enumerate() {
                     let color = event_color(app.theme, e.kind);
+                    let row = ui.horizontal(|ui| {
+                        ui.colored_label(color, RichText::new("●").size(7.0));
+                        // 事件文本长度不可控，截断防溢出；全名走悬停提示。
+                        ui.label(RichText::new(&e.text).size(12.0).truncate());
+                    });
+                    // 子 Ui 的 response 固定 `Sense::hover`，`clicked()` 恒为
+                    // false（P2-12 的点击因此从未生效）；用 interact 以整行
+                    // 矩形注册点击区。
                     let resp = ui
-                        .horizontal(|ui| {
-                            ui.colored_label(color, RichText::new("●").size(7.0));
-                            ui.label(RichText::new(&e.text).size(12.0));
-                        })
-                        .response
+                        .interact(
+                            row.response.rect,
+                            egui::Id::new("rail-event").with(k),
+                            Sense::click(),
+                        )
                         .on_hover_text(&e.text);
                     // 只有「转储文件已保存: <名>」这类 success 事件可点；
                     // 文件名取前缀之后的部分，且必须仍在 dump_history 里
@@ -212,7 +221,8 @@ fn console_card(ui: &mut Ui, app: &mut NfcApp, stacked: bool) {
         .corner_radius(egui::CornerRadius::same(theme::RADIUS[0] as u8))
         .inner_margin(egui::Margin::symmetric(8, 6))
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
+            // 自动换行：窄档右栏放不下「标题 + 复选框 + 3 个按钮」一行。
+            ui.horizontal_wrapped(|ui| {
                 ui.label(
                     RichText::new(t("html_console"))
                         .strong()

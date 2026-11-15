@@ -5,7 +5,7 @@
 //! 四组；不新增、不删减任何 action。危险操作改为红描边 + 警示图标的
 //! 独立样式（已确认的设计决策）。
 
-use egui::{Align, Frame, Layout, RichText, Ui};
+use egui::{Align, Frame, Layout, RichText, ScrollArea, Ui};
 
 use nfc_core::i18n::t;
 use nfc_core::theme;
@@ -167,11 +167,19 @@ pub const GROUPS: &[GroupDef] = &[
 
 /// 画左栏全部分组。`icon_mode` 为真时压成 56px 图标条：
 /// 按钮只留一个代表字（悬停给全名 + 提示），组头只留步骤徽标。
+///
+/// 整栏包滚动区：窗口偏矮时（标题栏 + 引导条占掉头部后）底部分组
+/// （如「更多操作」）不再被裁剪，可滚动查看；内容不超高时无滚动条。
 pub fn draw(ui: &mut Ui, app: &mut NfcApp, icon_mode: bool) {
-    for g in GROUPS {
-        group_card(ui, app, g, icon_mode);
-        ui.add_space(8.0);
-    }
+    ScrollArea::vertical()
+        .id_salt("ops-panel-scroll")
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            for g in GROUPS {
+                group_card(ui, app, g, icon_mode);
+                ui.add_space(8.0);
+            }
+        });
 }
 
 /// 图标条模式下每个动作的代表字（窄窗 56px 左栏用；悬停仍给全名）。
@@ -226,7 +234,7 @@ fn group_head(ui: &mut Ui, app: &NfcApp, g: &GroupDef, icon_mode: bool) {
     if icon_mode {
         ui.vertical_centered(|ui| {
             let (rect, _) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
-            ui.painter().rect_filled(rect, 6.0, paint.color(bg));
+            ui.painter().rect_filled(rect, theme::RADIUS[0], paint.color(bg));
             ui.painter().text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
@@ -239,7 +247,7 @@ fn group_head(ui: &mut Ui, app: &NfcApp, g: &GroupDef, icon_mode: bool) {
     }
     ui.horizontal(|ui| {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
-        ui.painter().rect_filled(rect, 6.0, paint.color(bg));
+        ui.painter().rect_filled(rect, theme::RADIUS[0], paint.color(bg));
         ui.painter().text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
@@ -298,11 +306,11 @@ fn action_button(ui: &mut Ui, app: &mut NfcApp, b: &BtnDef, icon_mode: bool) {
         };
         let (rect, resp) = ui.allocate_exact_size(egui::vec2(38.0, 30.0), egui::Sense::click());
         let painter = ui.painter();
-        painter.rect_filled(rect, 6.0, paint.color(fill));
+        painter.rect_filled(rect, theme::RADIUS[0], paint.color(fill));
         if let Some((sw, sc)) = stroke {
             painter.rect_stroke(
                 rect,
-                egui::CornerRadius::same(6u8),
+                egui::CornerRadius::same(theme::RADIUS[0] as u8),
                 egui::Stroke::new(sw, paint.color(sc)),
                 egui::StrokeKind::Inside,
             );

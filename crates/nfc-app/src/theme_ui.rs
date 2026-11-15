@@ -122,6 +122,9 @@ impl Paint {
 
         // 边框
         v.window_stroke = Stroke::new(1.0, self.color(self.border));
+        // 浮动窗圆角与卡片（RADIUS[1]）统一；egui 默认 6px 偏碎。
+        // 注：egui 仍会把展开窗口标题栏的底部两角置直角（window.rs 内部行为）。
+        v.window_corner_radius = CornerRadius::same(RADIUS[1] as u8);
         // 每个状态桶各自带 bg_stroke / corner_radius / expansion（`Widgets`
         // 本身只存 5 个状态，不存这些字段）。
         let radius = CornerRadius::same(RADIUS[0] as u8);
@@ -146,13 +149,16 @@ impl Paint {
         v.widgets.inactive.weak_bg_fill = self.color(self.surface);
         v.widgets.inactive.fg_stroke = Stroke::new(1.0, self.color(self.text));
 
+        // hovered/active 的前景线条加粗：egui 浮窗标题栏 ✕ 只画两条线、
+        // 无背景反馈，线宽变化让它悬停/按下时「有反应」。线宽不影响
+        // 文本（文字只取颜色），副作用仅限图标线条。
         v.widgets.hovered.bg_fill = self.color(self.button_hover_bg);
         v.widgets.hovered.weak_bg_fill = self.color(self.button_hover_bg);
-        v.widgets.hovered.fg_stroke = Stroke::new(1.0, self.color(self.button_hover_text));
+        v.widgets.hovered.fg_stroke = Stroke::new(1.6, self.color(self.button_hover_text));
 
         v.widgets.active.bg_fill = self.color(self.primary_active);
         v.widgets.active.weak_bg_fill = self.color(self.primary_active);
-        v.widgets.active.fg_stroke = Stroke::new(1.0, self.color(self.button_hover_text));
+        v.widgets.active.fg_stroke = Stroke::new(1.6, self.color(self.button_hover_text));
 
         v.widgets.open.bg_fill = self.color(self.hover_overlay);
         v.widgets.open.weak_bg_fill = self.color(self.hover_overlay);

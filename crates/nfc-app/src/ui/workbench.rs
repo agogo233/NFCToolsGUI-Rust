@@ -4,7 +4,7 @@
 //! 磁盘文件仍在与否；密钥已知 / 未知状态按逻辑扇区从 `AppState` 派生，
 //! 破解命中后（`unknown_key_info` 移除）行色与明文随之刷新，零额外状态。
 
-use egui::{Align, Color32, Frame, Label, Layout, RichText, ScrollArea, Ui};
+use egui::{Align, Color32, CursorIcon, Frame, Label, Layout, RichText, ScrollArea, Sense, Ui};
 
 use nfc_core::i18n::t;
 use nfc_core::model::{dump, dumpcheck, hex};
@@ -417,7 +417,16 @@ fn editor_body(ui: &mut Ui, app: &mut NfcApp) {
                     cell(ui, key_w, &kb_text, paint.color(kb_color), true);
                     cell(ui, 44.0, &tag, paint.color(tag_color), false);
                 });
-                if row.response.clicked() {
+                // 子 Ui 的 response 固定 `Sense::hover`，`clicked()` 恒为 false，
+                // 展开详情从未生效过；用 interact 以整行矩形注册点击区。
+                let click = ui
+                    .interact(
+                        row.response.rect,
+                        egui::Id::new("sector-row").with(i),
+                        Sense::click(),
+                    )
+                    .on_hover_cursor(CursorIcon::PointingHand);
+                if click.clicked() {
                     toggle = Some(i);
                 }
             }
@@ -448,24 +457,39 @@ fn cell(ui: &mut Ui, w: f32, text: &str, color: Color32, mono: bool) {
 fn detail(ui: &mut Ui, app: &mut NfcApp, i: usize, groups: usize, g: &[String], has_trailer: bool) {
     let paint = app.paint();
     let base = dump::group_first_block(i, groups);
+    let logical = dump::group_to_sector(i, groups);
     // P2-11：行级快捷操作（复制单块 / 整组 hex）。egui 闭包里拿不到 &mut app，
     // 先记下要复制的文本，Frame 结束后统一 copy + 记事件。
     let mut copied: Option<String> = None;
     Frame::NONE
         .fill(paint.color(paint.surface2))
+        // 外层卡片是 RADIUS[1]；内嵌块补小一号圆角，避免直角嵌在圆角卡片里。
+        .corner_radius(egui::CornerRadius::same(theme::RADIUS[0] as u8))
+        .inner_margin(egui::Margin::symmetric(8, 6))
         .show(ui, |ui| {
             for (j, line) in g.iter().enumerate() {
+                let is_trailer = has_trailer && j == 3;
+                let kind = if is_trailer {
+                    t("html_block_kind_trailer")
+                } else {
+                    t("html_block_kind_data")
+                };
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new(format!("{} {}", t("html_block"), base + j))
+                        RichText::new(format!("{}{} · {}", t("html_block"), base + j, kind))
                             .size(11.0)
                             .color(paint.color(paint.text_secondary)),
                     );
-                    ui.label(
-                        RichText::new(spaced(line))
-                            .size(12.0)
-                            .font(egui::FontId::monospace(12.0)),
-                    );
+                    if is_trailer {
+                        trailer_segments(ui, app, logical, line);
+                    } else {
+                        ui.label(
+                            RichText::new(spaced(line))
+                                .size(12.0)
+                                .font(egui::FontId::monospace(12.0))
+                                .truncate(),
+                        );
+                    }
                     if ui
                         .small_button(RichText::new(t("html_copy")).size(11.0))
                         .on_hover_text(t("html_tip_copy_hex"))
@@ -495,8 +519,52 @@ fn detail(ui: &mut Ui, app: &mut NfcApp, i: usize, groups: usize, g: &[String], 
     }
 }
 
-/// ACL 权限解读：算法与 `dumpcheck::check_trailer_access` 同源
-/// （前向 + 反向解码，一致才有效）；逐块给出人话权限。
+/// 尾块行分段着色：KeyA（前 6 字节）/ ACL+GPB（第 7–10 字节）/ KeyB（后 6 字节）。
+/// 已知密钥绿色、未知黄色（与扇区表的密钥图例同色）；ACL 段用品牌色。
+fn trailer_segments(ui: &mut Ui, app: &NfcApp, logical: usize, line: &str) {
+    let paint = app.paint();
+    let mono = |s: String, c: Color32| {
+        RichText::new(s)
+            .size(12.0)
+            .color(c)
+            .font(egui::FontId::monospace(12.0))
+    };
+    let Ok(b) = hex::hex_decode(line) else {
+        ui.label(mono(spaced(line), paint.color(paint.text)));
+        return;
+    };
+    // 非标准尾块长度（手改过的 dump）不做分段，整行原样显示。
+    if b.len() < 16 {
+        ui.label(mono(spaced(line), paint.color(paint.text)));
+        return;
+    }
+    let known = |ty: KeyType| {
+        app.state
+            .known_key_info
+            .iter()
+            .any(|(_, s, k)| *s as usize == logical && *k == ty)
+    };
+    let ka = if known(KeyType::A) {
+        theme::STATUS_OK
+    } else {
+        theme::STATUS_WARN
+    };
+    let kb = if known(KeyType::B) {
+        theme::STATUS_OK
+    } else {
+        theme::STATUS_WARN
+    };
+    ui.label(mono(spaced_bytes(&b[0..6]), paint.color(ka)))
+        .on_hover_text(t("html_seg_key_a"));
+    ui.label(mono(spaced_bytes(&b[6..10]), paint.color(paint.primary)))
+        .on_hover_text(t("html_seg_acl"));
+    ui.label(mono(spaced_bytes(&b[10..16]), paint.color(kb)))
+        .on_hover_text(t("html_seg_key_b"));
+}
+
+/// ACL 权限解读（方案 B · 表格大白话）：算法与 `dumpcheck::check_trailer_access`
+/// 同源（前向 + 反向解码，一致才有效）。每块给「看 / 改」两列白话权限，
+/// C 值以次要色小字保留供对照；尾块单独说明「存的是钥匙和权限表本身」。
 fn acl_box(ui: &mut Ui, app: &NfcApp, trailer: &str) {
     let paint = app.paint();
     let Some(b) = hex::hex_decode(trailer).ok().filter(|b| b.len() >= 10) else {
@@ -528,22 +596,61 @@ fn acl_box(ui: &mut Ui, app: &NfcApp, trailer: &str) {
             t("html_acl_ok")
         ))
         .size(11.0)
-        .color(paint.color(paint.text_secondary)),
+        .strong(),
     );
+    ui.label(
+        RichText::new(t("html_acl_intro"))
+            .size(11.0)
+            .color(paint.color(paint.text_secondary)),
+    );
+    let cval = |c: u8| {
+        RichText::new(format!("C={c}"))
+            .size(10.0)
+            .color(paint.color(paint.text_secondary))
+            .font(egui::FontId::monospace(10.0))
+    };
     for (j, &c) in d.forward.iter().enumerate() {
-        let perm = if j < 3 {
-            t(&format!("html_acl_data_perm_{c}"))
+        if j < 3 {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(format!("{}{} · {}", t("html_block"), j, t("html_block_kind_data")))
+                        .size(11.0)
+                        .color(paint.color(paint.text_secondary))
+                        .font(egui::FontId::monospace(11.0)),
+                );
+                ui.label(cval(c));
+                ui.label(
+                    RichText::new(format!(
+                        "{}：{} ｜ {}：{}",
+                        t("html_acl_see"),
+                        t(&format!("html_acl_data_read_{c}")),
+                        t("html_acl_edit"),
+                        t(&format!("html_acl_data_write_{c}"))
+                    ))
+                    .size(11.0),
+                );
+            });
         } else {
-            t(&format!("html_acl_trailer_perm_{c}"))
-        };
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(format!("{}{} C={}", t("html_block"), j, c))
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "{}{} · {}",
+                        t("html_block"),
+                        j,
+                        t("html_block_kind_trailer")
+                    ))
                     .size(11.0)
                     .color(paint.color(paint.text_secondary))
                     .font(egui::FontId::monospace(11.0)),
+                );
+                ui.label(cval(c));
+            });
+            ui.label(
+                RichText::new(t("html_acl_trailer_note"))
+                    .size(11.0)
+                    .color(paint.color(paint.text_secondary)),
             );
-            ui.label(RichText::new(perm).size(11.0));
-        });
+            ui.label(RichText::new(t(&format!("html_acl_trailer_perm_{c}"))).size(11.0));
+        }
     }
 }

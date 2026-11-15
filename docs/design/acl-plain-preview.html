@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ACL 展示改造预览 · 现状 vs 白话化定稿（方案 B）</title>
+<style>
+:root{
+  --primary:#4168cf; --bg:#f7f8fa; --surface:#ffffff; --surface2:#f4f5fc;
+  --text:#27282d; --text2:#6b6f76; --border:#e6e8ee; --divider:#d8dae0;
+  --ok:#2f9e57; --warn:#a89a2e; --err:#cf4152; --uid:#7742b8;
+  --radius:10px; --radius-sm:8px;
+  --mono:ui-monospace,'Source Code Pro','Cascadia Mono',Consolas,monospace;
+}
+[data-theme="dark"]{
+  --primary:#5b7fd6; --bg:#14181f; --surface:#1e232c; --surface2:#28303c;
+  --text:#e2e4e8; --text2:#9aa0aa; --border:#2c3440; --divider:#3a4351;
+  --ok:#54ad6c; --warn:#c9c356; --err:#e0616f; --uid:#b18cea;
+}
+*{box-sizing:border-box}
+body{margin:0;padding:24px;background:var(--bg);color:var(--text);
+  font:14px/1.6 system-ui,-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif}
+h1{font-size:18px;margin:0 0 4px}
+.sub{color:var(--text2);font-size:12px;margin-bottom:18px}
+.theme-btn{float:right;border:1px solid var(--border);border-radius:99px;padding:3px 12px;
+  color:var(--text2);font-size:12px;background:var(--surface)}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:1180px}
+@media(max-width:900px){.grid{grid-template-columns:1fr}}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px}
+.card h2{font-size:14px;margin:0 0 2px}
+.card .desc{font-size:12px;color:var(--text2);margin:0 0 12px}
+.tag{display:inline-block;font-size:11px;border-radius:99px;padding:1px 8px;margin-left:6px;vertical-align:2px}
+.tag.now{background:var(--surface2);color:var(--text2)}
+.tag.prop{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok)}
+.example{border-top:1px dashed var(--divider);margin-top:14px;padding-top:12px}
+.example h3{font-size:12px;color:var(--text2);margin:0 0 8px;font-weight:600}
+/* --- 现状：原型 aclBox 样式（ui-redesign-proposal-v2.html L194-199） --- */
+.acl-box{margin-top:6px;padding-top:6px;border-top:1px dashed var(--divider);font-size:12px}
+.acl-box b{color:var(--text)}
+.acl-box .bad{color:var(--err)}
+.acl-line{font-family:system-ui}
+/* --- 定稿（方案 B）--- */
+.acl-title{font-weight:600;color:var(--text)}
+.acl-intro{font-size:12px;color:var(--text2);margin:4px 0 2px}
+.perm-row{font-size:12px;margin-top:4px}
+.perm-row .bno{font-family:var(--mono);color:var(--text2)}
+.perm-row .cval{font-family:var(--mono);color:var(--primary);font-size:11px}
+.perm-row .col{color:var(--text)}
+.perm-row .k{color:var(--text2)}
+.perm-note{font-size:12px;color:var(--text2);margin-top:4px}
+.perm-verdict{font-size:12px;color:var(--text);margin-top:4px}
+/* --- 尾块分段着色（详情区） --- */
+.blk{display:flex;gap:8px;align-items:baseline;font-size:12px;margin-top:3px}
+.blk .bno{font-family:var(--mono);color:var(--text2);flex:none;width:96px}
+.blk .seg{font-family:var(--mono);letter-spacing:.5px}
+.seg.ka-known{color:var(--ok)}
+.seg.ka-unknown{color:var(--warn)}
+.seg.acl{color:var(--primary)}
+.seg.kb-known{color:var(--ok)}
+.seg.kb-unknown{color:var(--warn)}
+.seg-note{font-size:11px;color:var(--text2);margin:4px 0 0 104px}
+.legend{display:inline-flex;align-items:center;gap:4px;margin-right:12px;font-size:11px;color:var(--text2)}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+</style>
+</head>
+<body>
+<button class="theme-btn" onclick="document.documentElement.dataset.theme=document.documentElement.dataset.theme==='dark'?'':'dark'">明 / 暗</button>
+<h1>ACL 展示改造预览（定稿 · 方案 B）</h1>
+<div class="sub">左＝现状（原型 v2 的 aclBox，当前 Rust 实现同款文案）｜右＝定稿：表格大白话，C 值次要位置保留。数据示例：扇区 0 出厂默认 ACL = FF 07 80 (GPB 69)、值块保护 ACL = 08 77 8F。</div>
+
+<div class="grid">
+  <!-- ================= 现状 ================= -->
+  <div class="card">
+    <h2>现状<span class="tag now">原型 v2 / 当前实现</span></h2>
+    <p class="desc">「前向=反向，校验通过」「读 A|B · 写 ✕」等术语直接暴露，不解释 ACL 是什么、A|B 是什么。</p>
+
+    <div class="example">
+      <h3>例 1 · 出厂默认 ACL（FF 07 80）</h3>
+      <div class="acl-box">
+        <div class="acl-line"><b>ACL FF 07 80</b> · 权限解读（前向=反向，校验通过）</div>
+        <div class="acl-line">块0 C=0：读 A|B · 写 A|B（传输配置）</div>
+        <div class="acl-line">块1 C=0：读 A|B · 写 A|B（传输配置）</div>
+        <div class="acl-line">块2 C=0：读 A|B · 写 A|B（传输配置）</div>
+        <div class="acl-line">块3 C=1：KeyA 不可读·可写(A)｜ACL 读(A)·写 ✕｜KeyB 读(A)·写 ✕</div>
+      </div>
+    </div>
+
+    <div class="example">
+      <h3>例 2 · 值块保护 ACL（08 77 8F）</h3>
+      <div class="acl-box">
+        <div class="acl-line"><b>ACL 08 77 8F</b> · 权限解读（前向=反向，校验通过）</div>
+        <div class="acl-line">块0 C=6：读 B · 写 ✕</div>
+        <div class="acl-line">块1 C=6：读 B · 写 ✕</div>
+        <div class="acl-line">块2 C=6：读 B · 写 ✕</div>
+        <div class="acl-line">块3 C=3：KeyA 不可读写｜ACL 读(A|B)·写 ✕｜KeyB 不可读写</div>
+      </div>
+    </div>
+
+    <div class="example">
+      <h3>例 3 · 全 0 尾块（损坏）</h3>
+      <div class="acl-box">
+        <div class="acl-line bad"><b>ACL 已损坏</b>：前向解码 [0,0,0,0] ≠ 反向 [7,7,7,7]（AclCorrupt，编辑器会提供一键修复）</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= 定稿 ================= -->
+  <div class="card">
+    <h2>定稿<span class="tag prop">方案 B · 表格大白话 · 保留 C 值</span></h2>
+    <p class="desc">先一句话说清 ACL 是什么；每块给「看 / 改」两列白话权限；C 值灰色小字保留供懂行的人对照。</p>
+
+    <div class="example">
+      <h3>例 1 · 出厂默认 ACL（FF 07 80）</h3>
+      <div class="acl-box">
+        <div class="acl-title">ACL FF 07 80 · 校验一致（有效）</div>
+        <div class="acl-intro">这个扇区有两把钥匙：KeyA 和 KeyB。ACL 是权限表，规定每块用哪把钥匙能“看”（读）、能“改”（写）。</div>
+        <div class="perm-row"><span class="bno">块0 · 数据</span> <span class="cval">C=0</span> ｜ <span class="k">看：</span><span class="col">A、B 都可以</span> ｜ <span class="k">改：</span><span class="col">A、B 都可以（默认）</span></div>
+        <div class="perm-row"><span class="bno">块1 · 数据</span> <span class="cval">C=0</span> ｜ <span class="k">看：</span><span class="col">A、B 都可以</span> ｜ <span class="k">改：</span><span class="col">A、B 都可以（默认）</span></div>
+        <div class="perm-row"><span class="bno">块2 · 数据</span> <span class="cval">C=0</span> ｜ <span class="k">看：</span><span class="col">A、B 都可以</span> ｜ <span class="k">改：</span><span class="col">A、B 都可以（默认）</span></div>
+        <div class="perm-row"><span class="bno">块3 · 尾块</span> <span class="cval">C=1</span></div>
+        <div class="perm-note">块 3 是特殊块：里面放的是两把钥匙和这张权限表本身。</div>
+        <div class="perm-verdict">KeyA：读不出（设计如此），可用 A 写 ｜ 权限表：用 A 能看、不能改 ｜ KeyB：用 A 能看、不能改</div>
+      </div>
+    </div>
+
+    <div class="example">
+      <h3>例 2 · 值块保护 ACL（08 77 8F）</h3>
+      <div class="acl-box">
+        <div class="acl-title">ACL 08 77 8F · 校验一致（有效）</div>
+        <div class="acl-intro">这个扇区有两把钥匙：KeyA 和 KeyB。ACL 是权限表，规定每块用哪把钥匙能“看”（读）、能“改”（写）。</div>
+        <div class="perm-row"><span class="bno">块0 · 数据</span> <span class="cval">C=6</span> ｜ <span class="k">看：</span><span class="col">仅 B</span> ｜ <span class="k">改：</span><span class="col">都不能</span></div>
+        <div class="perm-row"><span class="bno">块1 · 数据</span> <span class="cval">C=6</span> ｜ <span class="k">看：</span><span class="col">仅 B</span> ｜ <span class="k">改：</span><span class="col">都不能</span></div>
+        <div class="perm-row"><span class="bno">块2 · 数据</span> <span class="cval">C=6</span> ｜ <span class="k">看：</span><span class="col">仅 B</span> ｜ <span class="k">改：</span><span class="col">都不能</span></div>
+        <div class="perm-row"><span class="bno">块3 · 尾块</span> <span class="cval">C=3</span></div>
+        <div class="perm-note">块 3 是特殊块：里面放的是两把钥匙和这张权限表本身。</div>
+        <div class="perm-verdict">KeyA：读不出、不能写 ｜ 权限表：A、B 都能看、不能改 ｜ KeyB：读不出、不能写</div>
+      </div>
+    </div>
+
+    <div class="example">
+      <h3>例 3 · 全 0 尾块（损坏）</h3>
+      <div class="acl-box">
+        <div class="acl-line bad"><b>ACL 已损坏</b>：权限数据前后对不上（被写坏或被故意锁死），可在转储编辑器修复</div>
+        <div class="acl-line bad">[0,0,0,0] ≠ [7,7,7,7]</div>
+      </div>
+    </div>
+
+    <div class="example">
+      <h3>附 · 展开详情的尾块分段着色（同批改造）</h3>
+      <div class="blk"><span class="bno">块3 · 尾块</span><span class="seg ka-known">A0 A1 A2 A3 A4 A5</span><span class="seg acl">　FF 07 80 69　</span><span class="seg kb-unknown">?? ?? ?? ?? ?? ??</span></div>
+      <div class="seg-note">
+        <span class="legend"><span class="dot" style="background:var(--ok)"></span>已知密钥（绿色）</span>
+        <span class="legend"><span class="dot" style="background:var(--warn)"></span>未知密钥（黄色）</span>
+        <span class="legend"><span class="dot" style="background:var(--primary)"></span>ACL + GPB（蓝色）</span><br>
+        悬停提示：前 6 字节 = KeyA（设计上永远读不出来）｜第 7–10 字节 = 访问控制位 ACL + 通用目的字节 GPB｜后 6 字节 = KeyB
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
