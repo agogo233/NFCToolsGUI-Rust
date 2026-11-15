@@ -438,12 +438,39 @@ impl NfcToolRunner {
     }
 }
 
+impl Drop for NfcToolRunner {
+    fn drop(&mut self) {
+        // 进程退出兜底：runner 随 `Engine` 析构时若仍有 job 在跑（如关窗确认
+        // 后程序退出），必须 kill 子进程——否则 mfoc 等会变成孤儿继续占用
+        // 串口，下次启动连接必报 "Unable to open NFC device"。kill 后尽力
+        // `try_wait` 回收；正常路径由 `exit` / `start` 回收，这里只为极端
+        // 收尾路径保底。
+        if let Some(job) = self.job.as_mut() {
+            if let Ok(mut g) = job.child.lock() {
+                if let Some(c) = g.as_mut() {
+                    let _ = c.kill();
+                    let _ = c.try_wait();
+                }
+            }
+        }
+    }
+}
+
 impl ToolRunner for NfcToolRunner {
     fn start(&mut self, tool: &str, args: &[String], gs: &GateState) -> Result<(), ToolError> {
         gate(tool, *gs)?;
         // 上一个 job 已被 kill：它正在退出，不该再挡住新任务。直接丢掉旧 job
         //（reader 线程随管道关闭自行结束），新一轮照常 spawn。
         if self.killed {
+            // 丢弃前尽力 reap 一次：kill 后进程通常已退，`try_wait` 即可收走
+            // 尸体，避免 Unix 上短暂残留 zombie（正常路径由 `exit` 回收）。
+            if let Some(j) = self.job.as_mut() {
+                if let Ok(mut g) = j.child.lock() {
+                    if let Some(c) = g.as_mut() {
+                        let _ = c.try_wait();
+                    }
+                }
+            }
             self.job = None;
             self.killed = false;
         }

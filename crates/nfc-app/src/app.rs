@@ -574,7 +574,19 @@ impl NfcApp {
             return false;
         }
         match m.kind {
-            dialogs_ui::ConfirmKind::CloseWhileRunning => true,
+            dialogs_ui::ConfirmKind::CloseWhileRunning => {
+                // 关窗前先停掉正在跑的任务：确认即退出，若不 kill，mfoc 等
+                // 子进程会变成孤儿继续占用串口，下次启动连接必报
+                // "Unable to open NFC device"。`cancel-task` 统一走既有
+                // 清理路径（kill + 复位 running / pending_save / conn）。
+                let _ = self.engine.dispatch(
+                    Action::Plain("cancel-task"),
+                    &mut self.state,
+                    &self.paths,
+                    &mut self.dialogs,
+                );
+                true
+            }
             dialogs_ui::ConfirmKind::WriteDump { dump } => {
                 self.push_approved(Action::WithArg("write-IC", dump));
                 false
@@ -980,6 +992,8 @@ impl NfcApp {
         };
         match std::fs::write(path, &bytes) {
             Ok(()) => {
+                // 编辑器写回的是完整卡数据（含密钥扇区），收紧为仅本人可读。
+                nfc_core::paths::restrict_owner(path);
                 if update_origin {
                     if let Some(name) = path.file_name() {
                         self.forms.editor.file_name = Some(name.to_string_lossy().into_owned());

@@ -107,6 +107,9 @@ pub fn rename(dir: &Path, old: &str, new: &str) -> Result<PathBuf, DumpFileError
 /// Windows 上还拒绝 `:`：`dir.join("C:evil.mfd")` 会变成驱动器相对路径
 /// `C:\dumpfiles\evil.mfd`（`join` 对带盘符的「相对」路径会追加而非丢弃
 /// 盘符），借重命名可逃出 dumpfiles 目录。
+///
+/// 同样拒绝 Windows 保留设备名（`CON` / `NUL` / `COM1`…）：在这类系统上
+/// `fs::write("con.mfd")` 行为异常（可能挂起），统一在校验层拦掉。
 pub fn is_plain_name(name: &str) -> bool {
     !name.is_empty()
         && name != "."
@@ -115,6 +118,18 @@ pub fn is_plain_name(name: &str) -> bool {
         && !name.contains('\\')
         && !name.contains(':')
         && !name.contains('\0')
+        && !is_windows_reserved(name)
+}
+
+/// Windows 保留设备名。不看扩展名——`con.mfd` 在 Windows 上同样是设备名。
+const WINDOWS_RESERVED: [&str; 22] = [
+    "con", "aux", "prn", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+    "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+];
+
+fn is_windows_reserved(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or("");
+    WINDOWS_RESERVED.contains(&stem.to_ascii_lowercase().as_str())
 }
 
 #[derive(Debug)]
@@ -274,5 +289,17 @@ mod tests {
         // 非 ASCII 名字允许（原版 dump 文件名含 UID，仍是 ASCII，
         // 但用户可能手动改，故不额外设限）
         assert!(is_plain_name("中文.mfd"));
+    }
+
+    #[test]
+    fn is_plain_name_rejects_windows_reserved() {
+        // 保留名不看扩展名与大小写
+        for n in ["con", "CON.mfd", "Nul", "aux.mfd", "com1", "LPT9.x"] {
+            assert!(!is_plain_name(n), "{n} 应被拒绝");
+        }
+        // 仅前缀命中不算保留名
+        for n in ["console.mfd", "aux2.mfd", "com10.mfd", "null.mfd"] {
+            assert!(is_plain_name(n), "{n} 应放行");
+        }
     }
 }

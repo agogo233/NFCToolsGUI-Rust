@@ -346,11 +346,15 @@ impl Engine {
             return;
         };
         match std::fs::rename(&pending.source, &target) {
-            Ok(()) => state.apply(Event::Log(format!(
-                "\n\n{} {}\n",
-                crate::i18n::t("log_msg_file_already_saved_to"),
-                target.display()
-            ))),
+            Ok(()) => {
+                // nonces.bin 是密码学采集产物，与 keys.txt 同级敏感，收紧权限。
+                crate::paths::restrict_owner(&target);
+                state.apply(Event::Log(format!(
+                    "\n\n{} {}\n",
+                    crate::i18n::t("log_msg_file_already_saved_to"),
+                    target.display()
+                )));
+            }
             Err(e) => {
                 state.apply(Event::Log(format!(
                     "\n{}: {e}\n",
@@ -960,6 +964,8 @@ impl Engine {
         }
         std::fs::write(paths.temp_mfd(), &bytes)
             .map_err(|_| crate::i18n::t("log_msg_card_read_failed"))?;
+        // temp.mfd 保存失败时是 dump 的唯一副本，同为密钥载体，收紧权限。
+        crate::paths::restrict_owner(&paths.temp_mfd());
         Ok(())
     }
 

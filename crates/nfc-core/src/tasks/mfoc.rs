@@ -405,6 +405,8 @@ pub fn dump_commit(
             }
         }
         Ok(()) => {
+            // dump 是密钥载体（完整卡数据），收紧为仅本人可读。
+            crate::paths::restrict_owner(&target);
             let key = if chosen {
                 "log_msg_file_already_saved_to"
             } else {
