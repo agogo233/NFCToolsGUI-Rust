@@ -13,7 +13,7 @@
 //!    面板收到 `config === undefined` → 显示红色提示 + 禁用全部输入
 //!    （`hardNested.html:80-89`、`dictTest.html:60-66`）。
 
-use egui::{Align, Context, CornerRadius, Layout, Margin, RichText, ScrollArea, Ui};
+use egui::{Align, Context, Layout, RichText, ScrollArea, Ui};
 
 use nfc_core::i18n::t;
 use nfc_core::model::dump::{self, Sector};
