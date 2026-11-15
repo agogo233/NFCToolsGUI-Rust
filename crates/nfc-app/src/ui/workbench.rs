@@ -109,6 +109,10 @@ pub fn draw(ui: &mut Ui, app: &mut NfcApp, stacked: bool) {
 }
 
 /// 当前卡片档案条：UID / 卡型 / 密钥统计 / 转储文件 + 直达操作。
+///
+/// 信息与操作拆两行（docs/02 §6.44）：解卡后单行放不下（长文件名 +
+/// 按钮组），右对齐按钮会从容器右缘向左压到「当前文件」上；信息行
+/// 自动换行 + 文件名限宽截断，按钮行独占一行贴右，任何窗宽都不重叠。
 fn card_context(ui: &mut Ui, app: &mut NfcApp) {
     let paint = app.paint();
     let mut write_clicked = false;
@@ -127,7 +131,7 @@ fn card_context(ui: &mut Ui, app: &mut NfcApp) {
                 return;
             };
             let uid = snap.uid.clone();
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label(
                     RichText::new(t("html_card_context"))
                         .strong()
@@ -152,7 +156,7 @@ fn card_context(ui: &mut Ui, app: &mut NfcApp) {
                         // 一键复制卡号：UID 是写卡/报障/记录最常被抄走的数据，
                         // 之前只能手动选中逐字符拖选。
                         if ui
-                            .small_button("⧉")
+                            .small_button(RichText::new(t("html_copy")).size(11.0))
                             .on_hover_text(t("html_tip_copy_uid"))
                             .clicked()
                         {
@@ -186,12 +190,6 @@ fn card_context(ui: &mut Ui, app: &mut NfcApp) {
                         .size(13.0)
                         .strong(),
                     );
-                    let frac = if known + unknown == 0 {
-                        0.0
-                    } else {
-                        known as f32 / (known + unknown) as f32
-                    };
-                    ui.add_sized([110.0, 6.0], egui::ProgressBar::new(frac));
                 });
                 ui.vertical(|ui| {
                     ui.label(
@@ -199,30 +197,37 @@ fn card_context(ui: &mut Ui, app: &mut NfcApp) {
                             .size(10.0)
                             .color(paint.color(paint.text_secondary)),
                     );
-                    ui.label(
-                        RichText::new(&snap.file_name)
-                            .size(12.0)
-                            .font(egui::FontId::monospace(12.0)),
-                    );
-                });
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui
-                        .button(RichText::new(t("html_edit_dump")).size(12.0))
-                        .clicked()
-                    {
-                        editor_clicked = true;
-                    }
-                    let write = egui::Button::new(
-                        RichText::new(t("html_write_this_dump"))
-                            .size(12.0)
-                            .strong()
-                            .color(paint.color(paint.text_inverse)),
+                    // 限宽截断 + 悬停给全名：长文件名不再把同行列顶出边界。
+                    ui.add_sized(
+                        [160.0, 18.0],
+                        Label::new(
+                            RichText::new(&snap.file_name)
+                                .size(12.0)
+                                .font(egui::FontId::monospace(12.0)),
+                        )
+                        .truncate(),
                     )
-                    .fill(paint.color(paint.primary));
-                    if ui.add(write).clicked() {
-                        write_clicked = true;
-                    }
+                    .on_hover_text(snap.file_name.clone());
                 });
+            });
+            ui.add_space(6.0);
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui
+                    .button(RichText::new(t("html_edit_dump")).size(12.0))
+                    .clicked()
+                {
+                    editor_clicked = true;
+                }
+                let write = egui::Button::new(
+                    RichText::new(t("html_write_this_dump"))
+                        .size(12.0)
+                        .strong()
+                        .color(paint.color(paint.text_inverse)),
+                )
+                .fill(paint.color(paint.primary));
+                if ui.add(write).clicked() {
+                    write_clicked = true;
+                }
             });
         });
     if editor_clicked {
@@ -462,7 +467,7 @@ fn detail(ui: &mut Ui, app: &mut NfcApp, i: usize, groups: usize, g: &[String], 
                             .font(egui::FontId::monospace(12.0)),
                     );
                     if ui
-                        .small_button("⧉")
+                        .small_button(RichText::new(t("html_copy")).size(11.0))
                         .on_hover_text(t("html_tip_copy_hex"))
                         .clicked()
                     {

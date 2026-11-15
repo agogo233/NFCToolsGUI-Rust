@@ -186,6 +186,7 @@ UX_POLISH_EXTRA = {
     "html_tip_copy_uid",
     "html_tip_open_event_dump",
     "html_tip_copy_hex",
+    "html_copy",
     "html_copy_group",
     "html_tip_copy_group",
     "log_msg_hex_copied",

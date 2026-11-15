@@ -201,6 +201,7 @@
     "html_tip_copy_uid": "复制卡号 (UID) 到剪贴板",
     "html_tip_open_event_dump": "点击在转储编辑器中打开该文件",
     "html_tip_copy_hex": "复制该块 hex 到剪贴板",
+    "html_copy": "复制",
     "html_copy_group": "复制整组",
     "html_tip_copy_group": "复制该扇区全部 4 块 hex（64 字符，可直接粘贴进编辑器）",
     "log_msg_hex_copied": "hex 已复制到剪贴板",
