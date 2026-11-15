@@ -1257,7 +1257,7 @@ fn phone_wristband(ui: &mut Ui, app: &mut NfcApp) -> bool {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(t("html_phw_card_no")).strong());
                     // 32 位 hex 压线面板宽度，截断防溢出（卡号定长，正常不截）。
-                    ui.label(RichText::new(&card_no).monospace().truncate());
+                    ui.add(egui::Label::new(RichText::new(&card_no).monospace()).truncate());
                 });
             });
 
@@ -1516,8 +1516,8 @@ fn dump_editor(ui: &mut Ui, app: &mut NfcApp) -> bool {
         .unwrap_or_else(|| "-".to_owned());
     ui.horizontal(|ui| {
         // 文件名可能很长（含用户自定义名），截断防溢出，全名悬停可见。
-        ui.label(
-            RichText::new(format!("{}{name}", t("html_current_file"))).truncate(),
+        ui.add(
+            egui::Label::new(RichText::new(format!("{}{name}", t("html_current_file")))).truncate(),
         )
         .on_hover_text(&name);
         // 显示方式切换（docs/02 §6.40）：连续 hex ↔ 每字节空一格的大写。
@@ -1644,7 +1644,8 @@ fn dump_comparator(ui: &mut Ui, app: &mut NfcApp) -> bool {
             .a_name
             .clone()
             .unwrap_or_else(|| t("html_choose_file"));
-        ui.label(RichText::new(&name).truncate()).on_hover_text(name);
+        ui.add(egui::Label::new(RichText::new(&name)).truncate())
+            .on_hover_text(name);
         if ui.button("…").clicked() {
             app.exec("dump-comparator-choose-file", Some("A".to_owned()));
         }
@@ -1657,7 +1658,8 @@ fn dump_comparator(ui: &mut Ui, app: &mut NfcApp) -> bool {
             .b_name
             .clone()
             .unwrap_or_else(|| t("html_choose_file"));
-        ui.label(RichText::new(&name).truncate()).on_hover_text(name);
+        ui.add(egui::Label::new(RichText::new(&name)).truncate())
+            .on_hover_text(name);
         if ui.button("…").clicked() {
             app.exec("dump-comparator-choose-file", Some("B".to_owned()));
         }

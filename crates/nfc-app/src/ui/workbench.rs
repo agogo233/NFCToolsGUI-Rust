@@ -483,11 +483,13 @@ fn detail(ui: &mut Ui, app: &mut NfcApp, i: usize, groups: usize, g: &[String], 
                     if is_trailer {
                         trailer_segments(ui, app, logical, line);
                     } else {
-                        ui.label(
-                            RichText::new(spaced(line))
-                                .size(12.0)
-                                .font(egui::FontId::monospace(12.0))
-                                .truncate(),
+                        ui.add(
+                            Label::new(
+                                RichText::new(spaced(line))
+                                    .size(12.0)
+                                    .font(egui::FontId::monospace(12.0)),
+                            )
+                            .truncate(),
                         );
                     }
                     if ui
@@ -613,10 +615,15 @@ fn acl_box(ui: &mut Ui, app: &NfcApp, trailer: &str) {
         if j < 3 {
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new(format!("{}{} · {}", t("html_block"), j, t("html_block_kind_data")))
-                        .size(11.0)
-                        .color(paint.color(paint.text_secondary))
-                        .font(egui::FontId::monospace(11.0)),
+                    RichText::new(format!(
+                        "{}{} · {}",
+                        t("html_block"),
+                        j,
+                        t("html_block_kind_data")
+                    ))
+                    .size(11.0)
+                    .color(paint.color(paint.text_secondary))
+                    .font(egui::FontId::monospace(11.0)),
                 );
                 ui.label(cval(c));
                 ui.label(

@@ -3,7 +3,7 @@
 //! 全部由原底部控制台区迁入：`log_view` 尾部窗口渲染、自动滚动、
 //! 事件上限（`EVENT_MAX`，定义在 `app.rs` 的 `NfcApp::push_event` 侧）等行为保持不变。
 
-use egui::{Align, Frame, Layout, RichText, ScrollArea, Sense, Ui};
+use egui::{Align, Frame, Label, Layout, RichText, ScrollArea, Sense, Ui};
 
 use nfc_core::i18n::t;
 use nfc_core::state::DeviceState;
@@ -103,7 +103,8 @@ fn task_card(ui: &mut Ui, app: &mut NfcApp) {
                 app.state.status.text.clone()
             };
             // 工具输出文本长度不可控，截断防溢出，全名走悬停提示。
-            ui.label(RichText::new(&text).truncate()).on_hover_text(text);
+            ui.add(Label::new(RichText::new(&text)).truncate())
+                .on_hover_text(text);
             if let Some(p) = app.dialogs_host.pending_purpose() {
                 dialogs_ui::pending_hint(ui, p.pending_text());
             }
@@ -174,7 +175,7 @@ fn events_card(ui: &mut Ui, app: &mut NfcApp) {
                     let row = ui.horizontal(|ui| {
                         ui.colored_label(color, RichText::new("●").size(7.0));
                         // 事件文本长度不可控，截断防溢出；全名走悬停提示。
-                        ui.label(RichText::new(&e.text).size(12.0).truncate());
+                        ui.add(Label::new(RichText::new(&e.text).size(12.0)).truncate());
                     });
                     // 子 Ui 的 response 固定 `Sense::hover`，`clicked()` 恒为
                     // false（P2-12 的点击因此从未生效）；用 interact 以整行

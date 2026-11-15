@@ -234,7 +234,8 @@ fn group_head(ui: &mut Ui, app: &NfcApp, g: &GroupDef, icon_mode: bool) {
     if icon_mode {
         ui.vertical_centered(|ui| {
             let (rect, _) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
-            ui.painter().rect_filled(rect, theme::RADIUS[0], paint.color(bg));
+            ui.painter()
+                .rect_filled(rect, theme::RADIUS[0], paint.color(bg));
             ui.painter().text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
@@ -247,7 +248,8 @@ fn group_head(ui: &mut Ui, app: &NfcApp, g: &GroupDef, icon_mode: bool) {
     }
     ui.horizontal(|ui| {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
-        ui.painter().rect_filled(rect, theme::RADIUS[0], paint.color(bg));
+        ui.painter()
+            .rect_filled(rect, theme::RADIUS[0], paint.color(bg));
         ui.painter().text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
