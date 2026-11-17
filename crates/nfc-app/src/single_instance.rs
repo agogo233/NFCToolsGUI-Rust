@@ -26,7 +26,13 @@ impl InstanceLock {
     /// - `Err(e)`：锁文件打不开（数据目录不可写等）——与「已有实例」是
     ///   两回事，调用方不应把基础设施故障误报成「重复启动」。
     pub fn acquire(path: &Path) -> std::io::Result<Option<Self>> {
-        let file = fs::OpenOptions::new().create(true).write(true).open(path)?;
+        // 锁文件是 0 字节哨兵，内容无关紧要；truncate 声明仅为满足
+        // clippy::suspicious_open_options（create+write 必须显式表态）。
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(path)?;
         if try_lock_exclusive(&file) {
             Ok(Some(Self { _file: file }))
         } else {
@@ -49,14 +55,10 @@ pub fn notify_already_running() {
             .encode_utf16()
             .chain(std::iter::once(0))
             .collect();
+        // windows-sys 0.52 的 HWND 是 isize（不是指针），空句柄 = 0。
         // SAFETY: 两个宽字符串均以 NUL 结尾；消息框是模态阻塞调用。
         unsafe {
-            MessageBoxW(
-                std::ptr::null_mut(),
-                wide.as_ptr(),
-                title.as_ptr(),
-                MB_OK | MB_ICONWARNING,
-            );
+            MessageBoxW(0, wide.as_ptr(), title.as_ptr(), MB_OK | MB_ICONWARNING);
         }
     }
     #[cfg(not(windows))]
@@ -78,7 +80,8 @@ fn try_lock_exclusive(file: &fs::File) -> bool {
     use windows_sys::Win32::Storage::FileSystem::{
         LockFileEx, LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY,
     };
-    let handle = file.as_raw_handle();
+    // windows-sys 0.52 的 HANDLE 是 isize（不是指针），故从 RawHandle 转换。
+    let handle = file.as_raw_handle() as isize;
     let mut overlapped: windows_sys::Win32::System::IO::OVERLAPPED = unsafe { std::mem::zeroed() };
     // SAFETY: handle 合法；锁区间 [0, 2^64-1) 覆盖整个哨兵文件。
     // 同进程第二个句柄同样会被拒（字节范围锁按句柄排他），测试依赖此语义。
