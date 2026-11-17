@@ -4,6 +4,7 @@
 //! 因此本模块默认编译不引入系统库依赖。
 
 use std::fs;
+use std::time::{Duration, Instant};
 
 use crate::i18n;
 use crate::paths::{Paths, DEVICE_SPEED};
@@ -395,7 +396,6 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use std::path::PathBuf;
-    use std::time::{Duration, Instant};
 
     const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/");
 
