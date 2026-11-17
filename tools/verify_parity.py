@@ -213,6 +213,11 @@ UX_POLISH_EXTRA = {
     "html_card_none_hint_not_connected",
     "html_hn_round",
 }
+# 审计修复批次：连接握手超时提示 + 单实例锁「已在运行」提示。
+AUDIT_FIX_EXTRA = {
+    "log_msg_connect_timeout",
+    "dialog_msg_instance_running",
+}
 # S18 从「上游独有」挪回的 20 个 key：两版共有且文案逐字一致。
 S18_MIGRATED = {
     "dialog_msg_invalid_uid_input",
@@ -444,10 +449,10 @@ def h_i18n() -> None:
     keys = json.loads(rd(REPO / "assets/locales/zh-CN.json"))
     orig_zh_keys = set(rd_json(ORIG / "src/locales/zh-CN.json")) if not ORIG_MISSING else set()
     check(
-        len(keys) == 194 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(DUMP_VIEW_EXTRA) + len(PANEL_VALIDATION_EXTRA) + len(S18_MIGRATED) + len(NO_PORTAL_EXTRA) + len(REDESIGN_EXTRA) + len(MAXIMIZE_EXTRA) + len(UX_POLISH_EXTRA),
-        f"H zh-CN.json {194 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(DUMP_VIEW_EXTRA) + len(PANEL_VALIDATION_EXTRA) + len(S18_MIGRATED) + len(NO_PORTAL_EXTRA) + len(REDESIGN_EXTRA) + len(MAXIMIZE_EXTRA) + len(UX_POLISH_EXTRA)} key"
+        len(keys) == 194 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(DUMP_VIEW_EXTRA) + len(PANEL_VALIDATION_EXTRA) + len(S18_MIGRATED) + len(NO_PORTAL_EXTRA) + len(REDESIGN_EXTRA) + len(MAXIMIZE_EXTRA) + len(UX_POLISH_EXTRA) + len(AUDIT_FIX_EXTRA),
+        f"H zh-CN.json {194 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(DUMP_VIEW_EXTRA) + len(PANEL_VALIDATION_EXTRA) + len(S18_MIGRATED) + len(NO_PORTAL_EXTRA) + len(REDESIGN_EXTRA) + len(MAXIMIZE_EXTRA) + len(UX_POLISH_EXTRA) + len(AUDIT_FIX_EXTRA)} key"
         f"（基础 194 + S16 补 {len(S16_EXTRA)} + S17 补 {len(S17_EXTRA)}"
-        f" + S18 新增 {len(S18_EXTRA)} + MFOC_PROBES 补 {len(MFOC_PROBES_EXTRA)} + LOG_COPY 补 {len(LOG_COPY_EXTRA)} + DUMP_VIEW 补 {len(DUMP_VIEW_EXTRA)} + 面板校验补 {len(PANEL_VALIDATION_EXTRA)} + S18 迁移 {len(S18_MIGRATED)} + 无门户收尾补 {len(NO_PORTAL_EXTRA)} + 界面改版补 {len(REDESIGN_EXTRA)} + 最大化钮补 {len(MAXIMIZE_EXTRA)} + 体验优化补 {len(UX_POLISH_EXTRA)}）",
+        f" + S18 新增 {len(S18_EXTRA)} + MFOC_PROBES 补 {len(MFOC_PROBES_EXTRA)} + LOG_COPY 补 {len(LOG_COPY_EXTRA)} + DUMP_VIEW 补 {len(DUMP_VIEW_EXTRA)} + 面板校验补 {len(PANEL_VALIDATION_EXTRA)} + S18 迁移 {len(S18_MIGRATED)} + 无门户收尾补 {len(NO_PORTAL_EXTRA)} + 界面改版补 {len(REDESIGN_EXTRA)} + 最大化钮补 {len(MAXIMIZE_EXTRA)} + 体验优化补 {len(UX_POLISH_EXTRA)} + 审计修复补 {len(AUDIT_FIX_EXTRA)}）",
         f"实际 {len(keys)}",
     )
     # S8 新增的 3 个 settings 按钮文案（原版 settings.html 硬编码英文，无 i18n key，

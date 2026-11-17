@@ -7,7 +7,7 @@ NFCToolsGUI 的 Rust 重写版（AGPL-3.0）。与 PN532 交互的跨平台桌�
 - `crates/nfc-core` — 纯逻辑，**零 GUI 依赖**，不编译 serialport 即可 `cargo test`。`real-serial` 特性默认**关闭**。
 - `crates/nfc-app` — eframe/egui 0.36 GUI 壳（bin），默认开 `real-serial`。`rfd` 只开 `xdg-portal + wayland`，**不含 gtk3**。
 
-`resolver = "2"`，MSRV 1.95（`rust-version`）。release profile：`panic = "abort"`、`strip = true`、`lto = "thin"`。
+`resolver = "2"`，MSRV 1.95（`rust-version`）。release profile：`panic = "abort"`、`strip = "debuginfo"`、`lto = true`、`opt-level = "z"`、`codegen-units = 1`。
 
 ## 必备前置：C 工具 `framework/bin`
 
@@ -25,12 +25,12 @@ cargo run -p nfc-app --release     # 运行 GUI
 cargo run -p nfc-core -- --selftest   # 14 项核心行为（不开窗口）
 cargo run -p nfc-app  -- --selftest   # 101 项界面 + 接线（S8~S19 + 界面改版 + 体验优化）
 
-cargo test --workspace             # 619 项
+cargo test --workspace             # 600+ 项
 cargo test -p nfc-core --test real_tools --test tool_cli   # 需要 framework/bin（否则自动跳过）
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --workspace --all-targets --features real-serial -- -D warnings   # CI 额外跑一次：RealSerial 平时不参与编译
 cargo fmt --all --check
-python3 tools/verify_parity.py     # 848 项静态门禁（39 action parity 表 + 接线守卫）
+python3 tools/verify_parity.py     # 847 项静态门禁（39 action parity 表 + 接线守卫）
 ./scripts/package.sh               # 构建 + 打包 out/NFCToolsGUI-win-x64.zip
 ./scripts/package.sh --check       # 只跑门禁与检测
 ```

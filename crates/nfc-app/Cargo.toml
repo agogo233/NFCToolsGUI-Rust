@@ -44,3 +44,16 @@ winres = "0.1"
 # 无头 CI / 纯语法检查的快速路径，此时枚举器退回空列表。
 default = ["real-serial"]
 real-serial = ["nfc-core/real-serial"]
+
+# 单实例锁（single_instance.rs）：两平台原语均已在依赖树中（eframe 传递
+# 引入），显式声明不扩大依赖树；均非网络栈，不触发 CI 外联审计。
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_UI_WindowsAndMessaging",
+] }

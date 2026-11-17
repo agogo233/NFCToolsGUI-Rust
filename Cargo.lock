@@ -1863,9 +1863,11 @@ dependencies = [
  "eframe",
  "egui",
  "image",
+ "libc",
  "nfc-core",
  "open",
  "rfd",
+ "windows-sys 0.52.0",
  "winres",
 ]
 

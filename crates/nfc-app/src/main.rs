@@ -24,6 +24,7 @@ mod dialogs_host;
 mod dialogs_ui;
 mod panels;
 mod selftest;
+mod single_instance;
 mod theme_ui;
 mod ui;
 
@@ -80,6 +81,25 @@ fn main() -> eframe::Result {
     let paths = Paths::from_app_data();
     let _ = std::fs::create_dir_all(paths.base());
     let _ = std::fs::create_dir_all(paths.dumpfiles_dir());
+
+    // 单实例锁（§6.2 #34）：双开实例会互踩共享数据目录里的固定文件
+    // （libnfc.conf 每次连接整文件覆盖、temp.mfd 是写卡备份闸的唯一载体）。
+    // 锁随句柄存活、进程退出即释放。拿不到 = 已有实例在跑，提示后退出。
+    // 命名绑定（而非 `let _`）：后者语句结束即 drop，锁形同虚设。
+    let _instance_lock =
+        match single_instance::InstanceLock::acquire(&paths.base().join("instance.lock")) {
+            // 锁文件打不开（数据目录不可写等）属基础设施故障，与「已有实例」
+            // 是两回事：告警后继续启动，后续文件操作会给出更具体的错误。
+            Err(e) => {
+                eprintln!("instance lock unavailable: {e}");
+                None
+            }
+            Ok(Some(lock)) => Some(lock),
+            Ok(None) => {
+                single_instance::notify_already_running();
+                return Ok(());
+            }
+        };
 
     // 窗口 / 任务栏图标：解码内嵌 32×32 PNG（IconData 宽高须为 4 的倍数）。
     // 资源损坏时退回默认图标，不让程序直接 panic。

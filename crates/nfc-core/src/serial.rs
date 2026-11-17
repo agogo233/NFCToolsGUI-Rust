@@ -22,6 +22,11 @@ pub const MARKER_OPENED: &str = "NFC device: NFC_Device opened";
 /// 连接失败标记。
 pub const MARKER_UNABLE: &str = "Unable to open NFC device";
 
+/// 连接握手超时。nfc-list 正常 1–2s 内出结论；半开串口 / 读卡器挂死时
+/// 原版会永久停在「连接中」且全部任务被门禁挡死（仅剩手动「停止」逃生门）。
+/// 超时即 kill 并按普通连接失败收尾（§6.2 #33）。
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// 串口枚举与连接流程的错误。
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum DeviceError {
@@ -199,6 +204,12 @@ pub struct ConnectFlow {
     speed: u32,
     output: String,
     connected: Option<bool>,
+    /// 握手死线：`new` 起算 `CONNECT_TIMEOUT`。到点仍无定论即判超时。
+    deadline: Instant,
+    /// 超时强制收尾标记：`finish` 据此把 kill 造成的信号退出伪装成
+    /// 「正常退出的连接失败」，不触发 `TaskDone` 的 killed 分支
+    /// （那会弹「任务被终止」——超时不是用户终止的）。
+    timed_out: bool,
 }
 
 impl ConnectFlow {
@@ -208,7 +219,33 @@ impl ConnectFlow {
             speed: DEVICE_SPEED,
             output: String::new(),
             connected: None,
+            deadline: Instant::now() + CONNECT_TIMEOUT,
+            timed_out: false,
         }
+    }
+
+    /// 是否已有连接定论（opened / unable 任一命中）。
+    ///
+    /// 判定本身见 `pump`：两条通道各自独立、后到者仍可覆盖——这里只是
+    /// 供超时判据查询「有没有定论」，不得短路判定（S12-8 门禁盯着）。
+    fn has_verdict(&self) -> bool {
+        self.connected.is_some()
+    }
+
+    /// 握手是否已到死线且尚无定论（已判定成功/失败、或已进入超时收尾的不再触发）。
+    pub(crate) fn expired(&self) -> bool {
+        !self.has_verdict() && !self.timed_out && Instant::now() >= self.deadline
+    }
+
+    /// 进入超时收尾：调用方随即 kill 子进程，`finish` 按普通失败语义落账。
+    pub(crate) fn mark_timed_out(&mut self) {
+        self.timed_out = true;
+    }
+
+    /// 测试专用：重设死线（传 `Duration::ZERO` 即下一帧立即超时），免得单测真等 10 秒。
+    #[cfg(test)]
+    pub(crate) fn arm_timeout(&mut self, d: Duration) {
+        self.deadline = Instant::now() + d;
     }
 
     /// S18：连接前设置波特率（设置面板改速后重连时由 engine 传入）。
@@ -300,21 +337,26 @@ impl ConnectFlow {
         emit: &mut dyn FnMut(Event),
     ) -> Option<bool> {
         let exit = runner.exit()?;
-        let connected = self.connected.unwrap_or(false);
+        // 超时收尾：把 kill 造成的信号退出伪装成「正常退出的连接失败」——
+        // `TaskDone{killed}` 分支会弹「任务被终止」并把状态条定音为「空闲」，
+        // 而超时不是用户终止的，应与普通连接失败同貌（Failed + 出错）。
+        let timed_out = self.timed_out;
+        let connected = self.connected.unwrap_or(false) && !timed_out;
         emit(Event::DeviceState(if connected {
             DeviceState::Connected
         } else {
             DeviceState::Failed
         }));
         emit(Event::TaskDone {
-            code: exit.code,
-            killed: exit.signal,
+            code: if timed_out { Some(0) } else { exit.code },
+            killed: exit.signal && !timed_out,
         });
         // 自然退出才复位状态条，对齐普通任务的 printExitLog。`begin` 已发
         // `indicator_connecting_device`，不复位则状态条永久挂「正在连接设备」。
         // 被 kill（cancel）时 TaskDone 的 killed 分支已 exit_log 定音为「空闲」，
-        // 此处再发会把它盖成「出错」而自相矛盾，故 `exit.signal` 时跳过。
-        if !exit.signal {
+        // 此处再发会把它盖成「出错」而自相矛盾，故 `exit.signal` 时跳过；
+        // 超时虽是 kill，但已按普通失败语义落账，状态条照常落「出错」。
+        if !exit.signal || timed_out {
             emit(Event::Status {
                 text: i18n::t(if connected {
                     "indicator_free"
@@ -352,6 +394,8 @@ mod tests {
     use crate::runner::MockToolRunner;
     use std::fs;
     use std::path::PathBuf;
+    use std::path::PathBuf;
+    use std::time::{Duration, Instant};
 
     const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/");
 

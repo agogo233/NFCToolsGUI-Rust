@@ -85,6 +85,13 @@ pub struct LineBuffer {
     pending: String,
 }
 
+/// 单个 [`LineBuffer`] 残行的字节上限（64 KiB，思路同 `state::LOG_CAP` 封顶）。
+///
+/// libnfc-collect / cropto1_bs / mfcuk 的 `\r\33[2K` 进度行**不带 `\n`**，
+/// 会永久滞留在 `pending`（每秒 30–60 字节，小时级长跑可堆到百 KB 级）。
+/// 超限丢头保尾：进度残片本就无需解析，丢头无碍；按字符边界切，防拆散 UTF-8。
+const LINE_CAP: usize = 64 << 10;
+
 impl LineBuffer {
     pub fn new() -> Self {
         Self::default()
@@ -95,6 +102,7 @@ impl LineBuffer {
     /// mfoc 的进度条会原地覆盖并带入 `\r`，归一化掉才不会把同一行数两次。
     pub fn push(&mut self, chunk: &str) -> Vec<String> {
         self.pending.push_str(chunk);
+        self.enforce_cap();
         let Some(cut) = self.pending.rfind('\n') else {
             return Vec::new();
         };
@@ -103,6 +111,18 @@ impl LineBuffer {
             .lines()
             .map(|l| l.trim_end_matches('\r').to_string())
             .collect()
+    }
+
+    /// 超限丢头保尾（§6.2 #22：原版 `mfocPendingLine` 与本实现早期版本均无界）。
+    fn enforce_cap(&mut self) {
+        if self.pending.len() <= LINE_CAP {
+            return;
+        }
+        let mut cut = self.pending.len() - LINE_CAP;
+        while !self.pending.is_char_boundary(cut) {
+            cut += 1;
+        }
+        self.pending.drain(..cut);
     }
 
     /// 工具退出时结算最后一行（原版无此步，末行无换行则整行丢失）。
@@ -1114,5 +1134,41 @@ mod tests {
         p.push("INFO: block 18 recovered KEY: \n"); // 空
         p.flush();
         assert!(p.take_keys().is_empty(), "真实格式下非法密钥不得被收进历史");
+    }
+
+    /// `\r\33[2K` 进度行不带 `\n`，会一直滞留在 pending；超 `LINE_CAP`
+    /// 必须丢头保尾，不许无界增长（§6.2 #22）。
+    #[test]
+    fn line_buffer_caps_unterminated_progress_output() {
+        let mut lb = LineBuffer::new();
+        let chunk = "x".repeat(8 << 10);
+        for _ in 0..32 {
+            assert!(lb.push(&chunk).is_empty(), "无换行不应结算出整行");
+        }
+        // 超限后仍能正常结算后续带换行的行，且保留的是尾部（最新内容）
+        let lines = lb.push("END\n");
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].ends_with("END"), "丢头保尾：最新内容必须保留");
+        assert!(lines[0].len() <= LINE_CAP + 3);
+        assert!(lb.flush().is_empty(), "结算后不应有残行");
+    }
+
+    /// 截断点必须落在字符边界上，不许把多字节 UTF-8 拆成非法字节流。
+    #[test]
+    fn line_buffer_cap_respects_char_boundary() {
+        let mut lb = LineBuffer::new();
+        let unit = "中中中中中"; // 15 字节，与 64 KiB 不对齐
+        let mut big = String::new();
+        for _ in 0..(LINE_CAP / 15 + 8) {
+            big.push_str(unit);
+        }
+        lb.push(&big);
+        let lines = lb.push("\n");
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].len() <= LINE_CAP, "残行不得超过上限");
+        assert!(
+            lines[0].chars().all(|c| c == '中'),
+            "截断不得拆散多字节字符"
+        );
     }
 }

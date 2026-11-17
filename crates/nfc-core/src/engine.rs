@@ -1120,6 +1120,11 @@ impl Engine {
                     refresh_history: false,
                 });
                 self.hn_saving = true;
+                // 同 read-IC 收尾（`dump_prepare` 处）：`finish` 开头已把
+                // `is_running_task` 置 false，而 Busy 门禁只看这个字段。
+                // 不重新置真的话，保存框挂起期间第二个任务能穿透门禁
+                // 真实 spawn，`resolve_save` 还会误清它的任务位。
+                state.is_running_task = true;
                 Ok(())
             }
             Step::Detect => {
@@ -1419,6 +1424,16 @@ impl Engine {
         let Some(mut flow) = self.conn.take() else {
             return;
         };
+        // 握手死线：nfc-list 挂死（半开串口等）时 kill 并按普通连接失败收尾，
+        // 否则 UI 永久「连接中」且全部任务被门禁挡死（§6.2 #33）。
+        if flow.expired() {
+            flow.mark_timed_out();
+            self.runner.kill();
+            state.apply(Event::Log(format!(
+                "\n{}\n",
+                crate::i18n::t("log_msg_connect_timeout")
+            )));
+        }
         flow.pump(self.runner.as_mut(), &mut |e| state.apply(e));
         let done = flow
             .finish(self.runner.as_mut(), &mut |e| state.apply(e))
@@ -2212,6 +2227,51 @@ mod tests {
         assert!(!st.is_device_connected);
         assert!(!st.is_running_task, "失败收尾也必须释放任务位");
         assert!(!e.is_running());
+    }
+
+    #[test]
+    fn connect_handshake_times_out_when_nfc_list_hangs() {
+        // nfc-list 挂死（半开串口等）时不能永久停在「连接中」：
+        // 到达握手死线必须 kill 并按普通连接失败收尾（§6.2 #33）。
+        let (_d, p) = paths("connect_timeout");
+        let mut e = Engine::new(Box::new(MockToolRunner::new(vec![])));
+        let mut st = AppState::new();
+        let mut dlg = MockDialog::new();
+        e.dispatch(
+            Action::ConnUsb("/dev/ttyACM0".into()),
+            &mut st,
+            &p,
+            &mut dlg,
+        )
+        .unwrap();
+        assert!(matches!(st.device_state, DeviceState::Connecting));
+        // 把死线拨到下一帧立即到期，免得单测真等 10 秒
+        e.conn
+            .as_mut()
+            .expect("应持有连接流")
+            .arm_timeout(std::time::Duration::ZERO);
+        run_to_end(&mut e, &mut st, &p, 4);
+        assert!(
+            matches!(st.device_state, DeviceState::Failed),
+            "握手超时必须落 Failed，不能停在 Connecting"
+        );
+        assert!(!st.is_device_connected);
+        assert!(!st.is_running_task, "超时收尾必须释放任务位");
+        assert!(!e.is_running());
+        assert!(
+            st.log_buffer.contains("连接设备超时"),
+            "超时原因要写进日志: {:?}",
+            st.log_buffer
+        );
+        // 超时后 conn 已回收，可重新发起连接（不被残留流吞掉）
+        e.dispatch(
+            Action::ConnUsb("/dev/ttyACM0".into()),
+            &mut st,
+            &p,
+            &mut dlg,
+        )
+        .unwrap();
+        assert!(matches!(st.device_state, DeviceState::Connecting));
     }
 
     #[test]
@@ -3042,6 +3102,47 @@ mod tests {
         // 续接后释放
         e.resolve_save(None, &mut st, &p);
         assert!(!e.is_running(), "续接后应释放任务位");
+    }
+
+    /// collectOnly 的保存框挂起期间必须占住任务位（collect 版的
+    /// `pending_save_counts_as_running`）。`Step::SaveNonces` 漏置真时，
+    /// 挂起窗口内第二个任务能穿透 Busy 门禁真实 spawn，`resolve_save`
+    /// 的无条件清零还会误清那个新任务的任务位。
+    #[test]
+    fn collect_only_pending_save_holds_task_slot() {
+        use crate::model::keys::KeyType as KT;
+        let (_d, p) = paths("save-busy-nonces");
+        let mut e = Engine::new(Box::new(MockToolRunner::new(vec![]).with_exit(Some(0))));
+        let mut st = hn_state(&[(1, KT::A)]);
+        let mut dlg = MockDialog::new();
+        e.dispatch(
+            Action::HardNestedConfig(Box::new(hn_cfg(false, true))),
+            &mut st,
+            &p,
+            &mut dlg,
+        )
+        .unwrap();
+        std::fs::write(p.nonces_file(), vec![0xab; 32]).unwrap();
+        // pump 到挂起为止（mock 契约：pump 一次后认 exit，同 settle_pending_save）
+        for _ in 0..6 {
+            e.pump(&mut st, &p);
+            if e.pending_save().is_some() {
+                break;
+            }
+        }
+        assert!(e.pending_save().is_some(), "nonce 非空应挂起保存请求");
+        assert!(
+            st.is_running_task,
+            "挂起期间任务位必须为真（Busy 门禁只看它）"
+        );
+        assert!(e.is_running());
+        // 忙 → 第二个任务被拒
+        let r = e.dispatch(Action::Plain("detect-card-type"), &mut st, &p, &mut dlg);
+        assert_eq!(r, Err(ToolError::Busy));
+        // 续接后释放（collectOnly 取消保留 nonces.bin，语义另有测试钉住）
+        assert!(e.resolve_save(None, &mut st, &p));
+        assert!(!st.is_running_task, "续接后应释放任务位");
+        assert!(!e.is_running());
     }
 
     /// 两条路径的「取消」语义**不同**，别混：
