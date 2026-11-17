@@ -395,7 +395,6 @@ mod tests {
     use crate::runner::MockToolRunner;
     use std::fs;
     use std::path::PathBuf;
-    use std::path::PathBuf;
 
     const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/");
 

@@ -1866,7 +1866,7 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     # 自动执行提示、文件框等待文案、检测结果“已知/未知”、历史重命名、
     # 控制台按钮悬停说明（§6.28 P1）
     # （docs/02 §6.25 续 / §6.28 / S16 偏离登记）。
-    LOCAL_EXTRA = S8_EXTRA | S11_EXTRA | S12_EXTRA | S15_EXTRA | S16_EXTRA | S17_EXTRA | S18_EXTRA | MFOC_PROBES_EXTRA | LOG_COPY_EXTRA | DUMP_VIEW_EXTRA | PANEL_VALIDATION_EXTRA | NO_PORTAL_EXTRA | REDESIGN_EXTRA | MAXIMIZE_EXTRA | UX_POLISH_EXTRA
+    LOCAL_EXTRA = S8_EXTRA | S11_EXTRA | S12_EXTRA | S15_EXTRA | S16_EXTRA | S17_EXTRA | S18_EXTRA | MFOC_PROBES_EXTRA | LOG_COPY_EXTRA | DUMP_VIEW_EXTRA | PANEL_VALIDATION_EXTRA | NO_PORTAL_EXTRA | REDESIGN_EXTRA | MAXIMIZE_EXTRA | UX_POLISH_EXTRA | AUDIT_FIX_EXTRA
     # 原版对拍基线（ORIG_REF）漂移时上游会新增 key，对应本重写**没有**的功能/结构。
     # 搬运这些文案没有意义（没有代码会 t() 它们），故显式登记为「上游有、我们不做」。
     # 若将来真要做对应功能，把 key 从这里挪进 LOCAL_EXTRA 即可。
@@ -1940,8 +1940,8 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
           "R i18n key 名不得以标点结尾（疑似误建的新 key）",
           f"{[k for k in i18n_asset if k[-1:] in {':', '.', ',', ' ', '-', '_'}]}")
     # 本地补的 key 数量原本写死在 Rust 测试与此处两处，已漂移过一次。双向钉死。
-    check(len(LOCAL_EXTRA) == 14 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(DUMP_VIEW_EXTRA) + len(PANEL_VALIDATION_EXTRA) + len(NO_PORTAL_EXTRA) + len(REDESIGN_EXTRA) + len(MAXIMIZE_EXTRA) + len(UX_POLISH_EXTRA),
-          "R 本地补的 i18n key 恰为 113 个", f"实际 {len(LOCAL_EXTRA)}")
+    check(len(LOCAL_EXTRA) == 14 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(DUMP_VIEW_EXTRA) + len(PANEL_VALIDATION_EXTRA) + len(NO_PORTAL_EXTRA) + len(REDESIGN_EXTRA) + len(MAXIMIZE_EXTRA) + len(UX_POLISH_EXTRA) + len(AUDIT_FIX_EXTRA),
+          "R 本地补的 i18n key 恰为 115 个", f"实际 {len(LOCAL_EXTRA)}")
     cd = rd(CORE / "src/command.rs")
     # rustfmt 会把字段拆成多行，故用 DOTALL 匹配整个结构体字面量
     specs = re.findall(
