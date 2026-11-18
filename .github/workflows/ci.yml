@@ -107,12 +107,19 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - uses: Swatinem/rust-cache@v2
 
       # 静态回归（接线守卫）：verify_parity 已脱离原版对拍，纯 Rust 侧断言。
       - name: 静态回归（接线守卫）
         run: python tools\verify_parity.py
+
+      # cfg(windows) 代码（single_instance / serial 的 Windows 路径）与构建脚本
+      # 只在 Windows 上参与编译，在此 lint 一次，补齐 Linux job 覆盖不到的盲区。
+      - name: Clippy（Windows）
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       # ── 编译 C 工具（framework/bin） ─────────────────────────────────────
       # compile.sh 支持 MINGW64，所需源码与 vendor 文件均在仓库内，
@@ -169,6 +176,34 @@ jobs:
           # 2 = IMAGE_SUBSYSTEM_WINDOWS_GUI；3 = CONSOLE（会双击闪黑框）
           if ($sub -ne 2) { throw "Subsystem=$sub，应为 2(gui)" }
           Write-Host "ok PE Subsystem=$sub (GUI)"
+
+      # 验证 build.rs 的 winresource 真的把 icon.ico 编进了 exe 资源
+      # （RT_GROUP_ICON 类型；winresource set_icon 默认 name id = "1"）。
+      - name: 校验图标资源已嵌入 exe
+        shell: pwsh
+        run: |
+          Add-Type @"
+          using System;
+          using System.Runtime.InteropServices;
+          public static class PeResCheck {
+              [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+              public static extern IntPtr LoadLibraryEx(string lpFileName, IntPtr hFile, uint dwFlags);
+              [DllImport("kernel32.dll", SetLastError=true)]
+              public static extern IntPtr FindResource(IntPtr hModule, IntPtr lpName, IntPtr lpType);
+              [DllImport("kernel32.dll", SetLastError=true)]
+              public static extern bool FreeLibrary(IntPtr hModule);
+          }
+          "@
+          $exe = "target\release\nfc-app.exe"
+          $h = [PeResCheck]::LoadLibraryEx($exe, [IntPtr]::Zero, 0x00000002) # LOAD_LIBRARY_AS_DATAFILE
+          if ($h -eq [IntPtr]::Zero) { throw "LoadLibraryEx 失败: $([Runtime.InteropServices.Marshal]::GetLastWin32Error())" }
+          try {
+              $r = [PeResCheck]::FindResource($h, [IntPtr]1, [IntPtr]14) # RT_GROUP_ICON, MAKEINTRESOURCE(1)
+              if ($r -eq [IntPtr]::Zero) { throw "exe 中未找到 RT_GROUP_ICON(id=1)，图标未嵌入" }
+              Write-Host "ok: 图标资源已嵌入 (RT_GROUP_ICON id=1)"
+          } finally {
+              [void][PeResCheck]::FreeLibrary($h)
+          }
 
       - name: 产出 exe 体积
         shell: pwsh
