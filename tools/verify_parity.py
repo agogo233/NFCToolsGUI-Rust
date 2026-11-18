@@ -523,7 +523,7 @@ def m_contract() -> None:
     check(seg.find("indicator_free") >= 0, "M finish 成功收尾复位状态条「空闲」")
     check(seg.find("indicator_error") >= 0, "M finish 失败收尾复位状态条「出错」")
     check(
-        seg.find("!exit.signal") >= 0,
+        seg.find("!exit.is_signal()") >= 0,
         "M 被 kill（cancel）时不复位状态条（killed 分支已 exit_log 定音，避免盖成出错）",
     )
 

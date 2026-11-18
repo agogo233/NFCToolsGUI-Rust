@@ -2,6 +2,7 @@ target/
 out/
 # framework/ 下的 C 工具源码已纳入版本库（vendoring）；只忽略编译产物
 framework/bin/
+framework/lib/
 buildInfo.json
 *.mfd
 !**/tests/fixtures/*.mfd

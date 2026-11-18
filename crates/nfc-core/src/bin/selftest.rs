@@ -353,7 +353,7 @@ fn case_cancel() {
     runner.pump(&mut |c| after.push(c.clone()));
     assert!(after.is_empty(), "kill 后不再有输出");
     let ex = runner.exit().expect("kill 后应能取退出信息");
-    assert!(ex.signal);
+    assert!(ex.is_signal());
     assert_eq!(ex.result(), Err(nfc_core::runner::ToolError::Killed));
     assert!(!runner.is_running());
 }

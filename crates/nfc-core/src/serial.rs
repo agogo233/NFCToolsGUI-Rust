@@ -350,14 +350,14 @@ impl ConnectFlow {
         }));
         emit(Event::TaskDone {
             code: if timed_out { Some(0) } else { exit.code },
-            killed: exit.signal && !timed_out,
+            killed: exit.is_signal() && !timed_out,
         });
         // 自然退出才复位状态条，对齐普通任务的 printExitLog。`begin` 已发
         // `indicator_connecting_device`，不复位则状态条永久挂「正在连接设备」。
         // 被 kill（cancel）时 TaskDone 的 killed 分支已 exit_log 定音为「空闲」，
-        // 此处再发会把它盖成「出错」而自相矛盾，故 `exit.signal` 时跳过；
+        // 此处再发会把它盖成「出错」而自相矛盾，故 `exit.is_signal()` 时跳过；
         // 超时虽是 kill，但已按普通失败语义落账，状态条照常落「出错」。
-        if !exit.signal || timed_out {
+        if !exit.is_signal() || timed_out {
             emit(Event::Status {
                 text: i18n::t(if connected {
                     "indicator_free"

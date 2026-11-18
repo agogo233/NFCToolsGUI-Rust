@@ -284,7 +284,11 @@ pub fn fix(sectors: &[Sector]) -> Result<(Vec<Sector>, Vec<FixedItem>), Vec<Chec
             });
         }
     }
-    Ok((dump::to_sector_lines(&out).unwrap(), fixed))
+    // `out` 尺寸已在上面校验为 VALID_SIZES（SECTOR_SIZE 对齐且非空），
+    // `to_sector_lines` 必然成功；`expect` 文档化该前置条件。
+    let lines =
+        dump::to_sector_lines(&out).expect("out 尺寸已校验为 VALID_SIZES，扇区切分必然成功");
+    Ok((lines, fixed))
 }
 
 /// MIFARE 值块启发式识别（MyPN532 `DumpSectorEditor.js:220-241`）。

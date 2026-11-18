@@ -1825,7 +1825,7 @@ fn c_connect_failure_ends_in_failed() -> Result<(), String> {
 }
 
 /// cancel 连接握手段（§6.36 的 cancel 边界）：`cancel-task` 已把状态条置「空闲」，
-/// `ConnectFlow::finish` 被 kill（`exit.signal`）时不得再发 Status 盖成「出错」。
+/// `ConnectFlow::finish` 被 kill（`exit.is_signal()`）时不得再发 Status 盖成「出错」。
 fn c_connect_cancel_keeps_status_free() -> Result<(), String> {
     let mut app = connected_app();
     app.engine =

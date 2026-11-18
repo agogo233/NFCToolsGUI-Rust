@@ -190,12 +190,12 @@ fn events_card(ui: &mut Ui, app: &mut NfcApp) {
                     // 只有「转储文件已保存: <名>」这类 success 事件可点；
                     // 文件名取前缀之后的部分，且必须仍在 dump_history 里
                     // （防过期事件里的名字已被删除/改名）。
-                    let clickable = e.kind == nfc_core::state::EventKind::Success
-                        && e.text
-                            .strip_prefix(&saved_prefix)
-                            .is_some_and(|name| app.state.dump_history.iter().any(|h| h == name));
-                    if clickable {
-                        let name = e.text.strip_prefix(&saved_prefix).unwrap().to_owned();
+                    let name = e.text.strip_prefix(&saved_prefix).filter(|n| {
+                        e.kind == nfc_core::state::EventKind::Success
+                            && app.state.dump_history.iter().any(|h| h == n)
+                    });
+                    if let Some(name) = name {
+                        let name = name.to_owned();
                         if resp.clicked() {
                             open_dump = Some(name);
                         }

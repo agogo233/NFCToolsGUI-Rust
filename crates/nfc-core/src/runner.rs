@@ -136,26 +136,28 @@ impl ToolError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Exit {
     pub code: Option<i32>,
-    pub signal: bool,
 }
 
 impl Exit {
     /// 便捷构造：正常退出 `Exit::new(Some(0))`；被信号终止 `Exit::new(None)`。
     pub fn new(code: Option<i32>) -> Self {
-        Self {
-            code,
-            signal: code.is_none(),
-        }
+        Self { code }
+    }
+
+    /// 是否被信号终止（等价于 `code` 为 `None`）。单一事实来源：`code`。
+    pub fn is_signal(&self) -> bool {
+        self.code.is_none()
     }
 
     /// `code == 0` → Ok；非 0 且被信号终止 → Killed；否则 Failed。
     pub fn result(&self) -> Result<(), ToolError> {
         if self.code == Some(0) {
             Ok(())
-        } else if self.signal {
+        } else if self.is_signal() {
             Err(ToolError::Killed)
         } else {
-            Err(ToolError::Failed(self.code.unwrap_or(-1)))
+            // 进入此分支时 `code` 必为 `Some(非零)`（`is_signal()` 已拦 None）。
+            Err(ToolError::Failed(self.code.expect("非信号退出必有 code")))
         }
     }
 }
@@ -428,10 +430,9 @@ impl NfcToolRunner {
         match c.try_wait().ok().flatten() {
             Some(status) => {
                 let code = status.code();
-                let signal = code.is_none();
                 drop(g);
                 self.job = None;
-                Some(Exit { code, signal })
+                Some(Exit { code })
             }
             None => None,
         }
@@ -633,7 +634,6 @@ impl ToolRunner for MockToolRunner {
         self.job = None;
         Some(Exit {
             code: if self.killed { None } else { self.current_exit },
-            signal: self.killed,
         })
     }
 
@@ -1045,39 +1045,12 @@ mod tests {
 
     #[test]
     fn exit_result_dispatch_matches_original() {
-        assert_eq!(
-            Exit {
-                code: Some(0),
-                signal: false
-            }
-            .result(),
-            Ok(())
-        );
-        assert_eq!(
-            Exit {
-                code: None,
-                signal: true
-            }
-            .result(),
-            Err(ToolError::Killed)
-        );
-        assert_eq!(
-            Exit {
-                code: Some(3),
-                signal: false
-            }
-            .result(),
-            Err(ToolError::Failed(3))
-        );
-        // code 缺失且非信号（wait 失败）→ 兜底 -1
-        assert_eq!(
-            Exit {
-                code: None,
-                signal: false
-            }
-            .result(),
-            Err(ToolError::Failed(-1))
-        );
+        assert_eq!(Exit::new(Some(0)).result(), Ok(()));
+        assert_eq!(Exit::new(None).result(), Err(ToolError::Killed));
+        assert_eq!(Exit::new(Some(3)).result(), Err(ToolError::Failed(3)));
+        // `code` 为唯一事实来源：None 即被信号终止（生产构造恒满足）。
+        assert!(Exit::new(None).is_signal());
+        assert!(!Exit::new(Some(0)).is_signal());
     }
 
     #[test]
@@ -1148,13 +1121,7 @@ mod tests {
         r.start("nfc-list", &[], &pass_gate()).unwrap();
         assert_eq!(r.exit(), None);
         r.pump(&mut |_| {});
-        assert_eq!(
-            r.exit(),
-            Some(Exit {
-                code: Some(0),
-                signal: false
-            })
-        );
+        assert_eq!(r.exit(), Some(Exit::new(Some(0))));
         assert!(!r.is_running());
     }
 
@@ -1177,13 +1144,7 @@ mod tests {
         r.pump(&mut |c| rest.push(c.clone()));
         assert!(rest.is_empty());
         let e = r.exit().unwrap();
-        assert_eq!(
-            e,
-            Exit {
-                code: None,
-                signal: true
-            }
-        );
+        assert_eq!(e, Exit::new(None));
         assert_eq!(e.result(), Err(ToolError::Killed));
     }
 
@@ -1258,7 +1219,7 @@ mod tests {
         let e = r.exit().unwrap();
         s.apply(Event::TaskDone {
             code: e.code,
-            killed: e.signal,
+            killed: e.is_signal(),
         });
         assert!(!s.is_running_task);
         assert!(s.log_buffer.contains("exit code: 7"));

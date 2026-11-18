@@ -334,6 +334,20 @@ impl GateError {
     }
 }
 
+impl std::fmt::Display for GateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // 人类可读描述；UI 侧仍走 i18n_key() 做本地化，这里用于调试/错误传播。
+        let s = match self {
+            GateError::NotConnected => "设备未连接",
+            GateError::Busy => "已有任务运行",
+            GateError::Connecting => "设备连接中",
+        };
+        f.write_str(s)
+    }
+}
+
+impl std::error::Error for GateError {}
+
 /// 前置门禁检查。对标原版 `exec()` 的未连接拦截与 `isRunningTask` 单任务限制。
 pub fn gate(spec: &ActionSpec, state: &AppState) -> Result<(), GateError> {
     if spec.not_while_connecting && state.device_state == DeviceState::Connecting {

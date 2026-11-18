@@ -1895,34 +1895,38 @@ fn dump_history(ui: &mut Ui, app: &mut NfcApp) -> bool {
                             }
                         }
                         if editing {
-                            let autofocus = app.forms.history_focus_request
-                                && !ui.input(|i| i.pointer.any_click());
-                            app.forms.history_focus_request = false;
-                            let (_, text) = app.forms.history_rename.as_mut().unwrap();
-                            // 留出尾部 ✓/✗ 两个小按钮的位置，避免输入框越界压住按钮。
-                            let width = (ui.available_width() - 60.0).max(80.0);
-                            let r = ui.add(egui::TextEdit::singleline(text).desired_width(width));
-                            if autofocus {
-                                r.request_focus();
-                            }
-                            // 先取按钮结果、再判失焦：点 ✗ 会让输入框同一帧失焦，
-                            // 判定在前会把「取消」误当成提交（blur 提交本身对标原版）。
-                            let confirm = ui.small_button("✓").clicked();
-                            let cancel = ui.small_button("✗").clicked();
-                            // 三方信号同帧成立的顺序问题见 `rename_intent` 的文档。
-                            match rename_intent(
-                                r.lost_focus(),
-                                ui.input(|i| i.key_pressed(egui::Key::Enter)),
-                                confirm,
-                                cancel,
-                            ) {
-                                RenameIntent::Commit => {
-                                    commit = app.forms.history_rename.take();
+                            // `editing` 由 `history_rename.as_ref().is_some_and(...)` 判定，
+                            // 进入时必为 `Some`；用 `if let` 解构而非 unwrap（防结构漂移）。
+                            if let Some((_, text)) = app.forms.history_rename.as_mut() {
+                                let autofocus = app.forms.history_focus_request
+                                    && !ui.input(|i| i.pointer.any_click());
+                                app.forms.history_focus_request = false;
+                                // 留出尾部 ✓/✗ 两个小按钮的位置，避免输入框越界压住按钮。
+                                let width = (ui.available_width() - 60.0).max(80.0);
+                                let r =
+                                    ui.add(egui::TextEdit::singleline(text).desired_width(width));
+                                if autofocus {
+                                    r.request_focus();
                                 }
-                                RenameIntent::Cancel => {
-                                    app.forms.history_rename = None;
+                                // 先取按钮结果、再判失焦：点 ✗ 会让输入框同一帧失焦，
+                                // 判定在前会把「取消」误当成提交（blur 提交本身对标原版）。
+                                let confirm = ui.small_button("✓").clicked();
+                                let cancel = ui.small_button("✗").clicked();
+                                // 三方信号同帧成立的顺序问题见 `rename_intent` 的文档。
+                                match rename_intent(
+                                    r.lost_focus(),
+                                    ui.input(|i| i.key_pressed(egui::Key::Enter)),
+                                    confirm,
+                                    cancel,
+                                ) {
+                                    RenameIntent::Commit => {
+                                        commit = app.forms.history_rename.take();
+                                    }
+                                    RenameIntent::Cancel => {
+                                        app.forms.history_rename = None;
+                                    }
+                                    RenameIntent::None => {}
                                 }
-                                RenameIntent::None => {}
                             }
                         } else if ui
                             .small_button("✎")
