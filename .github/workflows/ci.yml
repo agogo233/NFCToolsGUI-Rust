@@ -1,12 +1,8 @@
 # CI：全量测试 + 静态门禁 + Windows 发布构建。
 #
-# 刻意**不**构建 framework/bin：那是 C 子模块（GSWXXN/* 的 fork），
-# 需要 autoconf/libtool，且 Linux 产物不能用于 Windows。用户需自行跑
-# 原版项目的 compile.sh。本仓库的 job 因此只验证 Rust 侧。
-#
-# 但**会**把原版 Electron 源码 checkout 进来（pin 到固定 commit，不拉子模块），
-# 让 verify_parity.py 的 28 项对拍真正跑起来而不是静默 SKIP。原版漂移时
-# 更新 ORIG_REF 重新对拍基线即可；对拍基准 commit 见 ORIG_REF。
+# 项目已脱离原版 Electron 源码：verify_parity.py 不再对拍上游，CI 不 checkout 原版。
+# framework/bin 的 C 工具由 compile.sh 构建：Linux test job 编译后跑真二进制集成
+# 测试（real_tools/tool_cli），Windows build job 编译后随 exe 打包。
 name: CI
 
 on:
@@ -15,15 +11,9 @@ on:
   pull_request:
   workflow_dispatch:
 
-# 对拍基准：原版仓库 pin 到该 commit（可复现，不随上游移动而变红）。
-# 原版 = agogo233/NFCToolsGUI，分支 tauri。要重新对拍基线时，把它改成
-# 新的目标 commit，然后本机跑一遍 verify_parity.py 确认全绿再提交。
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  ORIG_REPO: agogo233/NFCToolsGUI
-  ORIG_REF: 9c5951600f04d6d4c49855c2cfff4909bc81f1e2
-  ORIG_CHECKOUT: NFCToolsGUI-ref
 
 jobs:
   # ── 1) Linux：编译 + 测试 + 静态门禁 ───────────────────────────────────
@@ -32,27 +22,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      # 拉取原版源码作为对拍基准（pin commit、不拉子模块——
-      # verify_parity.py 只读 src/ 下的 js/json/html 与 src-tauri 的 Rust，
-      # 那些都在主仓库，source/ 里的 C 子模块用不上）。
-      - name: 拉取原版（对拍基准）
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.ORIG_REPO }}
-          ref: ${{ env.ORIG_REF }}
-          submodules: false
-          fetch-depth: 1
-          path: ${{ env.ORIG_CHECKOUT }}
-
-      # 护栏：原版没checkout成功必须立刻大声失败，不能静默降级成「全 SKIP」。
-      - name: 校验原版已就位
-        run: |
-          test -f "${ORIGINAL_DIR}/src/command.js" || {
-            echo "::error::原版 checkout 缺失 $ORIGINAL_DIR/src/command.js"; exit 1; }
-          echo "原版就位：${ORIGINAL_DIR} @ ${{ env.ORIG_REF }}"
-        env:
-          ORIGINAL_DIR: ${{ github.workspace }}/${{ env.ORIG_CHECKOUT }}
 
       - name: 安装 Rust
         uses: dtolnay/rust-toolchain@stable
@@ -70,12 +39,15 @@ jobs:
 
       # eframe/winit 在 Linux 上需要这几个系统库。**不需要 libgtk-3**：
       # rfd 用的是默认特性 xdg-portal + wayland，gtk3 是可选且非默认特性。
+      # C 工具编译（compile.sh）需要 autoconf/libtool/patchelf 等。
       - name: 安装系统依赖
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libxkbcommon-dev libx11-dev libxrandr-dev libxi-dev \
             libxcursor-dev libwayland-dev libudev-dev libxcb1-dev \
+            autoconf automake libtool cmake patchelf unzip \
+            libusb-1.0-0-dev libreadline-dev zlib1g-dev liblzma-dev \
             pkg-config
 
       - name: 外联审计（不得引入网络栈）
@@ -99,8 +71,19 @@ jobs:
       - name: Clippy（real-serial 特性）
         run: cargo clippy --workspace --all-targets --features real-serial -- -D warnings
 
+      # 编译 framework/bin 的 C 工具：real_tools/tool_cli 是真二进制集成测试，
+      # 缺它们会自动跳过（CI 盲区）。compile.sh 已在本地验证可跑通。
+      - name: 编译 C 工具（compile.sh）
+        run: bash compile.sh
+
       - name: 单元 + 集成测试
         run: cargo test --workspace --locked
+
+      # real_tools / tool_cli 针对真实 C 二进制，需 NFC_FRAMEWORK_BIN 指向产物。
+      - name: 真二进制集成测试（real_tools + tool_cli）
+        env:
+          NFC_FRAMEWORK_BIN: ./framework/bin
+        run: cargo test -p nfc-core --test real_tools --test tool_cli --locked
 
       - name: core selftest
         run: cargo run -q -p nfc-core -- --selftest
@@ -110,11 +93,8 @@ jobs:
       - name: app selftest
         run: cargo run -q -p nfc-app -- --selftest
 
-      # 对拍原版：指向上面 checkout 进来的原版。设了 NFC_ORIG_DIR 后，
-      # verify_parity.py 的 28 项 check_orig 会真跑；若仍有 SKIP 直接退出码 2 失败。
-      - name: 静态回归（对拍原版 + 接线守卫）
-        env:
-          NFC_ORIG_DIR: ${{ github.workspace }}/${{ env.ORIG_CHECKOUT }}
+      # 静态回归（接线守卫）：verify_parity 已脱离原版对拍，纯 Rust 侧断言。
+      - name: 静态回归（接线守卫）
         run: |
           set -o pipefail
           python3 tools/verify_parity.py 2>&1 | tee /tmp/verify.log
@@ -130,21 +110,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # 对拍基准：原版 checkout 进来（pin commit、不拉子模块）。
-      - name: 拉取原版（对拍基准）
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.ORIG_REPO }}
-          ref: ${{ env.ORIG_REF }}
-          submodules: false
-          fetch-depth: 1
-          path: ${{ env.ORIG_CHECKOUT }}
-
-      # 对拍原版。设了 NFC_ORIG_DIR 后 verify_parity.py 若仍 SKIP 会退出码 2 失败；
-      # 原版目录缺失则退出码 3 失败（见脚本自护栏），不会静默降级。
-      - name: 静态回归（对拍原版）
-        env:
-          NFC_ORIG_DIR: ${{ github.workspace }}\${{ env.ORIG_CHECKOUT }}
+      # 静态回归（接线守卫）：verify_parity 已脱离原版对拍，纯 Rust 侧断言。
+      - name: 静态回归（接线守卫）
         run: python tools\verify_parity.py
 
       # ── 编译 C 工具（framework/bin） ─────────────────────────────────────

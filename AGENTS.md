@@ -11,7 +11,7 @@ NFCToolsGUI 的 Rust 重写版（AGPL-3.0）。与 PN532 交互的跨平台桌�
 
 ## 必备前置：C 工具 `framework/bin`
 
-10 个 C 工具（`nfc-list mfoc nfc-mfclassic nfc-mfdetect nfc-mfdict nfc-mflock nfc-mfsetuid libnfc-collect cropto1_bs mfcuk`）由仓库内 vendored 源码编译，**不在 CI 里自动构建**（Linux 产物不能用于 Windows）。
+10 个 C 工具（`nfc-list mfoc nfc-mfclassic nfc-mfdetect nfc-mfdict nfc-mflock nfc-mfsetuid libnfc-collect cropto1_bs mfcuk`）由仓库内 vendored 源码编译。CI 里由 `compile.sh` 构建：Linux `test` job 编译后跑真二进制集成测试（`real_tools`/`tool_cli`），Windows `build` job 编译后随 exe 一起打包（Linux 产物不能用于 Windows，故两平台各自编译）。
 
 - 编译：`sh ./compile.sh`（Linux 需 `autoconf automake libtool pkg-config cmake patchelf libusb-1.0-0-dev libreadline-dev zlib1g-dev liblzma-dev`；Windows 走 MSYS2 MINGW64 shell）
 - 运行时定位：exe 同级的 `framework/bin` → 否则向上最多 5 层父目录 → 否则读 `NFC_FRAMEWORK_BIN` 环境变量
@@ -30,7 +30,7 @@ cargo test -p nfc-core --test real_tools --test tool_cli   # 需要 framework/bi
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --workspace --all-targets --features real-serial -- -D warnings   # CI 额外跑一次：RealSerial 平时不参与编译
 cargo fmt --all --check
-python3 tools/verify_parity.py     # 847 项静态门禁（39 action parity 表 + 接线守卫）
+python3 tools/verify_parity.py     # 807 项静态门禁（39 action parity 表 + 接线守卫，已脱离原版对拍）
 ./scripts/package.sh               # 构建 + 打包 out/NFCToolsGUI-win-x64.zip
 ./scripts/package.sh --check       # 只跑门禁与检测
 ```
@@ -49,10 +49,7 @@ python3 tools/verify_parity.py     # 847 项静态门禁（39 action parity 表 
 
 把 `command::ALL_ACTIONS`（39 个 action）钉在 `docs/04 §9` 的 parity 表上，并守住一批「曾经真错过」的缺陷。路径相对脚本解析，克隆到任何位置都能跑。
 
-- 依赖原版 Electron 源码的 28 项 `check_orig` 对拍：原版不在时记 SKIP（**不算失败**）。
-- 显式设了 `NFC_ORIG_DIR` 却指向不存在的目录 → 退出码 3（防静默降级）。
-- CI 里 pin 了原版 commit（`ORIG_REF`），设 `NFC_ORIG_DIR` 后 SKIP 会直接失败。
-- 原版源码默认在 `../NFCToolsGUI`（仓库同级）。
+- **原版对拍已退役**：项目脱离上游后不再 checkout 原版 Electron 源码，`check_orig` 对拍与 `NFC_ORIG_DIR` 机制已移除；脚本改为只断言 Rust 侧自身不变量。
 
 ## 关键约定与陷阱
 
@@ -79,4 +76,4 @@ python3 tools/verify_parity.py     # 847 项静态门禁（39 action parity 表 
 
 ## 真机验收
 
-CI 不验证硬件（无读卡器）。真机验收清单在 README「真机验收清单」一节，覆盖驱动、读卡、系统对话框、写卡链路（含拔掉读卡器应中止的安全闸）、破解、文件与历史。
+CI 编译 framework/bin 后跑 `real_tools`/`tool_cli`（真二进制 flag 级测试），但**无读卡器**、不验证硬件交互。真机验收清单在 README「真机验收清单」一节，覆盖驱动、读卡、系统对话框、写卡链路（含拔掉读卡器应中止的安全闸）、破解、文件与历史。

@@ -9,13 +9,10 @@
     python3 tools/verify_parity.py
 
 路径全部相对本文件解析，故仓库克隆到任何位置都能跑。
-原版 Electron 源码（`NFCToolsGUI`）不在本仓库时，相关对拍项自动跳过
-并计数，不算失败。
 """
 from __future__ import annotations
 
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -27,33 +24,6 @@ REPO = Path(__file__).resolve().parent.parent
 CORE = REPO / "crates/nfc-core"
 APP = REPO / "crates/nfc-app"
 
-# 原版 Electron 源码：默认在同级的 ../NFCToolsGUI，可用环境变量覆盖。
-_orig_env = os.environ.get("NFC_ORIG_DIR")
-if _orig_env:
-    ORIG = Path(_orig_env).resolve()
-    if not ORIG.is_dir():
-        # 显式指定了 NFC_ORIG_DIR 却指向不存在的目录 = 配置错误（比如 CI 的
-        # checkout 步骤没跑成功 / 路径写错）。此时**必须大声失败**，不能静默
-        # 把 28 项对拍全 SKIP 掉——那正是「CI 盲区」的根源。
-        print(
-            f"ERROR: NFC_ORIG_DIR={_orig_env} 指向的目录不存在，无法对拍原版。\n"
-            "       若本机没有原版可去掉该变量（对拍项会 SKIP）；若 CI 里设了它，"
-            "       说明原版 checkout 步骤没成功。",
-            file=sys.stderr,
-        )
-        sys.exit(3)
-else:
-    _cands = [
-        REPO.parent / "NFCToolsGUI",          # 仓库与原版同级
-        REPO.parent.parent / "NFCToolsGUI",   # 仓库嵌在 NFC/ 下、原版在上一级
-        REPO / "NFCToolsGUI",                # 原版就在本仓库内
-    ]
-    ORIG = next((c for c in _cands if c.is_dir()), _cands[0])
-# 原版仓库在不在本机。CI 只 clone 本仓库，因此**必须**支持缺失：
-# 依赖原版的对拍项此时记为 SKIP 并计入跳过数，不算失败。
-# （注意：只有「没显式指定 NFC_ORIG_DIR 又找不到」才走 SKIP；显式指定了却没有，
-#   上面已经 sys.exit(3)，不会落到这里。）
-ORIG_MISSING = not ORIG.is_dir()
 ZH = REPO / "assets/locales/zh-CN.json"
 # S16 UI 体验优化本地补的 24 个 key（docs/02 §6.25 续 / §6.28 偏离登记；
 # 含 §6.28/§6.29 补的控制台悬停说明、快捷键可见性等）。
@@ -254,38 +224,18 @@ IDX: Path | None = (_idx_dirs[0] / ".cache") if _idx_dirs else None
 MSRV = (1, 95)
 
 results: list[tuple[str, str, str]] = []
-# 因「原版缺失」而跳过的项计数（区别于 c_msrv 那种「无 cargo index」的合法跳过）。
-ORIG_SKIPS = 0
-
-
 def check(ok: bool, label: str, detail: str = "") -> bool:
     results.append(("PASS" if ok else "FAIL", label, detail))
     return ok
 
 
-def skip(label: str, detail: str = "", orig: bool = False) -> None:
-    """本版无法执行的项。计入跳过数，不算失败。
-
-    orig=True 表示这条跳过是因「原版源码缺失」——只有它参与
-    「设了 NFC_ORIG_DIR 却仍跳对拍」的护栏（见 main 末尾）。
-    """
-    global ORIG_SKIPS
-    if orig:
-        ORIG_SKIPS += 1
-    results.append(("SKIP", label, detail or f"原版源码缺失：{ORIG}"))
-
-
-def check_orig(ok: bool, label: str, detail: str = "") -> bool:
-    """依赖原版源码的对拍项。原版不在时跳过而非失败（见文件头用法说明）。"""
-    if ORIG_MISSING:
-        skip(label, detail, orig=True)
-        return False
-    return check(ok, label, detail)
+def skip(label: str, detail: str = "") -> None:
+    """本版无法执行的项。计入跳过数，不算失败。"""
+    results.append(("SKIP", label, detail))
 
 
 def rd(p: Path) -> str:
-    """读文件。原版仓库不在时返回空串——相关对拍项由 `check_orig` 跳过，
-    而不是整脚本崩在 FileNotFoundError 上。"""
+    """读文件。缺失时返回空串——调用方据此跳过而非崩在 FileNotFoundError 上。"""
     try:
         return p.read_text(encoding="utf-8", errors="replace")
     except OSError:
@@ -293,8 +243,7 @@ def rd(p: Path) -> str:
 
 
 def rd_json(p: Path) -> dict:
-    """读 JSON 对象。文件缺失或不是合法 JSON 时返回空对象——
-    直接 `json.loads(rd(...))` 会在原版仓库不在时抛 JSONDecodeError 崩掉整个脚本。"""
+    """读 JSON 对象。文件缺失或不是合法 JSON 时返回空对象。"""
     try:
         return json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -408,46 +357,29 @@ def c_msrv() -> None:
 
 # ---------------------------------------------------------------- D-G 原文对齐
 def d_align() -> None:
-    if ORIG_MISSING:
-        skip("D 原文标记 / libnfc.conf 模板 / DEVICE_SPEED / DEVICE_PREFIX 对齐",
-             orig=True)
-        return
-    cmd_js = rd(ORIG / "src/command.js")
-    status_js = rd(ORIG / "src/status.js")
-    preload_js = rd(ORIG / "src/preload.js")
+    """D 设备常量与日志标记：钉死在 Rust 侧自身的值上。
+
+    原版对拍已随项目脱离上游退役，此组改为断言 Rust 侧不漂移。
+    """
     serial_rs = rd(CORE / "src/serial.rs")
     paths_rs = rd(CORE / "src/paths.rs")
 
     for m in ["NFC device: NFC_Device opened", "Unable to open NFC device"]:
-        check_orig(m in cmd_js, f"D 原文含标记 {m!r}")
         check(re.search(rf'"{re.escape(m)}"', serial_rs) is not None, f"D serial.rs 含标记 {m!r}")
 
-    m = re.search(r"const content = `(.*?)`", cmd_js, re.S)
-    tmpl = m.group(1) if m else ""
-    tmpl_norm = tmpl.replace("${status.currentDevice}", "{device}").replace("${status.currentSpeed}", "{speed}")
-    rust_m = re.search(r'format!\(\s*"device\.name.*?"\s*\)', paths_rs, re.S)
-    norm = lambda s: re.sub(r"[\s\\]+", "", s)  # noqa: E731
-    ok = bool(rust_m) and norm(tmpl_norm) in norm(rust_m.group(0))
-    check_orig(ok, "E libnfc.conf 模板对齐", tmpl_norm)
-
-    orig_speed = re.search(r"currentSpeed\s*=\s*(\d+)", status_js)
     rust_speed = re.search(r"DEVICE_SPEED:\s*u32\s*=\s*([\d_]+)", paths_rs)
-    check_orig(
-        orig_speed and rust_speed and int(orig_speed.group(1)) == int(rust_speed.group(1).replace("_", "")),
-        "F DEVICE_SPEED 对齐",
-        f"原版 {orig_speed.group(1) if orig_speed else '?'} / rust {rust_speed.group(1) if rust_speed else '?'}",
-    )
+    check(rust_speed is not None and int(rust_speed.group(1).replace("_", "")) == 115_200,
+          "F DEVICE_SPEED 为 115200", f"rust {rust_speed.group(1) if rust_speed else '?'}")
 
-    op = re.search(r'devicePrefix:\s*"([^"]+)"', preload_js)
-    check(op and f'"{op.group(1)}"' in serial_rs, "G DEVICE_PREFIX 对齐 preload.js", op.group(1) if op else "?")
-    check_orig('device === " "' in cmd_js, 'G 原文含 device === " " 断连分支')
+    op = re.search(r'DEVICE_PREFIX:\s*&str\s*=\s*"([^"]+)"', serial_rs)
+    check(op is not None and op.group(1) == "/dev/tty.", "G DEVICE_PREFIX 为 /dev/tty.",
+          op.group(1) if op else "?")
     check('" "' in serial_rs, "G DEVICE_NONE 对齐")
 
 
 # ---------------------------------------------------------------- H i18n
 def h_i18n() -> None:
     keys = json.loads(rd(REPO / "assets/locales/zh-CN.json"))
-    orig_zh_keys = set(rd_json(ORIG / "src/locales/zh-CN.json")) if not ORIG_MISSING else set()
     check(
         len(keys) == 194 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(DUMP_VIEW_EXTRA) + len(PANEL_VALIDATION_EXTRA) + len(S18_MIGRATED) + len(NO_PORTAL_EXTRA) + len(REDESIGN_EXTRA) + len(MAXIMIZE_EXTRA) + len(UX_POLISH_EXTRA) + len(AUDIT_FIX_EXTRA),
         f"H zh-CN.json {194 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(DUMP_VIEW_EXTRA) + len(PANEL_VALIDATION_EXTRA) + len(S18_MIGRATED) + len(NO_PORTAL_EXTRA) + len(REDESIGN_EXTRA) + len(MAXIMIZE_EXTRA) + len(UX_POLISH_EXTRA) + len(AUDIT_FIX_EXTRA)} key"
@@ -479,10 +411,6 @@ def h_i18n() -> None:
         check(k in keys, f"H zh-CN 含最大化钮 {k}")
     for k in UX_POLISH_EXTRA:
         check(k in keys, f"H zh-CN 含体验优化 {k}")
-    for k in S18_MIGRATED:
-        # 必须走 check_orig：原版不在本机时 orig_zh_keys 是空集（第 346 行），
-        # 用 check 会把「查不到原版」误判成「key 是误造的」→ 20 项假失败。
-        check_orig(k in orig_zh_keys, f"H S18 迁移 {k} 确在上游（非误造）")
     check(not (REPO / "assets/locales/en.json").exists(), "H 无 en.json（仅中文决策）")
     body = rd(CORE / "src/serial.rs")
     used = set()
@@ -497,11 +425,7 @@ def h_i18n() -> None:
 
 # ---------------------------------------------------------------- I 门禁
 def i_gate() -> None:
-    eu = rd(ORIG / "src/execUtils.js")
     rs = rd(CORE / "src/runner.rs")
-    check_orig('status.currentDevice === null' in eu, "I 原文门禁①：currentDevice === null")
-    check_orig('cmd !== "nfc-list"' in eu, "I 原文门禁②：未连接仅放行 nfc-list")
-    check_orig("status.isRunningTask" in eu, "I 原文门禁③：忙碌")
     for pat, label in [
         (r"has_current_device", "I rust 门禁①"),
         (r"nfc-list", "I rust 门禁②"),
@@ -747,9 +671,6 @@ def n_generic() -> None:
 
 
 # ---------------------------------------------------------------- S4 数据模型
-# 原版源码路径统一走 ORIG（可用 NFC_ORIG_DIR 覆盖），不在脚本里写死绝对路径。
-JS = ORIG / "src/command.js"
-DUMPJS = ORIG / "src/renderer/js/dumpEditor.js"
 MODEL = CORE / "src/model"
 FIX = CORE / "tests/fixtures"
 
@@ -763,7 +684,6 @@ class ModelFiles:
         self.dump_rs = rd(MODEL / "dump.rs")
         self.keys_rs = rd(MODEL / "keys.rs")
         self.parse_rs = rd(MODEL / "parse.rs")
-        self.js = rd(JS)
 
 
 def s4_model() -> None:
@@ -787,15 +707,9 @@ def s4_model() -> None:
 
 # ============================================================ S4 数据模型分区
 def check_s4_a_default_keys(mf: ModelFiles) -> None:
-    """A 默认密钥表逐字对齐 command.js:50-64"""
-    if "const defaultKeys" in mf.js:
-        _d = mf.js.index("const defaultKeys")
-        js_keys = re.findall(r'"([0-9a-f]{12})"', mf.js[_d:_d + 700])
-    else:
-        js_keys = []
+    """A 默认密钥表：钉死 Rust 侧条数（原版对拍已退役）。"""
     rs_keys = re.findall(r'"([0-9a-f]{12})"',
                          mf.keys_rs[mf.keys_rs.index("DEFAULT_KEYS: [&str; 13]") :][:700])
-    check_orig(js_keys == rs_keys, "A DEFAULT_KEYS 与 command.js:50-64 逐字一致", f"{js_keys} != {rs_keys}")
     check(len(rs_keys) == 13, "A DEFAULT_KEYS 恰 13 条", f"实得 {len(rs_keys)}")
 
 
@@ -831,10 +745,7 @@ def check_s4_c_sizes(mf: ModelFiles) -> None:
 
 
 def check_s4_d_tail_offsets(mf: ModelFiles) -> None:
-    """D 尾块四段偏移对齐 dumpEditor.js:91-94"""
-    dumpjs = rd(DUMPJS)
-    for off in ["substring(0, 12)", "substring(12, 18)", "substring(18, 20)", "substring(20)"]:
-        check_orig(off in dumpjs, f"D 原版尾块切分 {off} 存在")
+    """D 尾块四段偏移：钉死 Rust 侧切分（原版对拍已退役）。"""
     for seg in ["seg(0, 12)", "seg(12, 18)", "seg(18, 20)", "seg(20, 32)"]:
         check(seg in mf.dump_rs, f"D 本实现尾块切分 {seg}")
 
@@ -1158,19 +1069,12 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     check("html_toggle_dark_mode" in rd(ZH), "H zh-CN 含 S8 settings 按钮文案")
 
     # ── S9 模态面板 ──────────────────────────────────────────────
-    hn = rd(ORIG / "src/renderer/html/hardNested.html")
-    dt = rd(ORIG / "src/renderer/html/dictTest.html")
-    ik = rd(ORIG / "src/renderer/html/inputkeys.html")
-    st = rd(ORIG / "src/renderer/html/settings.html")
-    ab = rd(ORIG / "src/renderer/html/about.html")
-    wj = rd(ORIG / "src/windows.js")
-    mj = rd(ORIG / "src/main.js")
     pa = rd(APP / "src/panels.rs")
     ap = "\n".join(rd(p) for p in sorted(APP.glob("src/**/*.rs")))
     stf9 = rd(APP / "src/selftest.rs")
 
-    check_orig('value="ffffffffffff,"' in ik and 'INPUT_KEYS_DEFAULT: &str = "ffffffffffff,"' in pa,
-          "S9 inputKeys 默认值含原版那个尾逗号")
+    check('INPUT_KEYS_DEFAULT: &str = "ffffffffffff,"' in pa,
+          "S9 inputKeys 默认值含尾逗号（对齐原版怪癖）")
     check("collect_only: self.collect_only && !self.auto_run" in pa,
           "S9 hardNested autoRun 强制 collectOnly=false（hardNested.html:65）")
     check("pub fn others_disabled(&self) -> bool" in pa and "self.auto_run" in pa,
@@ -1204,23 +1108,11 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     check("open-history-keys" in ap and "dump-history" in ap and "open-about" in ap,
           "S9 工具菜单含原版 5 项")
     # 原版 616b5b5「feat: restore the settings entry point」把 settings 按钮
-    # 取消注释了（index.html:38-40）。我们早已实现了 settings 面板与入口，
-    # 故这条守卫原先断言的「原版入口被注释」已过期——上游变了，不是我们的锅。
-    # 改为断言**真正要守的东西**：原版与我们都提供 settings 入口。
-    orig_idx = rd(ORIG / "src/renderer/html/index.html")
-    check_orig("open-settings-window" in orig_idx,
-          "S9 settings 入口在原版存在（616b5b5 起已取消注释）")
+    # 取消注释了（index.html:38-40）。我们早已实现了 settings 面板与入口。
+    # 原版对拍已退役，此处只守 Rust 侧提供了 settings 入口与面板。
     check("open-settings-window" in ap and "Panel::Settings" in ap,
           "S9 我们也实现了 settings 入口与面板")
-    # about 开源清单与原版一致（b0bd8d2 重新整理后为 18 项，含 11 个 Rust crate）
-    orig_lic = re.findall(r"\((MIT|GPL-2\.0|GPL-3\.0|LGPL-3.0|BSD-2-Clause)\)", ab)
-    # Rust crate 的 "MIT OR Apache-2.0" 需映射为 MIT（原版只有 MIT）
-    ours = re.findall(r'"(MIT|GPL-2\.0|GPL-3\.0|LGPL-3.0|BSD-2-Clause|MIT OR Apache-2.0)"', pa)
-    ours = ["MIT" if x == "MIT OR Apache-2.0" else x for x in ours]
-    check_orig(len(orig_lic) == 10, "S9 原版 about 开源清单 10 项", f"实际 {len(orig_lic)}")
-    check_orig(set(orig_lic) <= set(ours),
-               "S9 about 开源许可证覆盖原版全部",
-               f"仅本项目 {set(ours)-set(orig_lic)} / 缺 {set(orig_lic)-set(ours)}")
+    # about 开源清单（b0bd8d2 重新整理后为 18 项，含 11 个 Rust crate）
     # 18 = 7 个 C 工具 + 11 个 Rust crate（b0bd8d2 重新整理后）
     n_gh = pa.count("https://github.com")
     check(n_gh == 20, "S9 about 含开源链接 + LICENSE + 仓库首页", f"实际 {n_gh}")
@@ -1273,12 +1165,6 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
           f"实际 {n_cases}")
 
     # ── S10 dump 三面板 ──────────────────────────────────────────
-    de = rd(ORIG / "src/renderer/html/dumpEditor.html")
-    dc = rd(ORIG / "src/renderer/html/dumpComparator.html")
-    dh = rd(ORIG / "src/renderer/html/dumpHistory.html")
-    dejs = rd(ORIG / "src/renderer/js/dumpEditor.js")
-    dcjs = rd(ORIG / "src/renderer/js/dumpComparator.js")
-    dhjs = rd(ORIG / "src/renderer/js/dumpHistory.js")
     dfs = rd(CORE / "src/dumpfiles.rs")
     dumps = rd(CORE / "src/model/dump.rs")
 
@@ -1291,28 +1177,17 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     # （锚点随上游 dumpEditor 重构更新：原 data.data.forEach 已不存在，
     # 改用 groupHasTrailer 作稳定锚点——每扇区一个 div、块 3 单独着色）。
     check("desired_rows(4)" in pa, "S10 编辑器每扇区 4 行一个多行输入")
-    check_orig("contenteditable" in dejs and "groupHasTrailer" in dejs,
-          "S10 原版确认：每扇区一个 contenteditable div")
-    _cj = rd(ORIG / "src/command.js")
-    check_orig("slice(i, i + 4)).join('\\n')" in _cj and "i += 4" in _cj,
-          "S10 原版按 4 块分扇区并以换行连接（command.js:429-430）")
     # 保存的两道检查
     check("pub fn can_save(&self) -> bool" in pa, "S10 有 can_save 封装（dumpEditor.js:16+20）")
     check("!self.sectors.is_empty() && self.validate(true).is_ok()" in pa,
           "S10 can_save 含非空判断（否则写出 0 字节文件）")
-    check_orig("!currentFilePath || !getHexData()" in dejs, "S10 原版确是两道检查")
     # 比较器
     check("pub fn ready(&self) -> bool" in pa, "S10 比较器有 ready（dumpComparator.js:28）")
-    check_orig("dumpA.length > 0 && dumpB.length > 0" in dcjs, "S10 原版两侧非空才比对")
     check("fn render_diff_row" in pa and "mark_bg" in pa,
           "S10 diff 用 mark_bg/mark_fg 着色（对齐原版 <mark>）")
     # 历史面板按钮规则
     check("pub fn history_button_states(selected: usize) -> (bool, bool, bool)" in pa,
           "S10 历史按钮规则有函数（dumpHistory.js:100-115）")
-    check_orig("selectedDumps.length === 2" in dhjs and "selectedDumps.length === 1" in dhjs,
-          "S10 原版按勾选数分 1/2/其他三档")
-    check_orig('id="deleteSelectedButton"' in dh and "disabled" not in dh.split('id="deleteSelectedButton"')[1][:120],
-          "S10 删除按钮无 disabled（原版如此）")
     # dumpfiles 安全加固
     check("pub fn list" in dfs and "pub fn delete" in dfs and "pub fn rename" in dfs,
           "S10 dumpfiles 有 list/delete/rename")
@@ -1328,8 +1203,6 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     ):
         check(site in ap and "is_plain_name" in ap,
               f"S19 {label} 入口过 is_plain_name 防线")
-    check_orig(".endsWith('.mfd')" in rd(ORIG / "src/command.js"),
-          "S10 原版只列 .mfd（command.js:500）")
     # Action 新变体
     eng = rd(CORE / "src/engine.rs")
     check("SaveDump {" in eng and "DeleteDumps(" in eng,
@@ -1341,8 +1214,6 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
 
     # ── S11 engine 接线 ─────────────────────────────────────────
     eng = rd(CORE / "src/engine.rs")
-    cj = rd(ORIG / "src/command.js")
-    ej = rd(ORIG / "src/execUtils.js")
     rs = rd(CORE / "src/runner.rs")
 
     check("pub struct Engine" in eng and "pub fn dispatch" in eng and "pub fn pump" in eng,
@@ -1385,10 +1256,6 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
           "S11 connect 有异步握手状态（修掉了停在 Connecting 的死锁）")
     check("matches!(self.state.device_state, DeviceState::Connecting)" in ap,
           "S13 连接中禁用下拉由 device_state 派生（R5，不再是死字段）")
-    check_orig("writeFileSync(knownKeysFile" in cj or "knownKeysFile" in cj,
-          "S11 原版 connect 也写 libnfc.conf")
-    check_orig("if (!isRunningTask)" in ej or "isRunningTask" in ej,
-          "S11 原版 exec 门禁含 isRunningTask")
     # nfc-list 的门禁语义（易错点）
     check("!st.has_current_device || (!st.is_device_connected && tool != ALWAYS_ALLOWED)" in rs,
           "S11 门禁：currentDevice 为 null 时连 nfc-list 也拒（原版行为）")
@@ -1606,21 +1473,9 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     check("reqwest|hyper|tokio::net" in wf, "S12 CI 有外联审计")
     check("windows-latest" in wf, "S12 CI 有 Windows 发布构建")
     check("libgtk-3-dev" not in wf, "S12 CI 不需要 GTK（rfd 用 xdg-portal）")
-    # S12-10：CI 必须把 28 项对拍**真跑起来**，而不是静默 SKIP。
-    # 做法 = checkout 原版（pin commit、不拉子模块）+ 设 NFC_ORIG_DIR。
-    # 若漏了任一环，verify_parity.py 的 check_orig 会回退成 SKIP，CI 又是空转。
-    check("actions/checkout@v4" in wf and "ORIG_REF" in wf,
-          "S12-10 CI 有原版 checkout（对拍基准，pin commit）")
-    check("ORIG_REPO" in wf and "agogo233/NFCToolsGUI" in wf,
-          "S12-10 CI 指向正确的原版仓库")
-    check("submodules: false" in wf,
-          "S12-10 原版 checkout 不拉 C 子模块（对拍只读 src/）")
-    check("NFC_ORIG_DIR" in wf,
-          "S12-10 CI 设了 NFC_ORIG_DIR（让 28 项对拍真跑，否则静默 SKIP）")
-    # 脚本侧的两道自护栏：显式指定了原版却缺失 → 大声失败（不静默降级）
-    check('sys.exit(3)' in rd(REPO / "tools/verify_parity.py")
-          and "ORIG_SKIPS" in rd(REPO / "tools/verify_parity.py"),
-          "S12-10 verify_parity 有「指定了 NFC_ORIG_DIR 却仍跳对拍」的自护栏")
+    # 原版对拍已随项目脱离上游退役：CI 不再 checkout 原版，verify_parity
+    # 也不再依赖 NFC_ORIG_DIR。CI 只需验证 Rust 侧 + framework/bin 编译。
+    check("NFC_ORIG_DIR" not in wf, "S12-10 CI 不再设 NFC_ORIG_DIR（对拍退役）")
     rme = rd(REPO / "README.md")
     check("真机验收清单" in rme, "S12 README 有真机验收清单")
     check("AGPL" in rme, "S12 README 声明许可证")
@@ -1830,14 +1685,11 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     doc2 = rd(REPO / "docs/02-架构设计.md")
     th = rd(CORE / "src/theme.rs")
     check("tokens.css 有 39 个 `--color-*`" in th, "R theme.rs 注明建模范围 34/39")
-    tok = rd(ORIG / "src/renderer/css/tokens.css")
-    for css, hexval in (("--color-danger", "#eb7171"), ("--color-danger-strong", "#c0392b")):
-        check_orig(css in tok and hexval in tok, f"R theme 危险色对标原版 tokens.css {css}={hexval}")
+    for hexval in ("Rgb::new(0xeb, 0x71, 0x71)", "Rgb::new(0xc0, 0x39, 0x2b)"):
+        check(hexval in th, f"R theme 危险色 {hexval} 存在")
     check("未建模 5 个" in th, "R theme.rs 列明未建模的 5 个 token（4 滚动条 + 1 焦点环）")
     check("原生滚动条" in doc2 and "--color-scrollbar" in doc2, "R theme 缺口已登记 docs/02 §6.3")
     i18n_asset = rd_json(REPO / "assets/locales/zh-CN.json")
-    orig_zh = rd_json(ORIG / "src/locales/zh-CN.json")
-    orig_en = rd_json(ORIG / "src/locales/en.json")
     # S8 补了 3 个 key：原版 settings.html 把这三个按钮文案**硬编码英文**
     # （Toggle Dark Mode / Toggle Light Mode / Follow system），没有走 i18n。
     # 我们把它们纳入中文表，属刻意的本地化补全，登记于 docs/02 §6.6。
@@ -1867,9 +1719,10 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     # 控制台按钮悬停说明（§6.28 P1）
     # （docs/02 §6.25 续 / §6.28 / S16 偏离登记）。
     LOCAL_EXTRA = S8_EXTRA | S11_EXTRA | S12_EXTRA | S15_EXTRA | S16_EXTRA | S17_EXTRA | S18_EXTRA | MFOC_PROBES_EXTRA | LOG_COPY_EXTRA | DUMP_VIEW_EXTRA | PANEL_VALIDATION_EXTRA | NO_PORTAL_EXTRA | REDESIGN_EXTRA | MAXIMIZE_EXTRA | UX_POLISH_EXTRA | AUDIT_FIX_EXTRA
-    # 原版对拍基线（ORIG_REF）漂移时上游会新增 key，对应本重写**没有**的功能/结构。
-    # 搬运这些文案没有意义（没有代码会 t() 它们），故显式登记为「上游有、我们不做」。
-    # 若将来真要做对应功能，把 key 从这里挪进 LOCAL_EXTRA 即可。
+    # 对照原版登记的上游独有 key（原版对拍已退役，此集合作为历史快照保留）：
+    # 对应本重写**没有**的功能/结构。搬运这些文案没有意义（没有代码会 t() 它们），
+    # 故显式登记为「上游有、我们不做」。若将来真要做对应功能，把 key 从这里挪进
+    # LOCAL_EXTRA 即可。
     UPSTREAM_ONLY = {
         # ── 主题三态切换 + 设置页分区标题：我们 S8 用了不同的 key 结构，不搬 ──
         "html_theme",
@@ -1916,10 +1769,6 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
         "log_msg_operation_failed",
         "log_msg_no_hard_nested_progress",
     }
-    check_orig(set(i18n_asset) - LOCAL_EXTRA == set(orig_zh) - UPSTREAM_ONLY == set(orig_en) - UPSTREAM_ONLY,
-                f"R i18n key 集除本地补的 {len(LOCAL_EXTRA)} 个与上游独有的 {len(UPSTREAM_ONLY)} 个外完全一致",
-               f"仅本项目 {set(i18n_asset)-set(orig_zh)-LOCAL_EXTRA} / "
-               f"仅原版 {set(orig_zh)-set(i18n_asset)-UPSTREAM_ONLY}")
     check(S8_EXTRA <= set(i18n_asset), "R S8 补的 3 个 settings 按钮文案在表内")
     check(S11_EXTRA <= set(i18n_asset), "R S11 补的无进展兜底文案在表内")
     check(S15_EXTRA <= set(i18n_asset), "R S15 补的 6 个 UI 文案在表内")
@@ -1927,12 +1776,8 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     check(LOG_COPY_EXTRA <= set(i18n_asset), "R 日志复制补的 2 个文案在表内")
     check(DUMP_VIEW_EXTRA <= set(i18n_asset), "R 转储编辑器视图切换补的 3 个文案在表内")
     check(PANEL_VALIDATION_EXTRA <= set(i18n_asset), "R 面板输入校验补的 2 个文案在表内")
-    check_orig(LOCAL_EXTRA.isdisjoint(orig_zh),
-          f"R 本地补的 {len(LOCAL_EXTRA)} 个 key 确认原版不存在")
     check(UPSTREAM_ONLY.isdisjoint(set(i18n_asset)),
            f"R 上游独有的 {len(UPSTREAM_ONLY)} 个 key 确认我们没搬（搬了也没有代码 t() 它们）")
-    check_orig(all(i18n_asset.get(k) == orig_zh.get(k) for k in set(i18n_asset) - LOCAL_EXTRA),
-          f"R i18n 文案与原版逐条一致（除本地新增 {len(LOCAL_EXTRA)} 个）")
     check([k for k in i18n_asset if k.startswith("lod_")] != [], "R 原版拼写错误 key lod_* 原样保留")
     # 「以为在补东西、其实建了个新 key」：曾出现过 `html_license:`（多了个冒号），
     # 被测试当成「原版拼写错误」而保留下来。key 名以标点结尾一律可疑。
@@ -1958,18 +1803,15 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     check(len(cn | idl | {a for a, _, _, n in specs if n == "true"}) == 21, "R 三门禁并集 21")
     allact = re.findall(r'"([\w-]+)"', cd[cd.index("ALL_ACTIONS"):cd.index("];", cd.index("ALL_ACTIONS"))])
     check([s[0] for s in specs] == allact, "R ALL_ACTIONS 与 ACTION_SPECS 顺序一致")
-    js_actions = re.findall(r'^\s{4}"([\w-]+)"\s*:', rd(JS), re.M)
     phw_extra = ["open-phw-window", "phw-read-uid", "phw-write-uid", "phw-write-data"]
     s18_extra = ["cuid-write", "input-uid-write", "done-input-uid-write", "dump-editor-export-keys", "run-mfcuk"]
-    check_orig(allact[:30] == js_actions and allact[30:34] == phw_extra and allact[34:] == s18_extra,
-          "R ALL_ACTIONS 前30 对齐 command.js + 34-37 为 S14 phw + 38-42 为 S18 新增")
+    check(allact[30:34] == phw_extra and allact[34:] == s18_extra,
+          "R ALL_ACTIONS 34-37 为 S14 phw + 38-42 为 S18 新增")
     ru = rd(CORE / "src/runner.rs")
     gate_rs = ru[ru.index("pub fn gate("):]
     gate_rs = gate_rs[:gate_rs.index("\n}\n")]
-    gate_js = rd(ORIG / "src/execUtils.js")
-    check_orig("!st.has_current_device || (!st.is_device_connected && tool != ALWAYS_ALLOWED)" in gate_rs
-          and 'status.currentDevice === null || (!status.isDeviceConnected && cmd !== "nfc-list")' in gate_js,
-          "R runner::gate 首条判定与 execUtils.js:13 逐字等价")
+    check("!st.has_current_device || (!st.is_device_connected && tool != ALWAYS_ALLOWED)" in gate_rs,
+          "R runner::gate 首条判定：currentDevice 为 null 时仅放行 nfc-list")
     check(gate_rs.index("NotConnected") < gate_rs.index("Busy"), "R runner::gate 判定顺序 NotConnected 先于 Busy")
     check("if st.is_running_task {" in gate_rs, "R runner::gate 忙碌判定不含 nfc-list 豁免")
     cgate = cd[cd.index("pub fn gate("):]
@@ -2036,21 +1878,7 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
 
 
 def s14_phw() -> None:
-    """S14 手机/手环操作区：对拍上游 Tauri `phw_*` 的关键行为。
-
-    上游在 `src-tauri/src/commands.rs`（`3316b08` + `f835e4e`）。原版若指向
-    main 分支（无 src-tauri）或目录缺失，则跳过而非失败。
-    """
-    tauri = rd(ORIG / "src-tauri" / "src" / "commands.rs")
-    if not tauri:
-        skip("S14 手机/手环 对拍上游 Tauri phw_*", "无 src-tauri（main 分支或原版缺失）")
-        return
-    # 上游钉住的 4 项关键行为
-    check("(1..=2).contains" in tauri, "S14 上游写数据扇区限块 1-2", "f835e4e")
-    check('(sector * 4 + block)' in tauri, "S14 上游偏移公式 (sector*4+block)*16")
-    check('-f" ' in tauri or '-f".to_string()' in tauri or '"-f"' in tauri,
-          "S14 上游 BCC 不自洽时 mfsetuid 追加 -f")
-    check("nfc-mfdetect" in tauri and "-O" in tauri, "S14 上游读回用 nfc-mfdetect -O")
+    """S14 手机/手环操作区：钉死 Rust 侧关键行为（原版对拍已退役）。"""
     # 我们侧镜像（引擎读回 + 数据层块号/偏移/BCC）
     eng = rd(CORE / "src" / "engine.rs")
     phw = rd(CORE / "src" / "tasks" / "phw.rs")
@@ -2058,8 +1886,8 @@ def s14_phw() -> None:
           "S14 引擎接线三个 phw 动作")
     check('BLOCK_MIN' in phw and 'BLOCK_MAX' in phw and "SECTOR_MAX" in phw,
           "S14 数据层有块 1-2 / 扇区 0-15 上限常量")
-    check("sector * BLOCKS_PER_SECTOR" in phw, "S14 数据层偏移公式与上游一致")
-    check("block0_bcc_ok" in phw, "S14 数据层有 BCC 校验（对应上游 -f 分支）")
+    check("sector * BLOCKS_PER_SECTOR" in phw, "S14 数据层偏移公式")
+    check("block0_bcc_ok" in phw, "S14 数据层有 BCC 校验")
 
 
 def main() -> int:
@@ -2097,19 +1925,8 @@ def main() -> int:
     print("-" * (w + 12))
     total = f"合计 {len(results)} 项，通过 {passes}，失败 {fails}"
     if skips:
-        total += f"，跳过 {skips}（原版源码不在本机：{ORIG}，用 NFC_ORIG_DIR 指向）"
+        total += f"，跳过 {skips}"
     print(total)
-    # 显式指定了 NFC_ORIG_DIR = 本就是要全量对拍。此时「原版缺失」类跳过绝不该
-    # 出现（exit(3) 已挡住「指定了目录却不存在」）。注意只统计原版相关跳过：
-    # c_msrv 的「无 cargo index 缓存」是合法跳过，不算数（Windows 上 parity 先于
-    # cargo 运行时会走到这里，若把它也算进去会误杀）。
-    if _orig_env and ORIG_SKIPS:
-        print(
-            f"ERROR: 已指定 NFC_ORIG_DIR={_orig_env}，仍有 {ORIG_SKIPS} 项对拍因"
-            "「原版缺失」被跳过，全量对拍不完整。",
-            file=sys.stderr,
-        )
-        return 2
     return 1 if fails else 0
 
 

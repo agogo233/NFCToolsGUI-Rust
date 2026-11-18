@@ -125,13 +125,13 @@ cargo run -p nfc-app  -- --selftest   # 101 项界面 + 接线（S8 主窗口 + 
 cargo test --workspace          # 600+ 项（含 15 项真实 C 工具测试——缺 framework/bin 时自动跳过；6 项原版解析套件）
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
-python3 tools/verify_parity.py  # 847 项静态门禁（parity 表 / 接线守卫）
+python3 tools/verify_parity.py  # 807 项静态门禁（parity 表 / 接线守卫）
 ```
 
 `tools/verify_parity.py` 把关键不变量钉在源码文本上——它会核对
 `command::ALL_ACTIONS` 那 39 个 action 与 docs/04 §9 的表是否一一对应，
 并守住一批「曾经真错过」的缺陷。路径相对脚本解析，仓库克隆到任何位置都能跑；
-原版 Electron 源码不在时相关对拍项自动跳过。
+项目已脱离原版 Electron 源码，对拍项退役，脚本只断言 Rust 侧自身不变量。
 
 ### 文档
 
