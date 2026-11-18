@@ -35,8 +35,9 @@ rfd = "0.17"
 open = "5.4.4"
 
 [build-dependencies]
-# Windows 下把 icon.ico 嵌入 exe 资源（非 Windows 平台是 no-op）。
-winres = "0.1"
+# Windows 下把 icon.ico 嵌入 exe 资源（仅 Windows 目标构建时执行嵌入逻辑）。
+# winres 已于 2021 年停止维护，换用其维护中的 fork winresource（API 兼容）。
+winresource = "0.1"
 
 [features]
 # 真串口枚举：默认开（生产 GUI 必须有，否则下拉永远刷不出设备）。

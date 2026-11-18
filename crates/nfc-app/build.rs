@@ -11,10 +11,10 @@ fn main() {
     println!("cargo:rerun-if-changed=../../assets/icons/icon.ico");
 
     // Windows 下把 icon.ico 嵌入 exe 资源（文件图标 / 资源管理器缩略图）。
-    // 非 Windows 平台是 no-op（winres 内部按 cfg 空实现）。
+    // 非 Windows 目标不进入此 cfg 块，不会调用 winresource 的资源编译。
     #[cfg(target_os = "windows")]
     {
-        let mut res = winres::WindowsResource::new();
+        let mut res = winresource::WindowsResource::new();
         res.set_icon("../../assets/icons/icon.ico");
         res.compile()
             .expect("failed to embed assets/icons/icon.ico into exe");
