@@ -618,16 +618,25 @@ pub fn history_button_states(selected: usize) -> (bool, bool, bool) {
 /// 原版 `fs.rename` 出错即 `throw`（整个窗口崩掉）；此处只把错误记成事件。
 /// 成功后同步勾选集合——被改名的文件若正被勾选，得跟着改名，否则下一帧
 /// `history_selected.retain(...)` 会把它当成已删除的文件静默剔掉。
+///
+/// 目标名先过 [`nfc_core::dumpfiles::with_mfd_ext`] 归一化：`list()` 只收
+/// `.mfd` 文件，改成别的后缀（含尾随空格）会让文件从历史面板「消失」、
+/// 再也无法管理；输入 `old.mfd` 的去后缀名（如 `old`）等价于无操作。
 fn commit_rename(dir: &std::path::Path, old: &str, new: &str, app: &mut NfcApp) {
     if new.trim().is_empty() || new == old {
         app.forms.history_rename = None;
         return;
     }
-    match nfc_core::dumpfiles::rename(dir, old, new) {
+    let new = nfc_core::dumpfiles::with_mfd_ext(new.trim());
+    if new == old {
+        app.forms.history_rename = None;
+        return;
+    }
+    match nfc_core::dumpfiles::rename(dir, old, &new) {
         Ok(_) => {
             for s in app.forms.history_selected.iter_mut() {
                 if s == old {
-                    *s = new.to_owned();
+                    *s = new.clone();
                 }
             }
             app.state.apply(Event::Log(format!("\n{old} → {new}\n")));

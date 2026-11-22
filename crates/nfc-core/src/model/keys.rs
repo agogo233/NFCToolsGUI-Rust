@@ -170,7 +170,15 @@ pub fn save_keys(paths: &Paths, incoming: &[String]) -> Result<Vec<String>, Keys
         Err(source) => return Err(KeysError::Io { path, source }),
     };
 
-    let merged = merge_keys(&existing, incoming);
+    // 防御性过滤：只接受 12 位 hex。当前调用方都是解析器产物，但本函数是
+    // 公开 API——混入的非法行会让 C 工具的 -f 参数解析整体失败。
+    let incoming: Vec<String> = incoming
+        .iter()
+        .filter(|k| k.len() == 12 && k.chars().all(|c| c.is_ascii_hexdigit()))
+        .cloned()
+        .collect();
+
+    let merged = merge_keys(&existing, &incoming);
     // 显式追加后缀：with_extension 会把 .txt 替换掉，keys_file() 一旦改名就出错
     let tmp = PathBuf::from(format!("{}.tmp", path.display()));
     fs::write(&tmp, merged.join("\n")).map_err(|source| KeysError::Io {
@@ -283,5 +291,29 @@ mod tests {
     #[test]
     fn merge_on_empty_inputs_yields_empty() {
         assert!(merge_keys(&[], &[]).is_empty());
+    }
+
+    #[test]
+    fn save_keys_filters_non_12hex_incoming() {
+        let dir = std::env::temp_dir().join(format!("nfc-keys-filter-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths::new(&dir);
+
+        let added = save_keys(
+            &paths,
+            &[
+                "deadbeef1234".to_string(), // 合法
+                "nothex!!".to_string(),     // 非 hex，剔除
+                "ffffffffffffffffffff".to_string(), // 超长，剔除
+                "DEADBEEF6789".to_string(), // 合法（大小写敏感去重，两条都留）
+            ],
+        )
+        .unwrap();
+        assert_eq!(added, vec!["deadbeef1234", "DEADBEEF6789"]);
+
+        let on_disk = fs::read_to_string(paths.keys_file()).unwrap();
+        assert_eq!(parse_12hex(&on_disk), vec!["deadbeef1234", "DEADBEEF6789"]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

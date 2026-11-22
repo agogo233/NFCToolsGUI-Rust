@@ -146,6 +146,11 @@ pub struct NfcApp {
     pub bin_dir: PathBuf,
     /// 缺的具体工具名（`KNOWN_TOOLS` 的子集）。
     pub missing_tools: Vec<&'static str>,
+    /// 内置字典 `dict.dic` 是否缺失。dict-test 的硬依赖：原版字典是打包
+    /// 资源必然存在，本仓它是运行时资源、不内嵌，手工部署遗漏时字典测试
+    /// 会以 C 工具报错失败——启动时就并入引导条提示（Windows/开发态仓库
+    /// 根必有，通常不触发）。
+    pub dict_missing: bool,
     /// 是否已经就「无桌面门户」提示过用户，避免每帧刷屏。
     pub warned_no_portal: bool,
     /// 本机系统文件对话框是否可用（启动时探测一次，见 `dialogs_host`）。
@@ -208,6 +213,7 @@ impl NfcApp {
             tool_dir_ok: true,
             bin_dir: std::path::PathBuf::new(),
             missing_tools: Vec::new(),
+            dict_missing: false,
             warned_no_portal: false,
             file_dialogs_ok: dialogs_host::file_dialogs_supported(),
             logo: None,
@@ -259,24 +265,37 @@ impl NfcApp {
 
     /// 探测 `framework/bin` 下缺哪些工具，缺失则给一条明确的启动引导。
     ///
-    /// 原版无此步骤：缺失只在 `spawn` 时报 IO 错误。
+    /// 原版无此步骤：缺失只在 `spawn` 时报 IO 错误。顺带探测内置字典
+    /// （[`Self::check_dict`]），同为启动期硬依赖。
     pub fn check_tool_dir(&mut self) {
         let bin = self.bin_dir.clone();
         let missing = nfc_core::runner::missing_tools(&bin);
         self.tool_dir_ok = missing.is_empty();
         self.missing_tools = missing;
-        if self.tool_dir_ok {
-            return;
+        if !self.tool_dir_ok {
+            let list = self.missing_tools.join("、");
+            self.state.apply(Event::Log(format!(
+                "\n{}\n{}: {}\n{}\n",
+                t("html_framework_bin_missing"),
+                t("html_framework_bin_missing_short"),
+                list,
+                bin.display()
+            )));
+            self.push_event(EventKind::Error, &t("html_framework_bin_missing"));
         }
-        let list = self.missing_tools.join("、");
-        self.state.apply(Event::Log(format!(
-            "\n{}\n{}: {}\n{}\n",
-            t("html_framework_bin_missing"),
-            t("html_framework_bin_missing_short"),
-            list,
-            bin.display()
-        )));
-        self.push_event(EventKind::Error, &t("html_framework_bin_missing"));
+        self.check_dict();
+    }
+
+    /// 内置字典缺失检查：`dict_path` 指向的文件不存在时置位并提示。
+    ///
+    /// 用户改选字典成功后由 `apply_dict_choice`（DictFile 回传）清除。
+    pub fn check_dict(&mut self) {
+        self.dict_missing = !self.state.dict_path.is_file();
+        if self.dict_missing {
+            self.state
+                .apply(Event::Log(format!("\n{}\n", t("html_dict_missing"))));
+            self.push_event(EventKind::Error, &t("html_dict_missing"));
+        }
     }
 
     /// 换成带脚本的 `MockToolRunner`，供 `--selftest` 驱动完整的
@@ -469,6 +488,8 @@ impl NfcApp {
                     .unwrap_or_default();
                 self.state.dict_path = path;
                 self.forms.dict_test.file_name = name;
+                // 用户已改选字典：按实际文件重新判定缺失态（选到的必须存在）
+                self.dict_missing = !self.state.dict_path.is_file();
             }
             // command.js:546-556
             dialogs_host::FilePurpose::SaveLog => {
@@ -990,10 +1011,10 @@ impl NfcApp {
                 return false;
             }
         };
-        match std::fs::write(path, &bytes) {
+        // 原子写 + 收紧为仅本人可读：编辑器写回的是完整卡数据（含密钥扇区），
+        // 且不能因中途崩溃留下半截 dump（与 keys/registry 同一策略）。
+        match nfc_core::paths::write_private_atomic(path, &bytes) {
             Ok(()) => {
-                // 编辑器写回的是完整卡数据（含密钥扇区），收紧为仅本人可读。
-                nfc_core::paths::restrict_owner(path);
                 if update_origin {
                     if let Some(name) = path.file_name() {
                         self.forms.editor.file_name = Some(name.to_string_lossy().into_owned());
@@ -1653,7 +1674,7 @@ impl NfcApp {
         // 每帧推进在 `App::logic` 里做（早于本方法）：窗被最小化/遮挡时
         // eframe 只调 `logic` 不调 `ui`，放在这里会让子进程输出无人排空。
         self.title_bar(ui);
-        if !self.tool_dir_ok {
+        if !self.tool_dir_ok || self.dict_missing {
             self.missing_tools_bar(ui);
         }
         self.guidance_bar(ui);
@@ -1706,6 +1727,24 @@ impl NfcApp {
     /// 抛一条看不懂的 IO 错误。
     fn missing_tools_bar(&mut self, ui: &mut Ui) {
         let paint = self.paint();
+        // 工具缺失与字典缺失共用同一条红条，文案按命中的问题拼接。
+        let mut title = String::new();
+        let mut detail = String::new();
+        if !self.tool_dir_ok {
+            title.push_str(t("html_framework_bin_missing").as_str());
+            detail.push_str(&format!(
+                "{} {}\n{}",
+                t("html_framework_bin_missing_short"),
+                self.missing_tools.join("、"),
+                self.bin_dir.display()
+            ));
+        }
+        if self.dict_missing {
+            if !title.is_empty() {
+                title.push('\n');
+            }
+            title.push_str(t("html_dict_missing").as_str());
+        }
         Frame::NONE
             .fill(paint.color(paint.danger))
             // 与引导条（RADIUS[1]）统一，避免同为通栏提示条却一圆一直。
@@ -1713,13 +1752,10 @@ impl NfcApp {
             .inner_margin(egui::Margin::symmetric(8, 6))
             .show(ui, |ui| {
                 ui.vertical(|ui| {
-                    ui.label(RichText::new(t("html_framework_bin_missing")).strong());
-                    ui.label(format!(
-                        "{} {}\n{}",
-                        t("html_framework_bin_missing_short"),
-                        self.missing_tools.join("、"),
-                        self.bin_dir.display()
-                    ));
+                    ui.label(RichText::new(title).strong());
+                    if !detail.is_empty() {
+                        ui.label(detail);
+                    }
                 });
             });
     }

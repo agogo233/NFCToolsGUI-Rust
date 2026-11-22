@@ -354,17 +354,62 @@ impl AppState {
             // 原版 index.js:21-23 —— `substring(0, lastIndexOf('\n'))`。
             // 保留 `\n` 本身（截断点即换行符的下标，不含它），只剩换行时
             // lastIndexOf 返回 -1，JS 的 substring(0, -1) 等价 substring(0, 0)
-            // 即清空。
+            // 即清空。判据用**原始** chunk——剥离后 2K 序列已不存在。
             match self.log_buffer.rfind('\n') {
                 Some(pos) => self.log_buffer.truncate(pos + 1),
                 None => self.log_buffer.clear(),
             }
-            // 只在这一支分配：普通日志块原地追加，不复制字符串。
-            self.log_buffer.push_str(&chunk.replace("\u{1b}[2K", ""));
+        }
+        // 剥离全部 ANSI 转义（含 `\33[2K` 本体）后追加；无 ESC 的普通日志块
+        // 零分配直通。
+        if chunk.contains('\u{1b}') {
+            self.log_buffer.push_str(&Self::strip_ansi(chunk));
         } else {
             self.log_buffer.push_str(chunk);
         }
         self.enforce_log_cap();
+    }
+
+    /// 剥离 ANSI 转义序列：CSI（`ESC[…终止字节`）与 OSC（`ESC]…BEL/ST`）。
+    ///
+    /// C 工具进度行除 `\33[2K` 外还可能夹带颜色等其他控制序列，直接透传会
+    /// 在日志区显示成乱码，这里集中剥离。孤立 ESC 直接丢弃；未终止的序列
+    /// 吃到串尾为止（宁可少显示，不可显示乱码）。
+    fn strip_ansi(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        let mut chars = s.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c != '\u{1b}' {
+                out.push(c);
+                continue;
+            }
+            match chars.peek() {
+                Some('[') => {
+                    chars.next();
+                    // CSI：吃到 0x40..=0x7E 的终止字节（含）为止
+                    while let Some(n) = chars.next() {
+                        if ('\u{40}'..='\u{7e}').contains(&n) {
+                            break;
+                        }
+                    }
+                }
+                Some(']') => {
+                    chars.next();
+                    // OSC：吃到 BEL 或 ST（ESC \）为止
+                    while let Some(n) = chars.next() {
+                        if n == '\u{7}' {
+                            break;
+                        }
+                        if n == '\u{1b}' {
+                            let _ = chars.next(); // ST 的反斜杠
+                            break;
+                        }
+                    }
+                }
+                _ => {} // 孤立 ESC / 未知转义：只丢弃 ESC 本身
+            }
+        }
+        out
     }
 
     /// `LOG_CAP` 截断（§6.39）：从 `len - LOG_CAP` 起取第一个换行行首作截断点，
@@ -565,6 +610,25 @@ mod tests {
         // replace("\33[2K", "") 去掉**全部**清行序列。
         // 故 "a\n" 保留、两个清行序列都被剥掉，midtail 追加在后。
         assert_eq!(s.log_buffer, "a\nmidtail");
+    }
+
+    #[test]
+    fn log_strips_other_ansi_sequences() {
+        // 颜色（CSI）与标题（OSC）序列都不该透传到日志区成乱码
+        let mut s = AppState::new();
+        s.apply(Event::Log("\u{1b}[31mred\u{1b}[0m ".into()));
+        s.apply(Event::Log("\u{1b}]0;title\u{7}ok".into()));
+        s.apply(Event::Log("\u{1b}[1;32mgreen".into()));
+        assert_eq!(s.log_buffer, "red okgreen");
+        assert!(!s.log_buffer.contains('\u{1b}'), "实际: {:?}", s.log_buffer);
+    }
+
+    #[test]
+    fn strip_ansi_handles_orphan_and_unterminated() {
+        // 孤立 ESC 丢弃；未终止的 CSI 吃到串尾；普通文本原样保留
+        assert_eq!(AppState::strip_ansi("a\u{1b}b"), "ab");
+        assert_eq!(AppState::strip_ansi("a\u{1b}[31"), "a");
+        assert_eq!(AppState::strip_ansi("plain"), "plain");
     }
 
     #[test]

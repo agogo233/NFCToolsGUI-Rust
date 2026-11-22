@@ -135,6 +135,8 @@ struct Running {
     scan_mfoc_uid: bool,
     /// 抓到的 UID，最终传给 `mfoc::dump_save` 当默认文件名前缀。
     uid: Option<String>,
+    /// UID 跨 pump 批次的滚动扫描缓冲（`scan_mfoc_uid` 为真时使用）。
+    uid_scan_buf: String,
     /// 本工具只是**链路的一环**，退出后不该置空闲。
     ///
     /// `hard-nested-config-done` 的 autoRun 分支走 `readICThenExec` 的
@@ -156,6 +158,10 @@ struct Running {
     mfcuk_cursor: Option<u32>,
     /// P2-10：mfcuk 的总扇区数（1K=16 / 4K=40，按 `-M` 实际卡型定）。
     mfcuk_total: u32,
+    /// 当前游标所属段（0=VERIFY / 1=RECOVER）。mfcuk 先 VERIFY 后 RECOVER，
+    /// 两段都从 0 重数扇区；切段时游标必须重置，否则 RECOVER 段会顶着
+    /// VERIFY 段的旧最大值恒显 100%。
+    mfcuk_seg: Option<u8>,
     /// `dict-test-config-done` 的目标扇区与类型：命中密钥后据此从
     /// `unknown_key_info` 移除对应项（`command.js:396-399`）。
     dict_target: Option<(u8, crate::model::keys::KeyType)>,
@@ -735,9 +741,8 @@ impl Engine {
             "done-input-uid-write" => self.input_uid_write(name, arg, state, dialog),
             // S18 全加密爆破：`mfcuk` 直接启动，密钥解析器挂在 Running 上。
             // P2-10：mfcuk 先 VERIFY 后 RECOVER，两段都会打 `0 1 2 ...` 扇区
-            // 游标（mfcuk.c:1488/1593）。RECOVER 是主耗时段，这里以
-            // **第二次**出现的游标序列为准——实现上用 `mfcuk_cursor`
-            // 记录「本段已见到的最大扇区号」，游标回卷（进入下一段）时取 max。
+            // 游标（mfcuk.c:1488/1593）。RECOVER 是主耗时段，游标随段标记
+            // 切换重置、段内取最大值，进度条反映当前段的真实推进。
             "run-mfcuk" => {
                 let args = tasks::card_write::mfcuk_args();
                 self.launch(
@@ -1462,7 +1467,7 @@ impl Engine {
             }
         }
         if run.scan_mfoc_uid && run.uid.is_none() {
-            if let Some(uid) = tasks::mfoc::take_uid(text) {
+            if let Some(uid) = tasks::mfoc::scan_uid_rolling(&mut run.uid_scan_buf, text) {
                 run.uid = Some(uid);
             }
         }
@@ -1494,15 +1499,16 @@ impl Engine {
     ///    冒号**之后**的部分；
     /// 2. 其余 chunk 只在「整块都是空白/短 hex token」时解析（游标续行）。
     ///
-    /// 值域 0..=39（1K=16 / 4K=40）；段内取 max，游标回卷即进入下一段。
+    /// 值域 0..=39（1K=16 / 4K=40）；段内取 max，检测到段标记切换时重置
+    /// 游标（VERIFY / RECOVER 两段各自从 0 起算，见 `mfcuk_seg`）。
     fn feed_mfcuk_cursor(run: &mut Running, text: &str) {
         if run.mfcuk.is_none() {
             return;
         }
-        let segment = if let Some(pos) = text.find("RECOVER:") {
-            &text[pos + "RECOVER:".len()..]
+        let (segment, seg_id) = if let Some(pos) = text.find("RECOVER:") {
+            (&text[pos + "RECOVER:".len()..], 1u8)
         } else if let Some(pos) = text.find("VERIFY:") {
-            &text[pos + "VERIFY:".len()..]
+            (&text[pos + "VERIFY:".len()..], 0u8)
         } else {
             // 游标续行：必须整块都是空白/短 hex token，杜绝混入的日志行
             let trimmed = text.trim();
@@ -1515,8 +1521,15 @@ impl Engine {
             {
                 return;
             }
-            trimmed
+            (trimmed, run.mfcuk_seg.unwrap_or(0))
         };
+        // 段切换（VERIFY → RECOVER，或异常回跳）：游标从 0 重新起算。
+        // 不重置的话，RECOVER 段会顶着 VERIFY 段的旧最大值恒显 100%。
+        if run.mfcuk_seg != Some(seg_id) {
+            run.mfcuk_seg = Some(seg_id);
+            run.mfcuk_cursor = None;
+            run.mfcuk_total = 0;
+        }
         for tok in segment.split(|c: char| !c.is_ascii_hexdigit()) {
             if tok.is_empty() || tok.len() > 2 {
                 continue;
@@ -4109,6 +4122,30 @@ mod tests {
         e2.dispatch(Action::Plain("read-IC"), &mut st2, &p, &mut dlg2)
             .unwrap();
         assert_eq!(e2.mfcuk_progress(), None, "非 mfcuk 任务无进度");
+    }
+
+    /// P2-10 续：VERIFY → RECOVER 段切换时游标必须重置。
+    ///
+    /// mfcuk 先 VERIFY（快）后 RECOVER（主耗时）。旧实现段内取 max 且不
+    /// 分段，VERIFY 跑满后 RECOVER 段进度恒显 100%——这里钉住重置行为。
+    #[test]
+    fn mfcuk_cursor_resets_on_segment_switch() {
+        let (_d, p) = paths("mfcuk-seg-reset");
+        let runner = MockToolRunner::new(vec![]).with_exit(Some(0));
+        let mut e = Engine::new(Box::new(runner));
+        let mut st = connected();
+        let mut dlg = MockDialog::new();
+
+        e.dispatch(Action::Plain("run-mfcuk"), &mut st, &p, &mut dlg)
+            .unwrap();
+        // VERIFY 段跑满 16 扇区（1K）
+        e.feed("VERIFY: 0 1 2 3 4 5 6 7 8 9 a b c d e f\n", &mut st);
+        assert_eq!(e.mfcuk_progress(), Some((16, 16)), "VERIFY 段应跑满");
+        // 切入 RECOVER：游标从 0 重新起算，而不是顶着 16 恒显 100%
+        e.feed("RECOVER: 0 1 2\n", &mut st);
+        assert_eq!(e.mfcuk_progress(), Some((3, 3)), "RECOVER 段应重置游标");
+        e.feed("3 4\n", &mut st);
+        assert_eq!(e.mfcuk_progress(), Some((5, 5)), "RECOVER 段内继续推进");
     }
 
     /// 测试 `pump_conn` 的连接流程：确保连接泵正确处理状态

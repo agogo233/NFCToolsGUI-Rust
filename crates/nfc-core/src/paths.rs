@@ -26,8 +26,22 @@ impl Paths {
     pub fn from_app_data() -> Self {
         let base = directories::BaseDirs::new()
             .map(|b| b.data_dir().join(APP_NAME))
-            .unwrap_or_else(|| std::env::temp_dir().join(APP_NAME));
+            .unwrap_or_else(Self::fallback_base);
         Self::new(base)
+    }
+
+    /// `BaseDirs` 拿不到（HOME 未设等）时的兜底目录。
+    ///
+    /// 不能直接用共享的 `temp/NFCToolsGUI`——那是**可预测的共享路径**，同机
+    /// 其他用户可预建目录窥探/顶替。这里拼上当前用户名（取不到再用进程号）
+    /// 做隔离，并告警提示环境异常。
+    fn fallback_base() -> PathBuf {
+        let user = std::env::var("USER")
+            .or_else(|_| std::env::var("USERNAME"))
+            .ok();
+        let name = fallback_dir_suffix(user.as_deref(), std::process::id());
+        eprintln!("warning: home directory unavailable, data dir falls back to temp");
+        std::env::temp_dir().join(format!("{APP_NAME}-{name}"))
     }
 
     pub fn base(&self) -> &Path {
@@ -157,6 +171,60 @@ pub fn restrict_owner(path: &Path) {
 
 #[cfg(not(unix))]
 pub fn restrict_owner(_path: &Path) {}
+
+/// 把数据目录收紧为「仅本人可进」（`0700`）。
+///
+/// 目录里的文件名含卡片 UID 与时间戳，目录可列（默认 `0755`）等于向同机
+/// 其他用户泄露「读过哪些卡、何时读的」。文件本体已由 [`restrict_owner`]
+/// 收紧，这里补上目录这一层。
+///
+/// Windows 上为空操作，理由同 [`restrict_owner`]（§6.31）。
+#[cfg(unix)]
+pub fn restrict_owner_dir(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700));
+}
+
+#[cfg(not(unix))]
+pub fn restrict_owner_dir(_path: &Path) {}
+
+/// 原子写「仅本人可读」的文件：先写同目录 `.tmp`，收紧后 `rename` 替换。
+///
+/// 与 `model/keys.rs` / `data.rs` 的「写 tmp → restrict → rename」三步同一
+/// 策略，收拢成公共函数供 app 侧（编辑器写回等）复用——崩溃时不留半截
+/// 文件。`.tmp` 与目标同目录，`rename` 必在同文件系统内；目标已存在时
+/// `rename` 原子替换（Windows 侧 `fs::rename` 带 REPLACE_EXISTING 语义，
+/// 与 keys/registry 既有用法一致）。
+pub fn write_private_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = PathBuf::from(format!("{}.tmp", path.display()));
+    std::fs::write(&tmp, bytes)?;
+    restrict_owner(&tmp);
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        // rename 失败（Windows 目标被占用、父目录被删等）不留 .tmp 垃圾——
+        // 「另存为」到用户自选目录时它会成了可见的残留文件。
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// `fallback_base` 的目录名后缀：优先净化后的用户名，取不到用进程号。
+///
+/// 净化规则：只留 ASCII 字母/数字/下划线/连字符，截断到 32 字符——用户名
+/// 可能含域分隔符 `\`、`@` 或空格，直接拼路径不安全。
+fn fallback_dir_suffix(user: Option<&str>, pid: u32) -> String {
+    let clean = user
+        .unwrap_or("")
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .take(32)
+        .collect::<String>();
+    if clean.is_empty() {
+        format!("pid{pid}")
+    } else {
+        clean
+    }
+}
 
 /// 当前时间戳 `yyyy_MM_dd_HH_mm_ss`（**本地时区**）。
 ///
@@ -700,5 +768,52 @@ mod tests {
         let tmp = std::env::temp_dir().join("nfc-core-restrict-missing");
         let _ = std::fs::remove_dir_all(&tmp);
         restrict_owner(&tmp.join("nope"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restrict_owner_dir_sets_0700() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = std::env::temp_dir().join("nfc-core-restrict-dir-test");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let d = tmp.join("dumpfiles");
+        std::fs::create_dir_all(&d).unwrap();
+        // 模拟最坏情况：先放宽到 0755
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        restrict_owner_dir(&d);
+
+        let mode = std::fs::metadata(&d).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "实际 mode: {mode:o}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn write_private_atomic_writes_and_restricts() {
+        let tmp = std::env::temp_dir().join("nfc-core-atomic-test");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let f = tmp.join("out.mfd");
+
+        write_private_atomic(&f, b"payload").unwrap();
+
+        assert_eq!(std::fs::read(&f).unwrap(), b"payload");
+        assert!(!tmp.join("out.mfd.tmp").exists(), "tmp 应被 rename 走");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&f).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "实际 mode: {mode:o}");
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn fallback_dir_suffix_is_sanitized_and_isolated() {
+        assert_eq!(fallback_dir_suffix(Some("alice"), 7), "alice");
+        // 域分隔符 / 冒号 / 空格一律剔除
+        assert_eq!(fallback_dir_suffix(Some("a/b:c d"), 7), "abcd");
+        assert_eq!(fallback_dir_suffix(Some(""), 7), "pid7");
+        assert_eq!(fallback_dir_suffix(None, 42), "pid42");
     }
 }

@@ -121,6 +121,12 @@ jobs:
       - name: Clippy（Windows）
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # 跨平台运行期行为（路径 / 进程 / 文件权限分支）此前只在 Linux 上有
+      # 测试覆盖，Windows 作为主发布平台也须跑测试。real_tools / tool_cli
+      # 在 framework/bin 就位前会自动跳过，故放在 C 工具编译之前即可。
+      - name: 测试（Windows）
+        run: cargo test --workspace --locked
+
       # ── 编译 C 工具（framework/bin） ─────────────────────────────────────
       # compile.sh 支持 MINGW64，所需源码与 vendor 文件均在仓库内，
       # 在 Windows runner 上装 MSYS2 即可产出 Windows PE 格式的 C 工具，
@@ -162,6 +168,8 @@ jobs:
           New-Item -ItemType Directory -Force target/release/framework/bin | Out-Null
           Copy-Item -Recurse -Force framework/bin/* target/release/framework/bin/
           Copy-Item -Force dict.dic target/release/dict.dic
+          # 统一产物名：scripts/package.sh 亦把 exe 改名为 nfctoolsgui.exe
+          Copy-Item -Force target/release/nfc-app.exe target/release/nfctoolsgui.exe
           Write-Host "工具目录内容:"
           Get-ChildItem target/release/framework/bin | Select-Object Name, Length | Format-Table
 
@@ -227,7 +235,7 @@ jobs:
         with:
           name: nfctoolsgui-win-x64
           path: |
-            target/release/nfc-app.exe
+            target/release/nfctoolsgui.exe
             target/release/framework/bin/*
             target/release/dict.dic
           retention-days: 30

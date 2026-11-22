@@ -5,7 +5,7 @@
 #
 #   NFCToolsGUI-win-x64.zip
 #   ├── nfctoolsgui.exe        # cargo build --release
-#   ├── framework/bin/         # 9 个 C 工具 —— 由用户的 compile.sh 生成
+#   ├── framework/bin/         # 10 个 C 工具 —— 由用户的 compile.sh 生成
 #   ├── dict.dic
 #   ├── README.md / LICENSE
 #

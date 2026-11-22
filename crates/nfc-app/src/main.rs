@@ -80,7 +80,11 @@ fn main() -> eframe::Result {
     // 一旦 dumpfiles 目录改到别处，这些文件就没地方写了。
     let paths = Paths::from_app_data();
     let _ = std::fs::create_dir_all(paths.base());
+    // 目录收紧为 0700：目录里的文件名含卡片 UID，可列目录 = 泄露读卡记录
+    // （Windows no-op，%APPDATA% ACL 本就限本人）。
+    nfc_core::paths::restrict_owner_dir(paths.base());
     let _ = std::fs::create_dir_all(paths.dumpfiles_dir());
+    nfc_core::paths::restrict_owner_dir(paths.dumpfiles_dir());
 
     // 单实例锁（§6.2 #34）：双开实例会互踩共享数据目录里的固定文件
     // （libnfc.conf 每次连接整文件覆盖、temp.mfd 是写卡备份闸的唯一载体）。

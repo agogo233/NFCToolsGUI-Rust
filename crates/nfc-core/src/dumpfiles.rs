@@ -110,6 +110,10 @@ pub fn rename(dir: &Path, old: &str, new: &str) -> Result<PathBuf, DumpFileError
 ///
 /// 同样拒绝 Windows 保留设备名（`CON` / `NUL` / `COM1`…）：在这类系统上
 /// `fs::write("con.mfd")` 行为异常（可能挂起），统一在校验层拦掉。
+///
+/// 还拒绝控制字符（`\n` / `\t` / ESC 等）：它们不携带路径分隔符语义，但
+/// Linux 允许这样的文件名，会混进列表排序与日志展示里难以辨认，Windows
+/// 则直接建不出来——统一拒绝，两侧行为一致。
 pub fn is_plain_name(name: &str) -> bool {
     !name.is_empty()
         && name != "."
@@ -118,7 +122,28 @@ pub fn is_plain_name(name: &str) -> bool {
         && !name.contains('\\')
         && !name.contains(':')
         && !name.contains('\0')
+        && !name.chars().any(char::is_control)
         && !is_windows_reserved(name)
+}
+
+/// 重命名目标名归一化：不以 `.mfd` 结尾时自动补上。
+///
+/// [`list`] 只收 `.mfd` 文件——若允许重命名成别的后缀，文件会从历史面板
+/// 「消失」且再也无法通过面板管理。提交重命名前先归一化。
+///
+/// - 后缀识别**不区分大小写**：Windows 用户写 `old.MFD` 并不少见，归一化成
+///   `old.MFD.mfd` 反而不可预期。
+/// - `.` / `..` 保持原样不补：补了会变成 `...mfd` 这类能过 [`is_plain_name`]
+///   校验的怪名字，保持原样则照旧被拒。
+pub fn with_mfd_ext(name: &str) -> String {
+    if name == "." || name == ".." {
+        return name.to_owned();
+    }
+    if name.to_ascii_lowercase().ends_with(&format!(".{DUMP_EXT}")) {
+        name.to_owned()
+    } else {
+        format!("{name}.{DUMP_EXT}")
+    }
 }
 
 /// Windows 保留设备名。不看扩展名——`con.mfd` 在 Windows 上同样是设备名。
@@ -301,5 +326,41 @@ mod tests {
         for n in ["console.mfd", "aux2.mfd", "com10.mfd", "null.mfd"] {
             assert!(is_plain_name(n), "{n} 应放行");
         }
+    }
+
+    #[test]
+    fn is_plain_name_rejects_control_chars() {
+        // 控制字符不改变路径语义，但会污染列表与日志；Linux 能建、Windows
+        // 建不出，统一拒绝。
+        for n in ["a\nb.mfd", "a\tb.mfd", "\r.mfd", "\u{1b}evil.mfd", "\u{7}x"] {
+            assert!(!is_plain_name(n), "{n:?} 应被拒绝");
+        }
+        assert!(is_plain_name("ok.mfd"));
+    }
+
+    #[test]
+    fn with_mfd_ext_appends_only_when_missing() {
+        assert_eq!(with_mfd_ext("a"), "a.mfd");
+        assert_eq!(with_mfd_ext("a.mfd"), "a.mfd");
+        assert_eq!(with_mfd_ext("card_1122"), "card_1122.mfd");
+        // 大写扩展名不重复补（Windows 用户写 .MFD 并不少见）
+        assert_eq!(with_mfd_ext("a.MFD"), "a.MFD");
+        // `.` / `..` 保持原样，交给 is_plain_name 拒绝
+        assert_eq!(with_mfd_ext("."), ".");
+        assert_eq!(with_mfd_ext(".."), "..");
+        // 多字节名不受字节切片影响
+        assert_eq!(with_mfd_ext("中文"), "中文.mfd");
+    }
+
+    #[test]
+    fn rename_rejects_control_char_name() {
+        // 控制字符名在归一化前就会被 is_plain_name 拦下，不得落盘
+        let d = TempDir::new("ren4");
+        d.write("a.mfd");
+        assert!(matches!(
+            rename(d.path(), "a.mfd", "bad\nname"),
+            Err(DumpFileError::BadName(_))
+        ));
+        assert_eq!(list(d.path()), vec!["a.mfd"]);
     }
 }

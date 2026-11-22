@@ -58,6 +58,7 @@
     "html_device_connecting": "正在连接...",
     "html_device_failed": "连接失败",
     "html_dictionary_file": "字典文件",
+    "html_dict_missing": "内置字典 dict.dic 缺失：字典测试将无法执行。请把 dict.dic 放到程序文件旁边（打包目录内）再启动。",
     "html_dump": "转储",
     "html_dump_comparator": "转储比较器",
     "html_dump_editor": "转储编辑器",

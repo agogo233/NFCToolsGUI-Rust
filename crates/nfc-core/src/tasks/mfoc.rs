@@ -260,6 +260,53 @@ pub fn take_uid(text: &str) -> Option<String> {
     found
 }
 
+/// 滚动缓冲上限（字节）。UID 标记 + 14 hex 远小于该值；若标记之后
+/// `UID_SCAN_CAP` 个字符内仍凑不出 UID，它本就是噪声，裁掉无妨。
+const UID_BUF_CAP: usize = 512;
+
+/// 跨 pump 批次的 UID 滚动窗口扫描。
+///
+/// `UID (NFCID1):` 标记与其后的 hex 可能被串口输出分块切开（上一块结尾是
+/// 标记、下一块开头才是 UID）。单块扫描（[`take_uid`]）会漏掉这种跨块情形，
+/// dump 默认文件名随之退化为 `card_*`。
+///
+/// 实现：把文本续进滚动缓冲**先扫描**；拿不到完整 UID 才做裁剪（缓冲超过
+/// [`UID_BUF_CAP`] 时从头裁到字符边界，防无界增长）。裁剪不能放在扫描前——
+/// mfoc 的 stdout 按 C stdio 块缓冲冲刷，标记常在批次前部、其后紧跟大量
+/// 进度行，先裁剪会把标记裁掉，正好回归本次要修的 bug。
+///
+/// 「完整」判定：hex 凑满 [`UID_MAX_HEX`]（7 字节封顶），或标记之后已有
+/// 换行（行结束）。块尾截断的半截 UID 不产出，等下一块补齐。拿到后清空
+/// 缓冲，避免下一轮重复命中旧文本。
+pub fn scan_uid_rolling(buf: &mut String, text: &str) -> Option<String> {
+    buf.push_str(text);
+    let found = take_uid(buf);
+    let done = match &found {
+        Some(uid) => {
+            uid.len() >= UID_MAX_HEX
+                || buf[buf.rfind(MARKER_UID_NFCID).map_or(0, |i| i + MARKER_UID_NFCID_LEN)..]
+                    .contains('\n')
+        }
+        None => false,
+    };
+    if done {
+        buf.clear();
+    } else if found.is_none() && buf.len() > UID_BUF_CAP {
+        // 尚无任何标记时才裁尾；有标记在等待补齐时保留全文（实际输出中
+        // 标记距完成不超过几百字节，不会无界增长）。
+        let mut cut = buf.len() - UID_BUF_CAP;
+        while cut < buf.len() && !buf.is_char_boundary(cut) {
+            cut += 1;
+        }
+        buf.drain(..cut);
+    }
+    if done {
+        found
+    } else {
+        None
+    }
+}
+
 /// dump 保存失败的原因，对标 `command.js:678-681`（原版只有一条「保存失败」）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SaveFailure {
@@ -355,6 +402,11 @@ pub fn dump_prepare(state: &mut AppState, paths: &Paths, uid: Option<&str>) -> O
         return None;
     }
 
+    // temp 是此刻 dump 的唯一副本（完整卡数据，含密钥扇区）：在弹框/搬移前
+    // 先收紧，覆盖「用户取消」「保存失败」等 temp 滞留分支——否则它以默认
+    // umask（常见 0644）滞留在数据目录，同机其他用户可读（Windows no-op）。
+    crate::paths::restrict_owner(&temp);
+
     let dir = paths.dumpfiles_dir();
     if std::fs::create_dir_all(&dir).is_err() {
         state.apply(Event::Log(format!(
@@ -364,6 +416,9 @@ pub fn dump_prepare(state: &mut AppState, paths: &Paths, uid: Option<&str>) -> O
         )));
         return None;
     }
+    // 运行期目录被删后这里会以默认 umask（0755）重建，重新打开「目录可列
+    // = 泄露读卡记录」的口子；补一道 0700（幂等，Windows no-op）。
+    crate::paths::restrict_owner_dir(&dir);
 
     let default_name = Paths::dump_file_name(uid.unwrap_or("card"), &crate::paths::timestamp());
     let default_path = dir.join(default_name);
@@ -779,6 +834,61 @@ mod tests {
         let _ = take_uid(out);
     }
 
+    // ---------------------------------------------------------- scan_uid_rolling
+
+    #[test]
+    fn scan_uid_rolling_joins_marker_split_across_chunks() {
+        let mut buf = String::new();
+        // 标记与 UID 被分块切开：上一块结尾是标记，下一块开头才是 hex
+        assert_eq!(scan_uid_rolling(&mut buf, "UID (NFCID1): a1"), None);
+        assert_eq!(
+            scan_uid_rolling(&mut buf, "b2c3d4\nnext line"),
+            Some("a1b2c3d4".to_string())
+        );
+        // 拿到后缓冲清空，下一轮从零开始，不重复消费旧文本
+        assert!(buf.is_empty());
+        assert_eq!(
+            scan_uid_rolling(&mut buf, "UID (NFCID1): 1122334455667f\n"),
+            Some("1122334455667f".to_string())
+        );
+    }
+
+    #[test]
+    fn scan_uid_rolling_trims_on_char_boundary() {
+        let mut buf = String::new();
+        // 1800 字节的多字节文本：裁剪不得切进 UTF-8 中间（否则 drain panic）
+        let long = "中".repeat(600);
+        assert_eq!(scan_uid_rolling(&mut buf, &long), None);
+        assert!(buf.len() < 520, "缓冲应被裁到上限附近，实际 {}", buf.len());
+    }
+
+    #[test]
+    fn scan_uid_rolling_waits_for_complete_uid() {
+        let mut buf = String::new();
+        // 标记 + 半截 hex（无换行、未满 14）：块尾截断，不能当完整 UID 产出
+        assert_eq!(scan_uid_rolling(&mut buf, "UID (NFCID1): 04a8"), None);
+        assert!(buf.contains("UID (NFCID1)"), "未完成时应保留标记等待补齐");
+        // 补齐到换行才算完成
+        assert_eq!(
+            scan_uid_rolling(&mut buf, "b2c6\n"),
+            Some("04a8b2c6".to_string())
+        );
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn scan_uid_rolling_survives_marker_buried_under_progress() {
+        // mfoc 真实形态：标记在输出前部，其后紧跟大量进度行（C stdio 按块
+        // 冲刷，一批 pump 可达数 KB）。先裁剪后扫描会把标记裁掉——钉住
+        // 「先扫描」的顺序。
+        let mut buf = String::new();
+        let progress = "[Key: a1b2a1b2a1b2]\n".repeat(60); // > 1200 字节
+        assert_eq!(
+            scan_uid_rolling(&mut buf, &format!("UID (NFCID1): 04a8b2c6\n{progress}")),
+            Some("04a8b2c6".to_string())
+        );
+    }
+
     // ---------------------------------------------------------- dump_save
 
     /// 每个测试**只删自己那一个**目录。
@@ -932,6 +1042,30 @@ mod tests {
         assert!(s.log_buffer.contains("保存失败"), "实际: {}", s.log_buffer);
         // 失败时 temp 仍在
         assert!(paths.temp_mfd().exists());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn dump_prepare_restricts_temp_before_save() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempdir("restrict");
+        let _guard = TempGuard(dir.clone());
+        let paths = Paths::new(&dir);
+        // 模拟最坏情况：C 工具以默认 umask 写出 0644 的 temp
+        std::fs::write(paths.temp_mfd(), b"payload").unwrap();
+        std::fs::set_permissions(paths.temp_mfd(), std::fs::Permissions::from_mode(0o644))
+            .unwrap();
+        let mut s = AppState::new();
+
+        let pending = dump_prepare(&mut s, &paths, Some("1122")).expect("非空 dump 应产出待存");
+
+        // 弹框挂起期间（及取消/失败滞留时）temp 已收紧为 0600
+        let mode = std::fs::metadata(&pending.source)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "实际 mode: {mode:o}");
     }
 
     #[test]

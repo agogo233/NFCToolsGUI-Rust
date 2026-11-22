@@ -61,6 +61,10 @@ pub struct Registry {
     pub registry: Vec<CardRecord>,
 }
 
+/// registry 条数上限。每次读卡按 UID 去重后追加，理论上只增不减；给个
+/// 宽裕上限（500 张卡远超个人使用量）防文件无限膨胀，超限淘汰最旧。
+const MAX_REGISTRY: usize = 500;
+
 impl Registry {
     pub fn new() -> Self {
         Self::default()
@@ -128,9 +132,15 @@ impl Registry {
     }
 
     /// 追加新卡。UID 已存在则**不**重复追加，返回 `false`。
+    ///
+    /// 条数到 [`MAX_REGISTRY`] 上限时淘汰最旧记录（追加顺序即时间序），
+    /// 防止 registry.json 随长期使用无限膨胀。
     pub fn append(&mut self, rec: CardRecord) -> bool {
         if self.find(&rec.uid).is_some() {
             return false;
+        }
+        if self.registry.len() >= MAX_REGISTRY {
+            self.registry.remove(0);
         }
         self.registry.push(rec);
         true
@@ -410,5 +420,20 @@ mod tests {
         assert_eq!(back.len(), 5);
         assert_eq!(back.uids()[4], "uid04");
         assert_eq!(back.registry[3].date, "2024-01-04");
+    }
+
+    #[test]
+    fn append_evicts_oldest_at_cap() {
+        let mut r = Registry::new();
+        for i in 0..(MAX_REGISTRY + 5) {
+            r.append(CardRecord::new(&format!("uid{i:04}")));
+        }
+        assert_eq!(r.len(), MAX_REGISTRY, "到上限后总条数应恒定");
+        // 最旧的 5 条被淘汰，最新的都在
+        assert!(r.find("uid0000").is_none(), "最旧记录应被淘汰");
+        assert!(
+            r.find(&format!("uid{:04}", MAX_REGISTRY + 4)).is_some(),
+            "最新记录应在"
+        );
     }
 }

@@ -188,6 +188,11 @@ AUDIT_FIX_EXTRA = {
     "log_msg_connect_timeout",
     "dialog_msg_instance_running",
 }
+# 第二轮审计加固批次：内置字典缺失引导（dict.dic 是运行时资源、不内嵌，
+# 手工部署遗漏时启动即提示，不再等到字典测试以 C 工具报错失败）。
+HARDENING_EXTRA = {
+    "html_dict_missing",
+}
 # S18 从「上游独有」挪回的 20 个 key：两版共有且文案逐字一致。
 S18_MIGRATED = {
     "dialog_msg_invalid_uid_input",
@@ -380,11 +385,25 @@ def d_align() -> None:
 # ---------------------------------------------------------------- H i18n
 def h_i18n() -> None:
     keys = json.loads(rd(REPO / "assets/locales/zh-CN.json"))
+    extras = (
+        len(S16_EXTRA)
+        + len(S17_EXTRA)
+        + len(S18_EXTRA)
+        + len(MFOC_PROBES_EXTRA)
+        + len(LOG_COPY_EXTRA)
+        + len(DUMP_VIEW_EXTRA)
+        + len(PANEL_VALIDATION_EXTRA)
+        + len(S18_MIGRATED)
+        + len(NO_PORTAL_EXTRA)
+        + len(REDESIGN_EXTRA)
+        + len(MAXIMIZE_EXTRA)
+        + len(UX_POLISH_EXTRA)
+        + len(AUDIT_FIX_EXTRA)
+        + len(HARDENING_EXTRA)
+    )
     check(
-        len(keys) == 194 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(DUMP_VIEW_EXTRA) + len(PANEL_VALIDATION_EXTRA) + len(S18_MIGRATED) + len(NO_PORTAL_EXTRA) + len(REDESIGN_EXTRA) + len(MAXIMIZE_EXTRA) + len(UX_POLISH_EXTRA) + len(AUDIT_FIX_EXTRA),
-        f"H zh-CN.json {194 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(DUMP_VIEW_EXTRA) + len(PANEL_VALIDATION_EXTRA) + len(S18_MIGRATED) + len(NO_PORTAL_EXTRA) + len(REDESIGN_EXTRA) + len(MAXIMIZE_EXTRA) + len(UX_POLISH_EXTRA) + len(AUDIT_FIX_EXTRA)} key"
-        f"（基础 194 + S16 补 {len(S16_EXTRA)} + S17 补 {len(S17_EXTRA)}"
-        f" + S18 新增 {len(S18_EXTRA)} + MFOC_PROBES 补 {len(MFOC_PROBES_EXTRA)} + LOG_COPY 补 {len(LOG_COPY_EXTRA)} + DUMP_VIEW 补 {len(DUMP_VIEW_EXTRA)} + 面板校验补 {len(PANEL_VALIDATION_EXTRA)} + S18 迁移 {len(S18_MIGRATED)} + 无门户收尾补 {len(NO_PORTAL_EXTRA)} + 界面改版补 {len(REDESIGN_EXTRA)} + 最大化钮补 {len(MAXIMIZE_EXTRA)} + 体验优化补 {len(UX_POLISH_EXTRA)} + 审计修复补 {len(AUDIT_FIX_EXTRA)}）",
+        len(keys) == 194 + extras,
+        f"H zh-CN.json {194 + extras} key（基础 194 + 各批次补 {extras}）",
         f"实际 {len(keys)}",
     )
     # S8 新增的 3 个 settings 按钮文案（原版 settings.html 硬编码英文，无 i18n key，
@@ -411,6 +430,8 @@ def h_i18n() -> None:
         check(k in keys, f"H zh-CN 含最大化钮 {k}")
     for k in UX_POLISH_EXTRA:
         check(k in keys, f"H zh-CN 含体验优化 {k}")
+    for k in HARDENING_EXTRA:
+        check(k in keys, f"H zh-CN 含加固 {k}")
     check(not (REPO / "assets/locales/en.json").exists(), "H 无 en.json（仅中文决策）")
     body = rd(CORE / "src/serial.rs")
     used = set()
@@ -958,7 +979,7 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     # S5 单测数量
     s5_units = sum(rd(CORE / f"src/{f}").count("#[test]")
                    for f in ["data.rs", "dialogs.rs", "tasks/mfoc.rs", "tasks/detect.rs"])
-    check(s5_units == 84, "S5 单测累计 84（含 S6/S11-2/S17/F4 新增 + S19 权限收紧 1 + MFOC_PROBES 1）", f"实际 {s5_units}")
+    check(s5_units == 90, "S5 单测累计 90（含 S6/S11-2/S17/F4 新增 + S19 权限收紧 1 + MFOC_PROBES 1 + 二轮加固 6）", f"实际 {s5_units}")
     ints = rd(CORE / "tests/integration.rs")
     check(ints.count("#[test]") == 58, "S5+S6/S7 集成测试累计 58", f"实际 {ints.count('#[test]')}")
     check(ints.count("fn s5_") == 14, "S5 新增 14 个集成测试", f"实际 {ints.count('fn s5_')}")
@@ -1395,8 +1416,10 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
           "S11-4 save-log 默认名不带目录（与 command.js:541 一致）")
     # ⑦ 读卡收尾必须真的落盘（曾完全没接 dump_save，主流程断掉）
     check("mfoc::dump_save" in eng, "S11-4 read-IC 收尾调用 dump_save")
-    check("scan_mfoc_uid" in eng and "take_uid" in eng,
-          "S11-4 从 mfoc 输出抓 UID 当 dump 文件名前缀")
+    check("scan_mfoc_uid" in eng and "scan_uid_rolling" in eng,
+          "S11-4 从 mfoc 输出抓 UID 当 dump 文件名前缀（跨批次滚动扫描）")
+    check("fn take_uid" in rd(CORE / "src/tasks/mfoc.rs"),
+          "S11-4 take_uid 单块扫描仍是滚动扫描的内核")
     check("Event::DictHistory(crate::dumpfiles::list" in eng,
           "S11-4 落盘后刷新历史列表")
     check("dump_save" in rs or "dump_save" in eng, "S11-4 dump_save 有生产调用者")
