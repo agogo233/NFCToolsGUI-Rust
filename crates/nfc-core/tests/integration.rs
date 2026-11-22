@@ -1144,9 +1144,12 @@ fn s6_block0_and_dump_id_helpers() {
         resolve_dump_id("x.mfd", &paths.dumpfiles_dir()),
         paths.dumpfiles_dir().join("x.mfd")
     );
+    // Windows 上 `/abs/...` 不是绝对路径（缺盘符），join 会补当前盘符；
+    // 故改用真实绝对路径（临时目录）验证「绝对输入原样返回、不拼 dumpfiles」。
+    let abs_input = std::env::temp_dir().join("y.mfd");
     assert_eq!(
-        resolve_dump_id("/abs/y.mfd", &paths.dumpfiles_dir()),
-        PathBuf::from("/abs/y.mfd")
+        resolve_dump_id(abs_input.to_str().unwrap(), &paths.dumpfiles_dir()),
+        abs_input
     );
 }
 
