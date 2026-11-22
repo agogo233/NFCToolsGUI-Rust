@@ -84,7 +84,7 @@ fn main() -> eframe::Result {
     // （Windows no-op，%APPDATA% ACL 本就限本人）。
     nfc_core::paths::restrict_owner_dir(paths.base());
     let _ = std::fs::create_dir_all(paths.dumpfiles_dir());
-    nfc_core::paths::restrict_owner_dir(paths.dumpfiles_dir());
+    nfc_core::paths::restrict_owner_dir(&paths.dumpfiles_dir());
 
     // 单实例锁（§6.2 #34）：双开实例会互踩共享数据目录里的固定文件
     // （libnfc.conf 每次连接整文件覆盖、temp.mfd 是写卡备份闸的唯一载体）。
