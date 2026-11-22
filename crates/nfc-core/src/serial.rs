@@ -405,7 +405,7 @@ mod tests {
     /// 把 base 挂到该文件之下，`create_dir_all` 在 Linux/Windows 都必然失败。
     /// （不要用 `/proc`：Windows 会把它解析成当前盘的 `C:\proc` 而成功创建。）
     fn blocked_paths() -> (Paths, TempDir) {
-        let (base, guard) = tmp_guarded();
+        let (_, guard) = tmp_guarded();
         let blocker = guard.0.join("blocker-file");
         fs::write(&blocker, b"").unwrap();
         (Paths::new(blocker), guard)
