@@ -387,7 +387,7 @@ impl AppState {
                 Some('[') => {
                     chars.next();
                     // CSI：吃到 0x40..=0x7E 的终止字节（含）为止
-                    while let Some(n) = chars.next() {
+                    for n in chars.by_ref() {
                         if ('\u{40}'..='\u{7e}').contains(&n) {
                             break;
                         }

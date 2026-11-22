@@ -426,7 +426,7 @@ mod tests {
     fn append_evicts_oldest_at_cap() {
         let mut r = Registry::new();
         for i in 0..(MAX_REGISTRY + 5) {
-            r.append(CardRecord::new(&format!("uid{i:04}")));
+            r.append(CardRecord::new(format!("uid{i:04}")));
         }
         assert_eq!(r.len(), MAX_REGISTRY, "到上限后总条数应恒定");
         // 最旧的 5 条被淘汰，最新的都在
