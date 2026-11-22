@@ -401,11 +401,15 @@ mod tests {
     /// 临时目录序号，避免同一进程内并行测试撞名。
     static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-    /// 父目录不可创建的 base，用于触发 `fs::create_dir_all` 失败。
-    ///
-    /// 走 `/proc`：即便以 root 运行，procfs 也不允许 `mkdir`，用例在
-    /// root / 普通用户下都稳定失败（`/` 下 root 能建目录会让它误判成功）。
-    const NO_PARENT: &str = "/proc/nonexistent-parent-for-s3-test/nfc";
+    /// 可移植地构造「父目录不可创建」的 Paths：在临时目录里放一个普通文件，
+    /// 把 base 挂到该文件之下，`create_dir_all` 在 Linux/Windows 都必然失败。
+    /// （不要用 `/proc`：Windows 会把它解析成当前盘的 `C:\proc` 而成功创建。）
+    fn blocked_paths() -> (Paths, TempDir) {
+        let (base, guard) = tmp_guarded();
+        let blocker = guard.0.join("blocker-file");
+        fs::write(&blocker, b"").unwrap();
+        (Paths::new(blocker), guard)
+    }
 
     fn read_fixture(name: &str) -> String {
         fs::read_to_string(format!("{FIXTURES}{name}")).unwrap()
@@ -672,7 +676,7 @@ mod tests {
 
     #[test]
     fn write_nfc_config_reports_error_when_parent_missing() {
-        let paths = Paths::new(NO_PARENT);
+        let (paths, _guard) = blocked_paths();
         let err = write_nfc_config(&paths, "/dev/ttyACM0", DEVICE_SPEED).unwrap_err();
         assert!(matches!(err, DeviceError::WriteConfig(_)));
         assert!(err.to_string().contains("libnfc.conf"));
@@ -713,9 +717,8 @@ mod tests {
         let mut runner = MockToolRunner::new(vec![]);
         let mut flow = ConnectFlow::new("/dev/ttyACM0");
         let mut events = Vec::new();
-        let r = flow.begin(&Paths::new(NO_PARENT), &mut runner, &gs(), &mut |e| {
-            events.push(e)
-        });
+        let (blocked, _guard) = blocked_paths();
+        let r = flow.begin(&blocked, &mut runner, &gs(), &mut |e| events.push(e));
         assert!(matches!(r, Err(DeviceError::WriteConfig(_))));
         assert!(events
             .iter()
