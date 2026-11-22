@@ -303,10 +303,10 @@ mod tests {
         let added = save_keys(
             &paths,
             &[
-                "deadbeef1234".to_string(), // 合法
-                "nothex!!".to_string(),     // 非 hex，剔除
+                "deadbeef1234".to_string(),         // 合法
+                "nothex!!".to_string(),             // 非 hex，剔除
                 "ffffffffffffffffffff".to_string(), // 超长，剔除
-                "DEADBEEF6789".to_string(), // 合法（大小写敏感去重，两条都留）
+                "DEADBEEF6789".to_string(),         // 合法（大小写敏感去重，两条都留）
             ],
         )
         .unwrap();

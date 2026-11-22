@@ -284,7 +284,9 @@ pub fn scan_uid_rolling(buf: &mut String, text: &str) -> Option<String> {
     let done = match &found {
         Some(uid) => {
             uid.len() >= UID_MAX_HEX
-                || buf[buf.rfind(MARKER_UID_NFCID).map_or(0, |i| i + MARKER_UID_NFCID_LEN)..]
+                || buf[buf
+                    .rfind(MARKER_UID_NFCID)
+                    .map_or(0, |i| i + MARKER_UID_NFCID_LEN)..]
                     .contains('\n')
         }
         None => false,
@@ -1053,8 +1055,7 @@ mod tests {
         let paths = Paths::new(&dir);
         // 模拟最坏情况：C 工具以默认 umask 写出 0644 的 temp
         std::fs::write(paths.temp_mfd(), b"payload").unwrap();
-        std::fs::set_permissions(paths.temp_mfd(), std::fs::Permissions::from_mode(0o644))
-            .unwrap();
+        std::fs::set_permissions(paths.temp_mfd(), std::fs::Permissions::from_mode(0o644)).unwrap();
         let mut s = AppState::new();
 
         let pending = dump_prepare(&mut s, &paths, Some("1122")).expect("非空 dump 应产出待存");
