@@ -234,40 +234,43 @@ fn console_card(ui: &mut Ui, app: &mut NfcApp, stacked: bool) {
                         .size(12.0)
                         .color(paint.color(paint.console_fg)),
                 );
-                ui.with_layout(Layout::right_to_left(Align::Center).with_main_wrap(true), |ui| {
-                    let mut auto = !app.lock_scroll;
-                    if ui
-                        .checkbox(&mut auto, RichText::new(t("html_unlock_scroll")).size(11.0))
-                        .on_hover_text(t("html_tip_autoscroll"))
-                        .changed()
-                    {
-                        app.lock_scroll = !auto;
-                    }
-                    // 三个操作钮与任务卡「停止任务」同用默认按钮（同 padding/底/描边），
-                    // 此前 `small_button` 半 padding 落在终端底色上，观感与其余卡片不一。
-                    if ui
-                        .button(t("html_copy_log"))
-                        .on_hover_text(t("html_tip_copy_log"))
-                        .clicked()
-                    {
-                        ui.ctx().copy_text(app.state.log_buffer.clone());
-                    }
-                    if ui
-                        .button(t("html_save_log"))
-                        .on_hover_text(t("html_tip_save_log"))
-                        .clicked()
-                    {
-                        let text = app.state.log_buffer.clone();
-                        app.exec("save-log", Some(text));
-                    }
-                    if ui
-                        .button(t("html_clear_log"))
-                        .on_hover_text(t("html_tip_clear_log"))
-                        .clicked()
-                    {
-                        app.state.log_buffer.clear();
-                    }
-                });
+                ui.with_layout(
+                    Layout::right_to_left(Align::Center).with_main_wrap(true),
+                    |ui| {
+                        let mut auto = !app.lock_scroll;
+                        if ui
+                            .checkbox(&mut auto, RichText::new(t("html_unlock_scroll")).size(11.0))
+                            .on_hover_text(t("html_tip_autoscroll"))
+                            .changed()
+                        {
+                            app.lock_scroll = !auto;
+                        }
+                        // 三个操作钮与任务卡「停止任务」同用默认按钮（同 padding/底/描边），
+                        // 此前 `small_button` 半 padding 落在终端底色上，观感与其余卡片不一。
+                        if ui
+                            .button(t("html_copy_log"))
+                            .on_hover_text(t("html_tip_copy_log"))
+                            .clicked()
+                        {
+                            ui.ctx().copy_text(app.state.log_buffer.clone());
+                        }
+                        if ui
+                            .button(t("html_save_log"))
+                            .on_hover_text(t("html_tip_save_log"))
+                            .clicked()
+                        {
+                            let text = app.state.log_buffer.clone();
+                            app.exec("save-log", Some(text));
+                        }
+                        if ui
+                            .button(t("html_clear_log"))
+                            .on_hover_text(t("html_tip_clear_log"))
+                            .clicked()
+                        {
+                            app.state.log_buffer.clear();
+                        }
+                    },
+                );
             });
             ScrollArea::vertical()
                 .id_salt("rail-log")

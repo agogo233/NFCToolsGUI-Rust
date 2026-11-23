@@ -258,6 +258,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: nfctoolsgui-win-x64
+          path: nfctoolsgui-win-x64
 
       - name: 打包 zip（单层，布局对标 package.sh / docs/02 §8）
         run: |

@@ -1731,7 +1731,9 @@ impl NfcApp {
             };
             egui::Panel::left("nfc-ops")
                 .exact_size(if icon_mode { 56.0 } else { 236.0 })
-                .show(ui, |ui| crate::ui::ops_panel::draw(ui, self, icon_mode, false));
+                .show(ui, |ui| {
+                    crate::ui::ops_panel::draw(ui, self, icon_mode, false)
+                });
             egui::Panel::right("nfc-rail")
                 .exact_size(rail_w)
                 .show(ui, |ui| crate::ui::rail::draw(ui, self, false));

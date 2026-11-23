@@ -377,11 +377,8 @@ fn stack_tier_paint_verts(with_snapshot: bool) -> usize {
         let mut bytes = vec![0u8; 1024];
         bytes[0..4].copy_from_slice(&[0xa2, 0x3d, 0xc0, 0x30]);
         bytes[4] = 0xa2 ^ 0x3d ^ 0xc0 ^ 0x30;
-        app.card_snapshot = crate::ui::workbench::snapshot_from_bytes(
-            &bytes,
-            "p".to_owned(),
-            "x.mfd".to_owned(),
-        );
+        app.card_snapshot =
+            crate::ui::workbench::snapshot_from_bytes(&bytes, "p".to_owned(), "x.mfd".to_owned());
         app.open_sector = Some(0);
     }
     let ctx = Context::default();
