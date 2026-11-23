@@ -706,7 +706,6 @@ impl NfcApp {
         // 界面改版：落盘后重建中栏卡片快照。新卡 → 旧会话的写卡完成态不再
         // 成立，重置左栏「写卡」组状态点。
         let snap = crate::ui::workbench::build_snapshot(&path);
-        self.card_snapshot = snap;
         if snap.is_none() {
             // 静默失败可见化（docs/02 §6.47，放宽 docs/06 §12 校正 5 的「构建
             // 失败静默」约定）：转储已落盘、引导条照常，但中栏卡片档案建不出时
@@ -727,6 +726,7 @@ impl NfcApp {
                 ),
             );
         }
+        self.card_snapshot = snap;
         self.write_done = false;
         self.open_sector = if self.card_snapshot.is_some() {
             Some(0)
@@ -1730,8 +1730,9 @@ impl NfcApp {
         // 窗口右栏宽度却变」的来源（OS 平铺/移屏 DPI/最大化都会让 w 变）。
         let (tier, tier_name) = layout_tier(w);
         if self.last_layout_tier != Some(tier) {
-            self.state
-                .apply(Event::Log(format!("\n[layout] w={w:.0} tier={tier_name}\n")));
+            self.state.apply(Event::Log(format!(
+                "\n[layout] w={w:.0} tier={tier_name}\n"
+            )));
             self.last_layout_tier = Some(tier);
         }
         if w < 820.0 {
