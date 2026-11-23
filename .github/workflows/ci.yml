@@ -239,3 +239,43 @@ jobs:
             target/release/framework/bin/*
             target/release/dict.dic
           retention-days: 30
+
+  # ── 3) Release：发布 latest 滚动版本（仿 GoRun rust-build.yml release-latest）──
+  # 只随 push / workflow_dispatch 发版（PR 不发）；产物取自 build job 的 artifact，
+  # 下载后以目录为基准 zip（zip 根 = nfctoolsgui.exe / framework / dict.dic，无多余
+  # 一层，布局与 scripts/package.sh 一致）。每次构建强制滚动 latest 标签并重建 release。
+  release-latest:
+    name: publish latest release
+    needs: build
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 下载发布产物
+        uses: actions/download-artifact@v4
+        with:
+          name: nfctoolsgui-win-x64
+
+      - name: 打包 zip（单层，布局对标 package.sh / docs/02 §8）
+        run: |
+          cd nfctoolsgui-win-x64
+          zip -9 -r ../NFCToolsGUI-win-x64.zip .
+          unzip -l ../NFCToolsGUI-win-x64.zip
+
+      - name: 强制更新 latest 标签
+        run: |
+          git tag -f latest
+          git push -f origin latest
+
+      - name: 替换 latest release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete latest -y >/dev/null 2>&1 || true
+          gh release create latest NFCToolsGUI-win-x64.zip \
+            --title "NFCToolsGUI CI build $(git rev-parse --short HEAD)" \
+            --notes "Auto-built by cloud CI on $(date -u +%Y-%m-%d), commit $(git rev-parse --short HEAD)" \
+            --latest
