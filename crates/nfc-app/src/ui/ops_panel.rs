@@ -168,9 +168,18 @@ pub const GROUPS: &[GroupDef] = &[
 /// 画左栏全部分组。`icon_mode` 为真时压成 56px 图标条：
 /// 按钮只留一个代表字（悬停给全名 + 提示），组头只留步骤徽标。
 ///
-/// 整栏包滚动区：窗口偏矮时（标题栏 + 引导条占掉头部后）底部分组
-/// （如「更多操作」）不再被裁剪，可滚动查看；内容不超高时无滚动条。
-pub fn draw(ui: &mut Ui, app: &mut NfcApp, icon_mode: bool) {
+/// 非 stack 档整栏包滚动区：窗口偏矮时（标题栏 + 引导条占掉头部后）
+/// 底部分组（如「更多操作」）不再被裁剪，可滚动查看；内容不超高时无滚动条。
+/// stack 档（<820）**不套**内层滚动：外层 `stacked-main` 已统一滚动，再嵌
+/// 一层会占满外层视口并优先吞掉滚轮，把中栏卡死在折叠线下（真机复现过）。
+pub fn draw(ui: &mut Ui, app: &mut NfcApp, icon_mode: bool, stacked: bool) {
+    if stacked {
+        for g in GROUPS {
+            group_card(ui, app, g, icon_mode);
+            ui.add_space(8.0);
+        }
+        return;
+    }
     ScrollArea::vertical()
         .id_salt("ops-panel-scroll")
         .auto_shrink([false, true])

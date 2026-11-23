@@ -249,28 +249,35 @@ fn card_context(ui: &mut Ui, app: &mut NfcApp) {
 }
 
 /// 扇区编辑器：组行（扇区 / KeyA / ACL / KeyB / 状态）+ 点击展开块数据与 ACL 解读。
+///
+/// stack 档（`stacked`）卡片取**自然高度**且不套内层滚动：固定 480 + 内嵌
+/// `sector-table` 滚动区会把行区压在外层视口折叠线下（真机呈现「表头可见、
+/// 行空白」），改由外层 `stacked-main` 统一滚动。
 fn sector_editor(ui: &mut Ui, app: &mut NfcApp, stacked: bool) {
     let paint = app.paint();
-    let avail = ui.available_height();
     let editor_h = if stacked {
-        480.0
+        None
     } else {
-        (avail - 8.0).max(260.0)
+        Some((ui.available_height() - 8.0).max(260.0))
     };
     Frame::NONE
         .fill(paint.color(paint.surface))
         .stroke(egui::Stroke::new(1.0, paint.color(paint.border)))
         .corner_radius(egui::CornerRadius::same(theme::RADIUS[1] as u8))
         .show(ui, |ui| {
-            ui.allocate_ui_with_layout(
-                egui::vec2(ui.available_width(), editor_h),
-                egui::Layout::top_down(Align::Min),
-                |ui| editor_body(ui, app),
-            );
+            if let Some(h) = editor_h {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), h),
+                    egui::Layout::top_down(Align::Min),
+                    |ui| editor_body(ui, app, false),
+                );
+            } else {
+                editor_body(ui, app, true);
+            }
         });
 }
 
-fn editor_body(ui: &mut Ui, app: &mut NfcApp) {
+fn editor_body(ui: &mut Ui, app: &mut NfcApp, stacked: bool) {
     let paint = app.paint();
     ui.horizontal(|ui| {
         ui.label(
@@ -331,117 +338,129 @@ fn editor_body(ui: &mut Ui, app: &mut NfcApp) {
         );
     });
     ui.separator();
+    if stacked {
+        // stack 档：自然高度直接画行，外层 stacked-main 统一滚动。
+        sector_rows(ui, app);
+        return;
+    }
     let scroll_h = (ui.available_height() - 4.0).max(120.0);
     ScrollArea::vertical()
         .id_salt("sector-table")
         .max_height(scroll_h)
         .auto_shrink([false, true])
-        .show(ui, |ui| {
-            let Some(snap) = app.card_snapshot.as_ref() else {
-                ui.label(
-                    RichText::new(t("html_card_none"))
-                        .size(12.0)
-                        .color(paint.color(paint.text_secondary)),
-                );
-                return;
-            };
-            let n = snap.groups.len();
-            let mut toggle: Option<usize> = None;
-            // P2-11：detail 需要 &mut app（复制事件），而 snap 借用了
-            // app.card_snapshot。先把展开组的行数据 clone 出来，借用即断开。
-            let open_detail = app.open_sector.and_then(|i| {
-                snap.groups
-                    .get(i)
-                    .map(|g| (i, g.clone(), dump::group_has_trailer(i, n)))
-            });
-            for (i, g) in snap.groups.iter().enumerate() {
-                let logical = dump::group_to_sector(i, n);
-                let has_trailer = dump::group_has_trailer(i, n);
-                let unknown = app
-                    .state
-                    .unknown_key_info
-                    .iter()
-                    .any(|(s, _)| *s as usize == logical);
-                let key_a = app
-                    .state
-                    .known_key_info
-                    .iter()
-                    .find(|(_, s, ty)| *s as usize == logical && *ty == KeyType::A);
-                let key_b = app
-                    .state
-                    .known_key_info
-                    .iter()
-                    .find(|(_, s, ty)| *s as usize == logical && *ty == KeyType::B);
-                let ka_text = key_a
-                    .map(|(k, _, _)| spaced(k))
-                    .unwrap_or_else(|| NK.to_owned());
-                let kb_text = key_b
-                    .map(|(k, _, _)| spaced(k))
-                    .unwrap_or_else(|| NK.to_owned());
-                let ka_color = if key_a.is_some() {
-                    theme::STATUS_OK
-                } else {
-                    theme::STATUS_WARN
-                };
-                let kb_color = if key_b.is_some() {
-                    theme::STATUS_OK
-                } else {
-                    theme::STATUS_WARN
-                };
-                let acl_text = if has_trailer {
-                    hex::hex_decode(&g[3])
-                        .ok()
-                        .filter(|b| b.len() >= 9)
-                        .map(|b| spaced_bytes(&b[6..9]))
-                        .unwrap_or_else(|| "-".to_owned())
-                } else {
-                    "-".to_owned()
-                };
-                let (tag, tag_color) = if unknown {
-                    (t("html_detect_unknown"), theme::STATUS_WARN)
-                } else if key_a.is_some() || key_b.is_some() {
-                    (t("html_detect_known"), theme::STATUS_OK)
-                } else {
-                    ("-".to_owned(), paint.text_secondary)
-                };
-                let row = ui.horizontal(|ui| {
-                    cell(
-                        ui,
-                        24.0,
-                        &format!("{i:02}"),
-                        paint.color(paint.text_secondary),
-                        true,
-                    );
-                    cell(ui, key_w, &ka_text, paint.color(ka_color), true);
-                    cell(ui, 90.0, &acl_text, paint.color(paint.text_secondary), true);
-                    cell(ui, key_w, &kb_text, paint.color(kb_color), true);
-                    cell(ui, 44.0, &tag, paint.color(tag_color), false);
-                });
-                // 子 Ui 的 response 固定 `Sense::hover`，`clicked()` 恒为 false，
-                // 展开详情从未生效过；用 interact 以整行矩形注册点击区。
-                let click = ui
-                    .interact(
-                        row.response.rect,
-                        egui::Id::new("sector-row").with(i),
-                        Sense::click(),
-                    )
-                    .on_hover_cursor(CursorIcon::PointingHand);
-                if click.clicked() {
-                    toggle = Some(i);
-                }
-            }
-            if let Some(i) = toggle {
-                app.open_sector = if app.open_sector == Some(i) {
-                    None
-                } else {
-                    Some(i)
-                };
-            }
-            // 展开详情放在循环外：此时 snap 的借用已结束，可拿 &mut app。
-            if let Some((i, g, has_trailer)) = open_detail {
-                detail(ui, app, i, n, &g, has_trailer);
-            }
+        .show(ui, |ui| sector_rows(ui, app));
+}
+
+/// 扇区表行 + 点击展开详情。stack 档直接画（自然高度），其余档位包在内层滚动区。
+fn sector_rows(ui: &mut Ui, app: &mut NfcApp) {
+    let paint = app.paint();
+    // 与表头行同一公式：两列密钥宽 = 剩余宽对半（扇区 24 / ACL 90 / 状态 44 +
+    // 间距 32），过窄时兜底 110。
+    let key_w = ((ui.available_width() - 24.0 - 90.0 - 44.0 - 32.0) / 2.0).max(110.0);
+    let Some(snap) = app.card_snapshot.as_ref() else {
+        ui.label(
+            RichText::new(t("html_card_none"))
+                .size(12.0)
+                .color(paint.color(paint.text_secondary)),
+        );
+        return;
+    };
+    let n = snap.groups.len();
+    let mut toggle: Option<usize> = None;
+    // P2-11：detail 需要 &mut app（复制事件），而 snap 借用了
+    // app.card_snapshot。先把展开组的行数据 clone 出来，借用即断开。
+    let open_detail = app.open_sector.and_then(|i| {
+        snap.groups
+            .get(i)
+            .map(|g| (i, g.clone(), dump::group_has_trailer(i, n)))
+    });
+    for (i, g) in snap.groups.iter().enumerate() {
+        let logical = dump::group_to_sector(i, n);
+        let has_trailer = dump::group_has_trailer(i, n);
+        let unknown = app
+            .state
+            .unknown_key_info
+            .iter()
+            .any(|(s, _)| *s as usize == logical);
+        let key_a = app
+            .state
+            .known_key_info
+            .iter()
+            .find(|(_, s, ty)| *s as usize == logical && *ty == KeyType::A);
+        let key_b = app
+            .state
+            .known_key_info
+            .iter()
+            .find(|(_, s, ty)| *s as usize == logical && *ty == KeyType::B);
+        let ka_text = key_a
+            .map(|(k, _, _)| spaced(k))
+            .unwrap_or_else(|| NK.to_owned());
+        let kb_text = key_b
+            .map(|(k, _, _)| spaced(k))
+            .unwrap_or_else(|| NK.to_owned());
+        let ka_color = if key_a.is_some() {
+            theme::STATUS_OK
+        } else {
+            theme::STATUS_WARN
+        };
+        let kb_color = if key_b.is_some() {
+            theme::STATUS_OK
+        } else {
+            theme::STATUS_WARN
+        };
+        let acl_text = if has_trailer {
+            hex::hex_decode(&g[3])
+                .ok()
+                .filter(|b| b.len() >= 9)
+                .map(|b| spaced_bytes(&b[6..9]))
+                .unwrap_or_else(|| "-".to_owned())
+        } else {
+            "-".to_owned()
+        };
+        let (tag, tag_color) = if unknown {
+            (t("html_detect_unknown"), theme::STATUS_WARN)
+        } else if key_a.is_some() || key_b.is_some() {
+            (t("html_detect_known"), theme::STATUS_OK)
+        } else {
+            ("-".to_owned(), paint.text_secondary)
+        };
+        let row = ui.horizontal(|ui| {
+            cell(
+                ui,
+                24.0,
+                &format!("{i:02}"),
+                paint.color(paint.text_secondary),
+                true,
+            );
+            cell(ui, key_w, &ka_text, paint.color(ka_color), true);
+            cell(ui, 90.0, &acl_text, paint.color(paint.text_secondary), true);
+            cell(ui, key_w, &kb_text, paint.color(kb_color), true);
+            cell(ui, 44.0, &tag, paint.color(tag_color), false);
         });
+        // 子 Ui 的 response 固定 `Sense::hover`，`clicked()` 恒为 false，
+        // 展开详情从未生效过；用 interact 以整行矩形注册点击区。
+        let click = ui
+            .interact(
+                row.response.rect,
+                egui::Id::new("sector-row").with(i),
+                Sense::click(),
+            )
+            .on_hover_cursor(CursorIcon::PointingHand);
+        if click.clicked() {
+            toggle = Some(i);
+        }
+    }
+    if let Some(i) = toggle {
+        app.open_sector = if app.open_sector == Some(i) {
+            None
+        } else {
+            Some(i)
+        };
+    }
+    // 展开详情放在循环外：此时 snap 的借用已结束，可拿 &mut app。
+    if let Some((i, g, has_trailer)) = open_detail {
+        detail(ui, app, i, n, &g, has_trailer);
+    }
 }
 
 /// 单元格：定宽文本（等宽可选），超出宽度截断。

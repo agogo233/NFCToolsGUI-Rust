@@ -154,6 +154,8 @@ pub fn run() -> eframe::Result {
         // ── 界面改版（docs/06）──
         ("卡片快照构建", c_card_snapshot),
         ("ACL 解读解码", c_acl_decode),
+        // ── 界面改版 · stack 档（<820）回归 ──
+        ("stack 档滚动后行可见", c_stack_tier_scroll_sees_rows),
     ];
 
     let total = cases.len();
@@ -362,6 +364,82 @@ fn c_card_snapshot() -> Result<(), String> {
         .ok_or("Mini 快照构建失败")?;
     if snap.groups.len() != 5 {
         return Err(format!("Mini 应为 5 组，实际 {}", snap.groups.len()));
+    }
+    Ok(())
+}
+
+/// stack 档（<820）一帧流程的 tessellate 顶点数。`with_snapshot` 时预置
+/// 1K 卡快照（16 组），并在第 2 帧向操作区注入滚轮——修复后由外层
+/// `stacked-main` 接收滚动，扇区行进入视口被实际绘制。
+fn stack_tier_paint_verts(with_snapshot: bool) -> usize {
+    let mut app = NfcApp::new(nfc_core::state::AppState::new());
+    if with_snapshot {
+        let mut bytes = vec![0u8; 1024];
+        bytes[0..4].copy_from_slice(&[0xa2, 0x3d, 0xc0, 0x30]);
+        bytes[4] = 0xa2 ^ 0x3d ^ 0xc0 ^ 0x30;
+        app.card_snapshot = crate::ui::workbench::snapshot_from_bytes(
+            &bytes,
+            "p".to_owned(),
+            "x.mfd".to_owned(),
+        );
+        app.open_sector = Some(0);
+    }
+    let ctx = Context::default();
+    crate::theme_ui::apply_style(&ctx);
+    crate::theme_ui::apply_visuals(&ctx);
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+    // 第 1 帧：布局成形（无事件）。
+    let mut out = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(rect),
+            ..Default::default()
+        },
+        |ui| app.draw(ui),
+    );
+    out.textures_delta.clear();
+    // 第 2 帧：光标落在操作区上注入滚轮。
+    let mut input = egui::RawInput {
+        screen_rect: Some(rect),
+        ..Default::default()
+    };
+    input
+        .events
+        .push(egui::Event::PointerMoved(egui::pos2(400.0, 300.0)));
+    for _ in 0..3 {
+        input.events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, 30.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::default(),
+        });
+    }
+    let mut out = ctx.run_ui(input, |ui| app.draw(ui));
+    out.textures_delta.clear();
+    // 第 3 帧：无事件，滚动落定后的稳定布局。
+    let mut out = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(rect),
+            ..Default::default()
+        },
+        |ui| app.draw(ui),
+    );
+    out.textures_delta.clear();
+    ctx.tessellate(out.shapes, out.pixels_per_point)
+        .iter()
+        .map(|cp| match &cp.primitive {
+            egui::epaint::Primitive::Mesh(m) => m.vertices.len(),
+            egui::epaint::Primitive::Callback(_) => 0,
+        })
+        .sum()
+}
+
+fn c_stack_tier_scroll_sees_rows() -> Result<(), String> {
+    let with = stack_tier_paint_verts(true);
+    let without = stack_tier_paint_verts(false);
+    if with < without + 1000 {
+        return Err(format!(
+            "stack 档滚动后扇区行未见绘制：有快照 {with} 顶点 vs 无快照 {without} 顶点"
+        ));
     }
     Ok(())
 }

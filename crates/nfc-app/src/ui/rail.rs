@@ -225,6 +225,8 @@ fn console_card(ui: &mut Ui, app: &mut NfcApp, stacked: bool) {
         .inner_margin(egui::Margin::symmetric(8, 6))
         .show(ui, |ui| {
             // 自动换行：窄档右栏放不下「标题 + 复选框 + 3 个按钮」一行。
+            // 右对齐子布局必须 `with_main_wrap`——否则装不下时会从卡片左缘
+            // 向外画出界（真机复现过：按钮排「左边出去了」）。
             ui.horizontal_wrapped(|ui| {
                 ui.label(
                     RichText::new(t("html_console"))
@@ -232,7 +234,7 @@ fn console_card(ui: &mut Ui, app: &mut NfcApp, stacked: bool) {
                         .size(12.0)
                         .color(paint.color(paint.console_fg)),
                 );
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.with_layout(Layout::right_to_left(Align::Center).with_main_wrap(true), |ui| {
                     let mut auto = !app.lock_scroll;
                     if ui
                         .checkbox(&mut auto, RichText::new(t("html_unlock_scroll")).size(11.0))
