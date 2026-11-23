@@ -156,6 +156,7 @@
     "log_msg_not_saved": "未保存",
     "log_msg_read_dump_file_failed": "无法读取转储文件",
     "log_msg_read_ic_then_execute": "先读卡，然后利用解卡密钥进行后续操作\n\n# 开始执行检测卡片",
+    "log_msg_snapshot_build_failed": "卡片档案构建失败",
     "log_msg_start_collect_nonces": "开始收集 Nonces",
     "log_msg_start_connect_device": "开始连接设备",
     "log_msg_start_detect_card": "开始执行检测卡片l类型",

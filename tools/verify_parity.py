@@ -193,6 +193,11 @@ AUDIT_FIX_EXTRA = {
 HARDENING_EXTRA = {
     "html_dict_missing",
 }
+# 快照构建失败可见化批次（docs/02 §6.47，放宽 docs/06 §12 校正 5 的
+# 「构建失败静默」约定：转储已落盘但中栏卡片档案建不出时给出具体原因）。
+SNAPSHOT_UI_EXTRA = {
+    "log_msg_snapshot_build_failed",
+}
 # S18 从「上游独有」挪回的 20 个 key：两版共有且文案逐字一致。
 S18_MIGRATED = {
     "dialog_msg_invalid_uid_input",
@@ -400,6 +405,7 @@ def h_i18n() -> None:
         + len(UX_POLISH_EXTRA)
         + len(AUDIT_FIX_EXTRA)
         + len(HARDENING_EXTRA)
+        + len(SNAPSHOT_UI_EXTRA)
     )
     check(
         len(keys) == 194 + extras,
@@ -432,6 +438,8 @@ def h_i18n() -> None:
         check(k in keys, f"H zh-CN 含体验优化 {k}")
     for k in HARDENING_EXTRA:
         check(k in keys, f"H zh-CN 含加固 {k}")
+    for k in SNAPSHOT_UI_EXTRA:
+        check(k in keys, f"H zh-CN 含快照构建失败 {k}")
     check(not (REPO / "assets/locales/en.json").exists(), "H 无 en.json（仅中文决策）")
     body = rd(CORE / "src/serial.rs")
     used = set()
@@ -1741,7 +1749,7 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     # 自动执行提示、文件框等待文案、检测结果“已知/未知”、历史重命名、
     # 控制台按钮悬停说明（§6.28 P1）
     # （docs/02 §6.25 续 / §6.28 / S16 偏离登记）。
-    LOCAL_EXTRA = S8_EXTRA | S11_EXTRA | S12_EXTRA | S15_EXTRA | S16_EXTRA | S17_EXTRA | S18_EXTRA | MFOC_PROBES_EXTRA | LOG_COPY_EXTRA | DUMP_VIEW_EXTRA | PANEL_VALIDATION_EXTRA | NO_PORTAL_EXTRA | REDESIGN_EXTRA | MAXIMIZE_EXTRA | UX_POLISH_EXTRA | AUDIT_FIX_EXTRA
+    LOCAL_EXTRA = S8_EXTRA | S11_EXTRA | S12_EXTRA | S15_EXTRA | S16_EXTRA | S17_EXTRA | S18_EXTRA | MFOC_PROBES_EXTRA | LOG_COPY_EXTRA | DUMP_VIEW_EXTRA | PANEL_VALIDATION_EXTRA | NO_PORTAL_EXTRA | REDESIGN_EXTRA | MAXIMIZE_EXTRA | UX_POLISH_EXTRA | AUDIT_FIX_EXTRA | SNAPSHOT_UI_EXTRA
     # 对照原版登记的上游独有 key（原版对拍已退役，此集合作为历史快照保留）：
     # 对应本重写**没有**的功能/结构。搬运这些文案没有意义（没有代码会 t() 它们），
     # 故显式登记为「上游有、我们不做」。若将来真要做对应功能，把 key 从这里挪进
@@ -1799,6 +1807,7 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     check(LOG_COPY_EXTRA <= set(i18n_asset), "R 日志复制补的 2 个文案在表内")
     check(DUMP_VIEW_EXTRA <= set(i18n_asset), "R 转储编辑器视图切换补的 3 个文案在表内")
     check(PANEL_VALIDATION_EXTRA <= set(i18n_asset), "R 面板输入校验补的 2 个文案在表内")
+    check(SNAPSHOT_UI_EXTRA <= set(i18n_asset), "R 快照构建失败补的 1 个文案在表内")
     check(UPSTREAM_ONLY.isdisjoint(set(i18n_asset)),
            f"R 上游独有的 {len(UPSTREAM_ONLY)} 个 key 确认我们没搬（搬了也没有代码 t() 它们）")
     check([k for k in i18n_asset if k.startswith("lod_")] != [], "R 原版拼写错误 key lod_* 原样保留")
@@ -1808,8 +1817,8 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
           "R i18n key 名不得以标点结尾（疑似误建的新 key）",
           f"{[k for k in i18n_asset if k[-1:] in {':', '.', ',', ' ', '-', '_'}]}")
     # 本地补的 key 数量原本写死在 Rust 测试与此处两处，已漂移过一次。双向钉死。
-    check(len(LOCAL_EXTRA) == 14 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(DUMP_VIEW_EXTRA) + len(PANEL_VALIDATION_EXTRA) + len(NO_PORTAL_EXTRA) + len(REDESIGN_EXTRA) + len(MAXIMIZE_EXTRA) + len(UX_POLISH_EXTRA) + len(AUDIT_FIX_EXTRA),
-          "R 本地补的 i18n key 恰为 115 个", f"实际 {len(LOCAL_EXTRA)}")
+    check(len(LOCAL_EXTRA) == 14 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(DUMP_VIEW_EXTRA) + len(PANEL_VALIDATION_EXTRA) + len(NO_PORTAL_EXTRA) + len(REDESIGN_EXTRA) + len(MAXIMIZE_EXTRA) + len(UX_POLISH_EXTRA) + len(AUDIT_FIX_EXTRA) + len(SNAPSHOT_UI_EXTRA),
+          "R 本地补的 i18n key 恰为 134 个", f"实际 {len(LOCAL_EXTRA)}")
     cd = rd(CORE / "src/command.rs")
     # rustfmt 会把字段拆成多行，故用 DOTALL 匹配整个结构体字面量
     specs = re.findall(

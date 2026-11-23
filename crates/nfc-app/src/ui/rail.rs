@@ -217,9 +217,11 @@ fn console_card(ui: &mut Ui, app: &mut NfcApp, stacked: bool) {
     } else {
         (avail - 34.0).max(LOG_MIN_H)
     };
+    // 对齐响应式提案的 `.console`：终端深色底上加 1px 描边、圆角与其余卡片（RADIUS[1]）统一。
     Frame::NONE
         .fill(paint.color(paint.console_bg))
-        .corner_radius(egui::CornerRadius::same(theme::RADIUS[0] as u8))
+        .stroke(egui::Stroke::new(1.0, paint.color(paint.border)))
+        .corner_radius(egui::CornerRadius::same(theme::RADIUS[1] as u8))
         .inner_margin(egui::Margin::symmetric(8, 6))
         .show(ui, |ui| {
             // 自动换行：窄档右栏放不下「标题 + 复选框 + 3 个按钮」一行。
@@ -239,15 +241,17 @@ fn console_card(ui: &mut Ui, app: &mut NfcApp, stacked: bool) {
                     {
                         app.lock_scroll = !auto;
                     }
+                    // 三个操作钮与任务卡「停止任务」同用默认按钮（同 padding/底/描边），
+                    // 此前 `small_button` 半 padding 落在终端底色上，观感与其余卡片不一。
                     if ui
-                        .small_button(t("html_copy_log"))
+                        .button(t("html_copy_log"))
                         .on_hover_text(t("html_tip_copy_log"))
                         .clicked()
                     {
                         ui.ctx().copy_text(app.state.log_buffer.clone());
                     }
                     if ui
-                        .small_button(t("html_save_log"))
+                        .button(t("html_save_log"))
                         .on_hover_text(t("html_tip_save_log"))
                         .clicked()
                     {
@@ -255,7 +259,7 @@ fn console_card(ui: &mut Ui, app: &mut NfcApp, stacked: bool) {
                         app.exec("save-log", Some(text));
                     }
                     if ui
-                        .small_button(t("html_clear_log"))
+                        .button(t("html_clear_log"))
                         .on_hover_text(t("html_tip_clear_log"))
                         .clicked()
                     {

@@ -174,6 +174,9 @@ pub struct NfcApp {
     /// 右下角拖拽抓角的进行时状态：`(拖拽起点指针位置, 起始窗口尺寸)`。
     /// 自绘标题栏下部分平台原生边缘热区难命中，抓角是常驻可见的缩放兜底。
     pub resize_drag: Option<(egui::Pos2, egui::Vec2)>,
+    /// 临时布局观测（docs/02 §6.47，右栏宽度疑问定位后随观测一并移除）：
+    /// 上一帧的响应式档位。切换时向控制台记一条 `[layout]` 诊断行。
+    pub last_layout_tier: Option<u8>,
 }
 
 impl NfcApp {
@@ -222,6 +225,7 @@ impl NfcApp {
             write_done: false,
             mfcuk_progress: None,
             resize_drag: None,
+            last_layout_tier: None,
         }
         .with_no_portal_warning()
     }
@@ -699,9 +703,30 @@ impl NfcApp {
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
         let dump_arg = Some(path.to_string_lossy().into_owned());
-        // 界面改版：落盘后重建中栏卡片快照（失败静默——selftest 会用假路径走到这里）。
-        // 新卡 → 旧会话的写卡完成态不再成立，重置左栏「写卡」组状态点。
-        self.card_snapshot = crate::ui::workbench::build_snapshot(&path);
+        // 界面改版：落盘后重建中栏卡片快照。新卡 → 旧会话的写卡完成态不再
+        // 成立，重置左栏「写卡」组状态点。
+        let snap = crate::ui::workbench::build_snapshot(&path);
+        self.card_snapshot = snap;
+        if snap.is_none() {
+            // 静默失败可见化（docs/02 §6.47，放宽 docs/06 §12 校正 5 的「构建
+            // 失败静默」约定）：转储已落盘、引导条照常，但中栏卡片档案建不出时
+            // 必须给出具体原因，否则中栏会无声停在「尚未读取卡片」。
+            let detail = match std::fs::read(&path) {
+                Ok(bytes) => nfc_core::model::dump::to_sector_lines(&bytes)
+                    .err()
+                    .map(|e| e.to_string())
+                    .unwrap_or_else(|| "未知原因".to_owned()),
+                Err(e) => format!("无法读取文件：{e}"),
+            };
+            self.push_event(
+                EventKind::Error,
+                &format!(
+                    "{}: {}（{detail}）",
+                    t("log_msg_snapshot_build_failed"),
+                    path.display()
+                ),
+            );
+        }
         self.write_done = false;
         self.open_sector = if self.card_snapshot.is_some() {
             Some(0)
@@ -1667,6 +1692,21 @@ fn is_maximized(ctx: &egui::Context) -> bool {
     ctx.input(|i| i.viewport().maximized.unwrap_or(false))
 }
 
+/// 响应式四档（docs/06 §12.10 / 提案 `TIER_NAME`）：可用宽 →（档位序号, 名）。
+/// 0=stack(<820) / 1=icon(820–1059) / 2=mid(1060–1279) / 3=full(≥1280)。
+/// 档位名用提案里的英文 ID——纯诊断用，非用户文案，不走 i18n。
+fn layout_tier(w: f32) -> (u8, &'static str) {
+    if w < 820.0 {
+        (0, "stack")
+    } else if w < 1060.0 {
+        (1, "icon")
+    } else if w < 1280.0 {
+        (2, "mid")
+    } else {
+        (3, "full")
+    }
+}
+
 impl NfcApp {
     /// 主窗口内容。自绘标题栏故不用 egui 的 `TopBottomPanel`——
     /// 那会额外画一条分隔线，与原版「无边框、整体自绘」不符。
@@ -1686,6 +1726,14 @@ impl NfcApp {
         //   820~1059     图标条两栏（左 56 仅图标 + 右 280）
         //   <820         纵向堆叠（820 为最小窗宽，此档兜底极端缩放环境）
         let w = ui.available_rect_before_wrap().width();
+        // 临时观测（docs/02 §6.47）：档位一变就记一行诊断，用于定位「没动
+        // 窗口右栏宽度却变」的来源（OS 平铺/移屏 DPI/最大化都会让 w 变）。
+        let (tier, tier_name) = layout_tier(w);
+        if self.last_layout_tier != Some(tier) {
+            self.state
+                .apply(Event::Log(format!("\n[layout] w={w:.0} tier={tier_name}\n")));
+            self.last_layout_tier = Some(tier);
+        }
         if w < 820.0 {
             ScrollArea::vertical()
                 .id_salt("stacked-main")
@@ -1799,6 +1847,17 @@ impl NfcApp {
                     blockers.push(self.device_combo(ui).interact_rect);
                     self.device_status_chip(ui);
                     blockers.push(self.tools_button(ui).interact_rect);
+                    // 临时布局观测（docs/02 §6.47，与 `last_layout_tier` 同进退）：
+                    // 可用宽 + 档位小字常驻，现场即可看出 w 是否真在变。
+                    let w0 = ui.available_rect_before_wrap().width();
+                    let (_, tier_name) = layout_tier(w0);
+                    let readout = ui.label(
+                        RichText::new(format!("w={w0:.0}·{tier_name}"))
+                            .size(10.0)
+                            .font(egui::FontId::monospace(10.0))
+                            .color(paint.color(paint.text_secondary)),
+                    );
+                    blockers.push(readout.interact_rect);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let close = ui
                             .add_sized(
