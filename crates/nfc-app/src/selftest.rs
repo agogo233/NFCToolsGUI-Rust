@@ -368,58 +368,9 @@ fn c_card_snapshot() -> Result<(), String> {
     Ok(())
 }
 
-/// stack 档（<820）一帧流程的 tessellate 顶点数。`with_snapshot` 时预置
-/// 1K 卡快照（16 组），并在第 2 帧向操作区注入滚轮——修复后由外层
-/// `stacked-main` 接收滚动，扇区行进入视口被实际绘制。
-fn stack_tier_paint_verts(with_snapshot: bool) -> usize {
-    let mut app = NfcApp::new(nfc_core::state::AppState::new());
-    if with_snapshot {
-        let mut bytes = vec![0u8; 1024];
-        bytes[0..4].copy_from_slice(&[0xa2, 0x3d, 0xc0, 0x30]);
-        bytes[4] = 0xa2 ^ 0x3d ^ 0xc0 ^ 0x30;
-        app.card_snapshot =
-            crate::ui::workbench::snapshot_from_bytes(&bytes, "p".to_owned(), "x.mfd".to_owned());
-        app.open_sector = Some(0);
-    }
-    let ctx = Context::default();
-    crate::theme_ui::apply_style(&ctx);
-    crate::theme_ui::apply_visuals(&ctx);
-    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
-    // 第 1 帧：布局成形（无事件）。
-    let mut out = ctx.run_ui(
-        egui::RawInput {
-            screen_rect: Some(rect),
-            ..Default::default()
-        },
-        |ui| app.draw(ui),
-    );
-    out.textures_delta.clear();
-    // 第 2 帧：光标落在操作区上注入滚轮。
-    let mut input = egui::RawInput {
-        screen_rect: Some(rect),
-        ..Default::default()
-    };
-    input
-        .events
-        .push(egui::Event::PointerMoved(egui::pos2(400.0, 300.0)));
-    for _ in 0..3 {
-        input.events.push(egui::Event::MouseWheel {
-            unit: egui::MouseWheelUnit::Line,
-            delta: egui::vec2(0.0, 30.0),
-            phase: egui::TouchPhase::Move,
-            modifiers: egui::Modifiers::default(),
-        });
-    }
+/// 单帧绘制并 tessellate，返回顶点数（自检专用的顶点计测）。
+fn frame_verts(ctx: &Context, input: egui::RawInput, app: &mut NfcApp) -> usize {
     let mut out = ctx.run_ui(input, |ui| app.draw(ui));
-    out.textures_delta.clear();
-    // 第 3 帧：无事件，滚动落定后的稳定布局。
-    let mut out = ctx.run_ui(
-        egui::RawInput {
-            screen_rect: Some(rect),
-            ..Default::default()
-        },
-        |ui| app.draw(ui),
-    );
     out.textures_delta.clear();
     ctx.tessellate(out.shapes, out.pixels_per_point)
         .iter()
@@ -430,12 +381,57 @@ fn stack_tier_paint_verts(with_snapshot: bool) -> usize {
         .sum()
 }
 
+/// stack 档（<820）滚动可见性回归：预置 1K 快照并打开扇区 0，逐帧向
+/// `stacked-main` 注入小步滚轮。修复后由外层滚动区统一接收滚轮，扇区
+/// 行会经过视口——滚动过程的顶点峰值应显著高于不滚动基线（此前内层
+/// 滚动吞滚轮 / 固定高度把行压在折叠线下，峰值不涨）。时间戳逐帧推进，
+/// 不依赖真实时钟，避免平滑动画带来跨平台差异。
+fn stack_tier_scroll_peak(with_wheel: bool) -> usize {
+    let mut app = NfcApp::new(nfc_core::state::AppState::new());
+    let mut bytes = vec![0u8; 1024];
+    bytes[0..4].copy_from_slice(&[0xa2, 0x3d, 0xc0, 0x30]);
+    bytes[4] = 0xa2 ^ 0x3d ^ 0xc0 ^ 0x30;
+    app.card_snapshot =
+        crate::ui::workbench::snapshot_from_bytes(&bytes, "p".to_owned(), "x.mfd".to_owned());
+    app.open_sector = Some(0);
+    let ctx = Context::default();
+    crate::theme_ui::apply_style(&ctx);
+    crate::theme_ui::apply_visuals(&ctx);
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+    let base_input = egui::RawInput {
+        screen_rect: Some(rect),
+        time: Some(0.0),
+        ..Default::default()
+    };
+    let mut peak = frame_verts(&ctx, base_input, &mut app);
+    for frame in 1..=96u32 {
+        let mut input = egui::RawInput {
+            screen_rect: Some(rect),
+            time: Some(f64::from(frame) * 0.016),
+            ..Default::default()
+        };
+        if with_wheel {
+            input
+                .events
+                .push(egui::Event::PointerMoved(egui::pos2(400.0, 300.0)));
+            input.events.push(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: egui::vec2(0.0, 2.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::default(),
+            });
+        }
+        peak = peak.max(frame_verts(&ctx, input, &mut app));
+    }
+    peak
+}
+
 fn c_stack_tier_scroll_sees_rows() -> Result<(), String> {
-    let with = stack_tier_paint_verts(true);
-    let without = stack_tier_paint_verts(false);
-    if with < without + 1000 {
+    let base = stack_tier_scroll_peak(false);
+    let peak = stack_tier_scroll_peak(true);
+    if peak < base + 1000 {
         return Err(format!(
-            "stack 档滚动后扇区行未见绘制：有快照 {with} 顶点 vs 无快照 {without} 顶点"
+            "stack 档滚动后扇区行未见绘制：无滚轮基线 {base} 顶点 vs 滚动峰值 {peak} 顶点"
         ));
     }
     Ok(())
