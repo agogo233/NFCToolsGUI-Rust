@@ -553,11 +553,10 @@ fn c_dump_saved_guidance() -> Result<(), String> {
     if app.state.events.is_empty() {
         return Err("未追加 success 事件".into());
     }
-    // 落盘后应自动打开转储编辑器（解卡就是为了改卡；原版的 dumpEditor
-    // 没有写卡路径，此处一并补上）。文件不存在时仍开空面板，与
-    // `open-dump-editor` 载入失败也开面板的行为一致。
-    if !app.state.panels.dump_editor {
-        return Err("落盘后未自动打开转储编辑器".into());
+    // 落盘后**不再自动弹**转储编辑器（720×640 浮窗会盖住中栏扇区编辑器）；
+    // 表单静默载入，入口是卡片档案「编辑转储」按钮 / 事件卡可点行。
+    if app.state.panels.dump_editor {
+        return Err("落盘后不应自动弹出转储编辑器".into());
     }
     // P2-12：该 success 事件应可点击 → 打开转储编辑器（同名 dump）。
     // 直接调用事件卡渲染路径不可行（需 egui 交互），这里只验证前置条件：
@@ -2075,9 +2074,9 @@ fn c_read_ic_save_round_trip() -> Result<(), String> {
     if app.engine.pending_save().is_some() {
         return Err("续接后请求应被取走".into());
     }
-    // 落盘成功后应自动打开编辑器并载入刚存的文件（解卡即改卡）
-    if !app.state.panels.dump_editor {
-        return Err("落盘后未自动打开转储编辑器".into());
+    // 落盘成功后不自动弹编辑器，但表单应已静默载入刚存的文件
+    if app.state.panels.dump_editor {
+        return Err("落盘后不应自动弹出转储编辑器".into());
     }
     if app.forms.editor.origin.as_ref() != Some(&target) {
         return Err(format!(
@@ -2187,7 +2186,7 @@ fn c_nonces_save_round_trip() -> Result<(), String> {
 }
 
 /// 无门户时挂起的保存请求不能照发（rfd 永不返回 → 任务位被占死），
-/// 应按取消语义直接收尾：read-IC 用默认名落盘，编辑器照常自动打开。
+/// 应按取消语义直接收尾：read-IC 用默认名落盘，编辑器静默载入（不弹面板）。
 fn c_pending_save_no_portal_autosave() -> Result<(), String> {
     let (_d, mut app) = app_with_temp_dumps("no-portal-save");
     app.file_dialogs_ok = false;
@@ -2204,9 +2203,9 @@ fn c_pending_save_no_portal_autosave() -> Result<(), String> {
     if app.engine.is_running() {
         return Err("无门户收尾后任务位未释放".into());
     }
-    // 默认名落盘 + 自动打开编辑器（找回去向可见）
-    if !app.state.panels.dump_editor {
-        return Err("未自动打开转储编辑器".into());
+    // 默认名落盘；编辑器静默载入去向，不自动弹面板
+    if app.state.panels.dump_editor {
+        return Err("不应自动弹出转储编辑器".into());
     }
     let origin = app
         .forms

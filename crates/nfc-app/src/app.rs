@@ -686,14 +686,16 @@ impl NfcApp {
         theme_ui::Paint(self.theme)
     }
 
-    /// 落盘成功后的 UI 收尾：弹引导条 + 自动打开转储编辑器载入该文件。
+    /// 落盘成功后的 UI 收尾：弹引导条 + 静默载入转储编辑器表单（不自动开面板）。
     ///
     /// 生产路径上 core 的 `Event::DumpSaved` 只落历史列表和一条成功事件
     /// （core 不该知道 UI 长什么样），引导条此前因此永远不出现——现由
     /// [`Self::on_file_reply`] 在读盘续接完成后调本方法补上。
     ///
-    /// 同时自动载入并打开编辑器：解卡就是为了改卡，改完可直接写回
-    /// （原版的 dumpEditor 没有写卡路径，此处一并补上）。
+    /// 编辑器表单**静默载入**刚落的盘，但**不再自动弹** 720×640 的编辑器
+    /// 浮窗——stack 档小窗上它几乎盖住整个中栏（真机反馈）。手动入口：
+    /// 卡片档案「编辑转储」按钮 / 事件卡可点行 / 引导条。原「落盘即开
+    /// 编辑器」的约定见 docs/02 §6.44，已按真机体验修订。
     ///
     /// 引导条「写这张卡」带**完整路径**：用户在保存框选了 `dumpfiles/` 以外的
     /// 目录时，把裸名拼回 `dumpfiles/` 会指到一个不存在的文件。
@@ -742,7 +744,6 @@ impl NfcApp {
         ));
         self.forms.editor = panels::EditorForm::default();
         self.load_dump_from_path(&path);
-        panels::open(&mut self.state.panels, panels::Panel::DumpEditor);
     }
 
     /// 把 core 事件翻译成 UI 侧状态。
