@@ -155,7 +155,10 @@ pub fn run() -> eframe::Result {
         ("卡片快照构建", c_card_snapshot),
         ("ACL 解读解码", c_acl_decode),
         // ── 界面改版 · stack 档（<820）回归 ──
-        ("stack 档滚动后行可见", c_stack_tier_scroll_sees_rows),
+        ("stack 档滚动后编辑器可见", c_stack_tier_scroll_sees_editor),
+        // ── 编辑器并入中栏（docs/02 §6.48）──
+        ("编辑器入口分流（路径/裸名）", c_editor_open_dispatch),
+        ("dirty 载入先确认", c_editor_dirty_confirm),
     ];
 
     let total = cases.len();
@@ -381,11 +384,11 @@ fn frame_verts(ctx: &Context, input: egui::RawInput, app: &mut NfcApp) -> usize 
         .sum()
 }
 
-/// stack 档（<820）滚动可见性回归：预置 1K 快照并打开扇区 0，逐帧向
+/// stack 档（<820）滚动可见性回归：预置 1K 快照并载入编辑器，逐帧向
 /// `stacked-main` 注入小步滚轮（先下后上双向扫掠）。修复后由外层滚动区
-/// 统一接收滚轮，扇区行会经过视口——滚动过程的顶点峰值应显著高于
-/// 不滚动基线（此前内层滚动吞滚轮 / 固定高度把行压在折叠线下，峰值不
-/// 涨）。时间戳逐帧推进，不依赖真实时钟，避免平滑动画带来跨平台差异。
+/// 统一接收滚轮，中栏编辑器的扇区框会经过视口——滚动过程的顶点峰值应
+/// 显著高于不滚动基线（此前内层滚动吞滚轮 / 固定高度把行压在折叠线下，
+/// 峰值不涨）。时间戳逐帧推进，不依赖真实时钟，避免平滑动画带来跨平台差异。
 fn stack_tier_scroll_peak(with_wheel: bool) -> usize {
     let mut app = NfcApp::new(nfc_core::state::AppState::new());
     let mut bytes = vec![0u8; 1024];
@@ -393,7 +396,11 @@ fn stack_tier_scroll_peak(with_wheel: bool) -> usize {
     bytes[4] = 0xa2 ^ 0x3d ^ 0xc0 ^ 0x30;
     app.card_snapshot =
         crate::ui::workbench::snapshot_from_bytes(&bytes, "p".to_owned(), "x.mfd".to_owned());
-    app.open_sector = Some(0);
+    // 编辑器并入中栏后（docs/02 §6.48），滚动可见性针对编辑框（forms.editor 驱动）
+    app.forms
+        .editor
+        .load(Some("x.mfd".into()), &bytes)
+        .unwrap();
     let ctx = Context::default();
     crate::theme_ui::apply_style(&ctx);
     crate::theme_ui::apply_visuals(&ctx);
@@ -429,13 +436,95 @@ fn stack_tier_scroll_peak(with_wheel: bool) -> usize {
     peak
 }
 
-fn c_stack_tier_scroll_sees_rows() -> Result<(), String> {
+fn c_stack_tier_scroll_sees_editor() -> Result<(), String> {
     let base = stack_tier_scroll_peak(false);
     let peak = stack_tier_scroll_peak(true);
     if peak < base + 1000 {
         return Err(format!(
-            "stack 档滚动后扇区行未见绘制：无滚轮基线 {base} 顶点 vs 滚动峰值 {peak} 顶点"
+            "stack 档滚动后编辑器扇区框未见绘制：无滚轮基线 {base} 顶点 vs 滚动峰值 {peak} 顶点"
         ));
+    }
+    Ok(())
+}
+
+/// `open-dump-editor` 载荷分流：完整路径（档案条按钮 / 文件框回传）直达
+/// `load_dump_from_path`；裸文件名（事件卡 / 历史 / 注册表）限定 dumpfiles/。
+/// 顺带回归：成功载入后置 `scroll_to_editor`，且不再打开任何浮窗面板。
+fn c_editor_open_dispatch() -> Result<(), String> {
+    let (_d, mut app) = app_with_temp_dumps("editor-dispatch");
+    // 裸名：文件放 dumpfiles/ 下
+    let bare = app.paths.dumpfiles_dir().join("bare.mfd");
+    std::fs::write(&bare, vec![0u8; 1024]).unwrap();
+    app.exec("open-dump-editor", Some("bare.mfd".to_owned()));
+    let origin = app
+        .forms
+        .editor
+        .origin
+        .clone()
+        .ok_or("裸名载入未设置编辑器来源")?;
+    if origin != bare {
+        return Err(format!("裸名应限定 dumpfiles/: {}", origin.display()));
+    }
+    if !app.scroll_to_editor {
+        return Err("裸名载入后未请求定位编辑器".into());
+    }
+    // 完整路径：放在 dumpfiles/ 之外（用户自选目录）
+    let external = _d.0.join("elsewhere").join("ext.mfd");
+    std::fs::create_dir_all(external.parent().unwrap()).unwrap();
+    std::fs::write(&external, vec![0u8; 1024]).unwrap();
+    app.exec(
+        "open-dump-editor",
+        Some(external.to_string_lossy().into_owned()),
+    );
+    let origin = app
+        .forms
+        .editor
+        .origin
+        .clone()
+        .ok_or("完整路径载入未设置编辑器来源")?;
+    if origin != external {
+        return Err(format!("完整路径未直达: {}", origin.display()));
+    }
+    if app.state.panels.any_open() {
+        return Err("载入转储不应打开浮窗面板".into());
+    }
+    Ok(())
+}
+
+/// dirty 确认框：编辑器有未保存更改时，`open-dump-editor` 必须先弹
+/// 「丢弃编辑」确认框；批准后才覆盖载入，取消则原地不动。
+fn c_editor_dirty_confirm() -> Result<(), String> {
+    let (_d, mut app) = app_with_temp_dumps("editor-dirty");
+    let target = app.paths.dumpfiles_dir().join("next.mfd");
+    std::fs::write(&target, vec![0u8; 1024]).unwrap();
+    // 造一个「已载入 + 已改脏」的编辑器
+    app.exec("open-dump-editor", Some("next.mfd".to_owned()));
+    if app.confirm.is_some() {
+        return Err("首次载入（非 dirty）不应弹确认框".into());
+    }
+    // 直接改脏：模拟用户在扇区框里敲过字
+    app.forms.editor.dirty = true;
+    // 再次载入 → 应挂起确认框而不是直接覆盖
+    app.exec("open-dump-editor", Some("next.mfd".to_owned()));
+    let c2 = app.confirm.clone().ok_or("dirty 载入未弹确认框")?;
+    if !matches!(c2.kind, ConfirmKind::DropEditorEdits) {
+        return Err(format!("确认框类型错误: {:?}", c2.kind));
+    }
+    // 取消 → 编辑器保持原状（仍 dirty、来源不变）
+    app.on_confirm_result(c2.clone(), false);
+    if app.confirm.is_some() {
+        return Err("取消后确认框未关闭".into());
+    }
+    if !app.forms.editor.dirty {
+        return Err("取消后编辑不应被清掉".into());
+    }
+    // 批准 → 执行挂起载入
+    app.on_confirm_result(c2, true);
+    if app.forms.editor.origin.as_ref() != Some(&target) {
+        return Err(format!("批准后未载入目标文件: {:?}", app.forms.editor.origin));
+    }
+    if app.forms.editor.dirty {
+        return Err("重新载入后不应仍是脏标记".into());
     }
     Ok(())
 }
@@ -627,10 +716,13 @@ fn c_dump_saved_guidance() -> Result<(), String> {
     if app.state.events.is_empty() {
         return Err("未追加 success 事件".into());
     }
-    // 落盘后**不再自动弹**转储编辑器（720×640 浮窗会盖住中栏扇区编辑器）；
-    // 表单静默载入，入口是卡片档案「编辑转储」按钮 / 事件卡可点行。
-    if app.state.panels.dump_editor {
-        return Err("落盘后不应自动弹出转储编辑器".into());
+    // 落盘收尾不应打开任何浮窗面板（编辑器已并入中栏，docs/02 §6.48）；
+    // 假路径载入必失败，表单应保持空态（不产生来源）。
+    if app.state.panels.any_open() {
+        return Err("落盘后不应打开任何浮窗面板".into());
+    }
+    if app.forms.editor.origin.is_some() {
+        return Err("假路径载入应失败，编辑器不应有来源".into());
     }
     // P2-12：该 success 事件应可点击 → 打开转储编辑器（同名 dump）。
     // 直接调用事件卡渲染路径不可行（需 egui 交互），这里只验证前置条件：
@@ -779,7 +871,6 @@ fn c_panels_render() -> Result<(), String> {
         Panel::InputKeys,
         Panel::HardNested,
         Panel::DictTest,
-        Panel::DumpEditor,
         Panel::DumpComparator,
         Panel::DumpHistory,
         Panel::About,
@@ -1217,7 +1308,7 @@ fn c_panels_independent() -> Result<(), String> {
         Panel::HardNested,
         Panel::DictTest,
         Panel::About,
-        Panel::DumpEditor,
+        Panel::DumpComparator,
         Panel::CardRegistry,
     ] {
         if other.is_open(&app.state.panels) {
@@ -1284,13 +1375,17 @@ fn sample_dump(n_sectors: usize) -> Vec<u8> {
 }
 
 fn c_dump_panels_render() -> Result<(), String> {
-    // 三个面板各开各的画一帧：编辑器要有内容（空态与有内容两条路径都走）
+    // 编辑器已并入中栏（docs/02 §6.48）：整帧绘制覆盖「有内容」路径
     let mut app = NfcApp::new(nfc_core::state::AppState::new());
     app.forms
         .editor
         .load(Some("a.mfd".into()), &sample_dump(4))
         .map_err(|e| e.to_string())?;
-    let _ = panel_harness(&mut app, Panel::DumpEditor)?;
+    let _ = harness(&mut app);
+
+    // 空态（未载入任何 dump）也画一帧
+    let mut empty = NfcApp::new(nfc_core::state::AppState::new());
+    let _ = harness(&mut empty);
 
     // 比较器：两侧都齐 → 进比对分支（只齐一侧 → 空态分支）
     let mut app = NfcApp::new(nfc_core::state::AppState::new());
@@ -1727,12 +1822,15 @@ fn c_history_resets_selection() -> Result<(), String> {
     if !app.state.panels.dump_history {
         return Err("面板未打开".into());
     }
-    // 三个 dump 面板互不干扰
+    // 两个 dump 面板互不干扰；编辑器动作改为定位中栏，不再开浮窗面板
     app.exec("open-dump-editor", None);
     app.exec("open-dump-comparator", None);
     let p = &app.state.panels;
-    if !(p.dump_history && p.dump_editor && p.dump_comparator) {
-        return Err("三个 dump 面板未同时打开".into());
+    if !(p.dump_history && p.dump_comparator) {
+        return Err("dump 面板未同时打开".into());
+    }
+    if !app.scroll_to_editor {
+        return Err("open-dump-editor 未请求定位中栏编辑器".into());
     }
     Ok(())
 }
@@ -2148,9 +2246,10 @@ fn c_read_ic_save_round_trip() -> Result<(), String> {
     if app.engine.pending_save().is_some() {
         return Err("续接后请求应被取走".into());
     }
-    // 落盘成功后不自动弹编辑器，但表单应已静默载入刚存的文件
-    if app.state.panels.dump_editor {
-        return Err("落盘后不应自动弹出转储编辑器".into());
+    // 落盘成功后不自动弹面板，但表单应已静默载入刚存的文件，
+    // 且请求定位中栏编辑器（docs/02 §6.48）。
+    if !app.scroll_to_editor {
+        return Err("落盘后未请求定位中栏编辑器".into());
     }
     if app.forms.editor.origin.as_ref() != Some(&target) {
         return Err(format!(
@@ -2277,9 +2376,9 @@ fn c_pending_save_no_portal_autosave() -> Result<(), String> {
     if app.engine.is_running() {
         return Err("无门户收尾后任务位未释放".into());
     }
-    // 默认名落盘；编辑器静默载入去向，不自动弹面板
-    if app.state.panels.dump_editor {
-        return Err("不应自动弹出转储编辑器".into());
+    // 默认名落盘；编辑器静默载入去向，不自动弹面板（定位标志已置位）
+    if !app.scroll_to_editor {
+        return Err("未请求定位中栏编辑器".into());
     }
     let origin = app
         .forms

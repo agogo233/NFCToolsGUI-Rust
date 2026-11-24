@@ -284,10 +284,8 @@ fn console_card(ui: &mut Ui, app: &mut NfcApp, stacked: bool) {
                     // 「复制日志」按钮，编辑入口只有清空/复制/保存。
                     let view = app.state.log_view();
                     ui.add(
-                        egui::Label::new(
-                            RichText::new(view).font(egui::FontId::monospace(12.0)),
-                        )
-                        .selectable(true),
+                        egui::Label::new(RichText::new(view).font(egui::FontId::monospace(12.0)))
+                            .selectable(true),
                     );
                 });
         });

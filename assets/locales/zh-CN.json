@@ -12,6 +12,7 @@
     "dialog_msg_choose_save_path": "请选择保存路径",
     "dialog_msg_confirm_format_card": "该操作将先读卡，再用读到的内容重写整张卡，每个扇区的访问控制位会被重置为默认值。\n你确定要继续吗？",
     "dialog_msg_confirm_write_dump": "确定要将此转储文件写入卡片吗？",
+    "dialog_msg_confirm_drop_edits": "当前编辑尚未保存，载入新转储将丢弃这些更改。确定继续吗？",
     "dialog_msg_confirm_write_uid": "该操作将会改写UFUID卡片的0块（UID）！！！\n改错0块后卡片可能变砖！\n即将写入的0块：\n",
     "dialog_msg_instance_running": "检测到另一个实例正在运行，请先退出已有实例",
     "dialog_msg_not_connected_device": "请先连接设备",

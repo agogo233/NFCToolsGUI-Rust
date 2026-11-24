@@ -54,6 +54,9 @@ pub enum ConfirmKind {
     CuidWrite { dump: String },
     /// S18 `done-input-uid-write`：手输卡号写 UFUID。载荷为原始输入文本。
     UidInputWrite { text: String },
+    /// docs/02 §6.48：中栏编辑器有未保存更改时，载入新转储前确认丢弃。
+    /// 载荷（待载入参数）挂起在 `NfcApp::pending_editor_load`，不走本枚举。
+    DropEditorEdits,
 }
 
 /// 待确认的模态窗内容。

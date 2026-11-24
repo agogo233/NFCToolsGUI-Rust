@@ -37,7 +37,6 @@ const SIZE_INPUT_KEYS: [f32; 2] = [400.0, 200.0];
 const SIZE_HARD_NESTED: [f32; 2] = [500.0, 610.0];
 const SIZE_DICT_TEST: [f32; 2] = [450.0, 390.0];
 const SIZE_ABOUT: [f32; 2] = [600.0, 480.0];
-const SIZE_DUMP_EDITOR: [f32; 2] = [720.0, 640.0];
 const SIZE_DUMP_COMPARATOR: [f32; 2] = [760.0, 620.0];
 const SIZE_DUMP_HISTORY: [f32; 2] = [520.0, 560.0];
 /// 手机/手环面板。S16：原版 400×360 在加入滚动/步骤提示后偏小，调到 440×420。
@@ -56,7 +55,6 @@ pub enum Panel {
     InputKeys,
     HardNested,
     DictTest,
-    DumpEditor,
     DumpComparator,
     DumpHistory,
     About,
@@ -67,12 +65,11 @@ pub enum Panel {
 }
 
 impl Panel {
-    const ALL: [Panel; 11] = [
+    const ALL: [Panel; 10] = [
         Panel::Settings,
         Panel::InputKeys,
         Panel::HardNested,
         Panel::DictTest,
-        Panel::DumpEditor,
         Panel::DumpComparator,
         Panel::DumpHistory,
         Panel::About,
@@ -95,7 +92,6 @@ impl Panel {
             Panel::InputKeys => "html_please_input_known_keys",
             Panel::HardNested => "html_hard_nested",
             Panel::DictTest => "html_please_input_known_keys", // 原版 dictTest.html 复用同一标题 key
-            Panel::DumpEditor => "html_dump_editor",
             Panel::DumpComparator => "html_dump_comparator",
             Panel::DumpHistory => "html_dump_history",
             Panel::About => "html_about",
@@ -113,7 +109,6 @@ impl Panel {
             Panel::HardNested => SIZE_HARD_NESTED,
             Panel::DictTest => SIZE_DICT_TEST,
             Panel::About => SIZE_ABOUT,
-            Panel::DumpEditor => SIZE_DUMP_EDITOR,
             Panel::DumpComparator => SIZE_DUMP_COMPARATOR,
             Panel::DumpHistory => SIZE_DUMP_HISTORY,
             Panel::PhoneWristband => SIZE_PHW,
@@ -130,7 +125,6 @@ impl Panel {
             self,
             Self::HardNested
                 | Self::DictTest
-                | Self::DumpEditor
                 | Self::DumpComparator
                 | Self::DumpHistory
                 | Self::PhoneWristband
@@ -145,7 +139,6 @@ impl Panel {
             Panel::InputKeys => p.input_keys,
             Panel::HardNested => p.hard_nested,
             Panel::DictTest => p.dict_test,
-            Panel::DumpEditor => p.dump_editor,
             Panel::DumpComparator => p.dump_comparator,
             Panel::DumpHistory => p.dump_history,
             Panel::About => p.about,
@@ -161,7 +154,6 @@ impl Panel {
             Panel::InputKeys => p.input_keys = v,
             Panel::HardNested => p.hard_nested = v,
             Panel::DictTest => p.dict_test = v,
-            Panel::DumpEditor => p.dump_editor = v,
             Panel::DumpComparator => p.dump_comparator = v,
             Panel::DumpHistory => p.dump_history = v,
             Panel::About => p.about = v,
@@ -483,20 +475,6 @@ fn to_byte_view_line(line: &str) -> String {
         .join(" ")
 }
 
-/// 字节视图的编辑内容 → 4 行 × 32 小写 hex。
-///
-/// 空白（含换行）一律当分隔符，因此整段粘贴连续 hex 同样可用。
-/// 尾部**不补零**：短了就让 `validate` 报 `LineLength`，而不是静默产出坏数据。
-fn from_byte_view_text(text: &str) -> Sector {
-    let flat: String = text.chars().filter(|c| !c.is_whitespace()).collect();
-    flat.to_ascii_lowercase()
-        .chars()
-        .collect::<Vec<char>>()
-        .chunks(32)
-        .map(|row| row.iter().copied().collect::<String>())
-        .collect()
-}
-
 impl EditorForm {
     /// 从 dump 字节载入（对标 `command.js:425-432` 的分组）。
     pub fn load(&mut self, name: Option<String>, bytes: &[u8]) -> Result<(), String> {
@@ -726,7 +704,6 @@ fn body(p: Panel, ui: &mut Ui, app: &mut NfcApp) -> bool {
         Panel::HardNested => hard_nested(ui, app),
         Panel::DictTest => dict_test(ui, app),
         Panel::About => about(ui),
-        Panel::DumpEditor => dump_editor(ui, app),
         Panel::DumpComparator => dump_comparator(ui, app),
         Panel::DumpHistory => dump_history(ui, app),
         Panel::PhoneWristband => phone_wristband(ui, app),
@@ -1343,301 +1320,6 @@ fn parse_u32(text: &str) -> u32 {
 
 // ───────────────────────── S10 dump 三面板 ─────────────────────────
 
-/// 原版图例的四段配色 token（`dumpEditor.html:31-37` + `tokens.css`）。
-/// egui 无 `<span class="uid">`，故按段着色，token 与原版一致。
-fn legend_color(paint: crate::theme_ui::Paint, which: u8) -> egui::Color32 {
-    match which {
-        0 => paint.color(paint.uid),
-        1 => paint.color(paint.key_a),
-        2 => paint.color(paint.access),
-        _ => paint.color(paint.key_b),
-    }
-}
-
-/// `dumpEditor.html`：每扇区一个 4 行 hex 编辑框 + 底部文件条 + 图例。
-///
-/// 原版是 `contenteditable` 的 div，`getHexData()` 取 `innerText` 再去掉
-/// 换行（`dumpEditor.js:14`）。此处用 `TextEdit::multiline` 承载，
-/// 语义等价；差异是原版可粘贴任意文本后由 `checkData` 判定，
-/// egui 侧同样交给 `EditorForm::validate`。
-fn dump_editor(ui: &mut Ui, app: &mut NfcApp) -> bool {
-    let danger = app.paint().color(app.paint().danger);
-    let legend = [
-        (t("html_uid_manufacture_info"), 0u8),
-        (t("html_key_a"), 1),
-        (t("html_key_b"), 3),
-        (t("html_access_control"), 2),
-    ];
-    let paint = app.paint();
-    let legend_colors: Vec<egui::Color32> = legend
-        .iter()
-        .map(|(_, w)| legend_color(paint, *w))
-        .collect();
-
-    if app.forms.editor.sectors.is_empty() {
-        ui.vertical_centered(|ui| {
-            ui.add_space(24.0);
-            ui.label(t("html_current_file") + "-");
-            ui.add_space(8.0);
-        });
-    } else {
-        // 编辑区：逐扇区一个多行输入
-        let mut dirty = false;
-        // S18：值块徽章需知卡容量（1K=16 扇区）；iteration 内只读这个拷贝，
-        // 不在此处再拦 `sectors`，避免与 `iter_mut` 的圈入冲突。
-        let editor_is_1k = app.forms.editor.sectors.len() == 16;
-        // 字节视图（docs/02 §6.40）：模式与显示缓存都在循环外取走，
-        // 循环内只动本扇区。缓存每帧整份拷进局部、改完再写回——
-        // 直接跨 `iter_mut` 访问 `byte_view` 会踩 E0502。
-        let in_byte = app.forms.editor.view_mode == ViewMode::Byte;
-        let mut byte_view_buf = if in_byte {
-            app.forms.editor.byte_view.clone()
-        } else {
-            Vec::new()
-        };
-        ScrollArea::vertical().show(ui, |ui| {
-            for (si, sector) in app.forms.editor.sectors.iter_mut().enumerate() {
-                // 校验（`dumpEditor.js:98-118` 的 checkData）
-                let invalid = sector.len() != dump::BLOCKS_PER_SECTOR
-                    || sector
-                        .iter()
-                        .any(|l| l.chars().count() != dump::BLOCK_SIZE * 2);
-                // S15：非法扇区整块红框包裹（原版 styles.invalid 的做法），
-                // 替代行尾「!」——框住比一个感叹号更难看漏
-                let mut frame = egui::Frame::NONE
-                    .inner_margin(egui::Margin::symmetric(6, 4))
-                    .corner_radius(egui::CornerRadius::same(nfc_core::theme::RADIUS[0] as u8));
-                if invalid {
-                    frame = frame.stroke(egui::Stroke::new(1.5, danger));
-                }
-                frame.show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        // 扇区号固定窄列，右对齐贴输入框
-                        ui.set_width(56.0);
-                        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                            ui.add_space(6.0);
-                            ui.label(
-                                RichText::new(format!("{}{si}", t("html_sector")))
-                                    .strong()
-                                    .color(if invalid {
-                                        danger
-                                    } else {
-                                        paint.color(paint.text)
-                                    }),
-                            );
-                        });
-                        // S18：值块标记——该扇区含值块时在号后贴一个小徽章
-                        // （对标 MyPN532 DumpSectorEditor 的 value block 高亮）。
-                        // 只用当前这一扇区构造单元素切片，避免在 `iter_mut`
-                        // 存续期间再不可变借用整个 `sectors`（E0502）。
-                        if !nfc_core::model::dumpcheck::value_block_lines(
-                            si,
-                            std::slice::from_ref(&*sector),
-                            editor_is_1k,
-                        )
-                        .is_empty()
-                        {
-                            ui.add_space(4.0);
-                            ui.label(
-                                RichText::new(t("html_value_block"))
-                                    .size(10.0)
-                                    .color(paint.color(paint.key_b)),
-                            );
-                        }
-                    });
-                    // 把 4 行拼成带换行的单串，交给一个 multiline 输入。
-                    // 字节视图改用显示缓存 + 独立控件 id（docs/02 §6.40）：
-                    // 缓存里是「用户上次打出来的原文」，下一帧原样画回去，
-                    // egui 的光标才不会每次击键后跳回行首。
-                    let mut text = if in_byte {
-                        byte_view_buf.get(si).cloned().unwrap_or_default()
-                    } else {
-                        sector.join("\n")
-                    };
-                    let builder = egui::TextEdit::multiline(&mut text)
-                        .desired_rows(4)
-                        .desired_width(f32::INFINITY)
-                        .font(egui::TextStyle::Monospace);
-                    let resp = if in_byte {
-                        ui.add(builder.id_salt("byte-view"))
-                    } else {
-                        ui.add(builder)
-                    };
-                    if resp.changed() {
-                        dirty = true;
-                        if in_byte {
-                            if let Some(slot) = byte_view_buf.get_mut(si) {
-                                *slot = text.clone();
-                            }
-                            *sector = from_byte_view_text(&text);
-                        } else {
-                            *sector = text.split('\n').map(str::to_owned).collect();
-                        }
-                    }
-                });
-                ui.add_space(4.0);
-            }
-        });
-        if dirty {
-            app.forms.editor.dirty = true;
-        }
-        if in_byte {
-            app.forms.editor.byte_view = byte_view_buf;
-        }
-    }
-
-    // S18：体检结果区——逐条列出问题 / 值块 / 未发现。
-    //
-    // 这里**每帧按当前 `sectors` 实时计算**，不缓存「上次点按钮的结果」：
-    // 编辑内容一变结论就变，缓存反而会让用户看到过期结论。代价是每帧一次
-    // O(卡容量) 的纯计算，对 1K/4K 可忽略。
-    let check_lines = if app.forms.editor.sectors.is_empty() {
-        Vec::new()
-    } else {
-        nfc_core::model::dumpcheck::check_report(&app.forms.editor.sectors)
-    };
-    if !check_lines.is_empty() {
-        ui.add_space(4.0);
-        egui::Frame::NONE
-            .fill(paint.color(paint.surface2))
-            .corner_radius(egui::CornerRadius::same(4))
-            .inner_margin(egui::Margin::symmetric(8, 6))
-            .show(ui, |ui| {
-                for line in &check_lines {
-                    // 以「!」开头的问题行用危险色，其余（值块 / 未发现）正常色
-                    let color = if line.starts_with('!') {
-                        danger
-                    } else {
-                        paint.color(paint.text)
-                    };
-                    ui.label(RichText::new(line.clone()).size(12.0).color(color));
-                }
-            });
-    }
-
-    // 底部文件条（`dumpEditor.html:16-27`）
-    ui.separator();
-    let name = app
-        .forms
-        .editor
-        .file_name
-        .clone()
-        .unwrap_or_else(|| "-".to_owned());
-    ui.horizontal(|ui| {
-        // 文件名可能很长（含用户自定义名），截断防溢出，全名悬停可见。
-        ui.add(
-            egui::Label::new(RichText::new(format!("{}{name}", t("html_current_file")))).truncate(),
-        )
-        .on_hover_text(&name);
-        // 显示方式切换（docs/02 §6.40）：连续 hex ↔ 每字节空一格的大写。
-        // 放在文件条上而不是按钮行——底部已 7 个按钮且窄窗口会换行，
-        // 再加一个只会更挤；且它属于「怎么显示」，和打开 / 保存 / 写卡
-        // 那一排处理操作分开更清楚。按钮文字是**切换后的目标**视图，
-        // 故两种状态各需一条文案。
-        let label = if app.forms.editor.view_mode == ViewMode::Continuous {
-            t("html_dump_view_byte")
-        } else {
-            t("html_dump_view_continuous")
-        };
-        if ui
-            .button(label)
-            .on_hover_text(t("html_tip_dump_view"))
-            .clicked()
-        {
-            app.forms.editor.toggle_view();
-        }
-    });
-    // 7 个按钮在窄窗口下装不下一行，改自动换行而不是横向溢出（docs/02 §6.29）。
-    ui.horizontal_wrapped(|ui| {
-        if ui.button(t("html_open_file")).clicked() {
-            // 必须走 exec：engine 不认这个名字（不在纯 UI 名单里），
-            // 直接 push 会弹出 NotWired 错误事件。
-            app.exec("dump-editor-choose-file", None);
-        }
-        // 校验通过才允许保存（原版 checkData(true) 失败会 alert）
-        let ok = app.forms.editor.can_save();
-        if ui
-            .add_enabled(ok, egui::Button::new(t("html_save_file")))
-            .clicked()
-        {
-            // "0" = 非另存为；hex 由 app 侧从编辑器表单现取
-            app.exec("dump-editor-save", Some("0".to_owned()));
-        }
-        if ui
-            .add_enabled(ok, egui::Button::new(t("html_save_as_file")))
-            .clicked()
-        {
-            // "1" = 另存为，弹系统保存框
-            app.exec("dump-editor-save", Some("1".to_owned()));
-        }
-        // 写卡入口（原版 dumpEditor 没有）：先另存一份副本，再走既有 write-IC
-        // 确认链。按 `command` 门禁置灰——未连接 / 有任务在跑时悬停说明原因，
-        // 与主面板写卡按钮同一套规则。
-        let gate =
-            nfc_core::command::spec("write-IC").map(|s| nfc_core::command::gate(s, &app.state));
-        let can_write = ok && matches!(gate, Some(Ok(())) | None);
-        let write_tip = match &gate {
-            Some(Err(e)) => t(e.i18n_key()),
-            _ => t("html_write_this_dump"),
-        };
-        if ui
-            .add_enabled(can_write, egui::Button::new(t("html_write_this_dump")))
-            .on_hover_text(write_tip)
-            .clicked()
-        {
-            app.write_editor_to_card();
-        }
-        // S18：体检 / 修复 / 导出密钥（纯 UI 动作，不进 engine 队列）
-        if ui.button(t("html_check_dump")).clicked() {
-            // 体检结论每帧已实时显示在下方，这里把同样的结论写进控制台——
-            // 点按钮要有可见反馈，且日志可随「保存日志」留存。
-            for line in nfc_core::model::dumpcheck::check_report(&app.forms.editor.sectors) {
-                app.state
-                    .apply(nfc_core::state::Event::Log(format!("\n{line}\n")));
-            }
-        }
-        if ui.button(t("html_fix_dump")).clicked() {
-            match nfc_core::model::dumpcheck::fix(&app.forms.editor.sectors) {
-                Ok((fixed, items)) => {
-                    app.forms.editor.sectors = fixed;
-                    // 修复改写了扇区，字节视图的显示缓存必须跟着重建，
-                    // 否则停在字节视图时会继续看到修复前的内容（docs/02 §6.40）
-                    app.forms.editor.rebuild_byte_view();
-                    app.forms.editor.dirty = true;
-                    // 修复日志逐条写进控制台
-                    for line in nfc_core::model::dumpcheck::fix_report(&items) {
-                        app.state
-                            .apply(nfc_core::state::Event::Log(format!("\n{line}\n")));
-                    }
-                }
-                Err(issues) => {
-                    // 修复失败（结构/容量不合法）：逐条写进控制台，让用户看见原因。
-                    // （体检区是每帧实时算的，本身就会把这些致命问题显示出来，
-                    //  故这里不必再缓存一份。）
-                    for line in issues.iter().map(nfc_core::model::dumpcheck::issue_text) {
-                        app.state
-                            .apply(nfc_core::state::Event::Log(format!("\n{line}\n")));
-                    }
-                }
-            }
-        }
-        if ui.button(t("html_export_keys")).clicked() {
-            app.exec("dump-editor-export-keys", None);
-        }
-    });
-
-    // 图例（`dumpEditor.html:29-39`）——原版的「更新颜色」是重算高亮，
-    // egui 每帧按 token 着色本就实时，故该按钮无实际作用，此处只显示图例。
-    ui.horizontal(|ui| {
-        ui.label(format!("{}{}", t("html_caption"), ""));
-        for ((label, _), color) in legend.iter().zip(&legend_colors) {
-            ui.colored_label(*color, format!("{label} | "));
-        }
-    });
-
-    true
-}
-
 /// `dumpComparator.html`：A/B 选文件 + 逐字符 diff 高亮。
 fn dump_comparator(ui: &mut Ui, app: &mut NfcApp) -> bool {
     let paint = app.paint();
@@ -2011,16 +1693,16 @@ mod tests {
 
     #[test]
     fn esc_closes_the_topmost_open_panel() {
-        // About 在 `Panel::ALL` 里最靠后，故浮在最上层。
+        // CardRegistry 在 `Panel::ALL` 里最靠后，故浮在最上层。
         let mut p = nfc_core::state::Panels {
             settings: true,
-            dump_editor: true,
-            about: true,
+            dump_comparator: true,
+            card_registry: true,
             ..Default::default()
         };
         close_topmost(&mut p);
-        assert!(!p.about);
-        assert!(p.settings && p.dump_editor);
+        assert!(!p.card_registry);
+        assert!(p.settings && p.dump_comparator);
     }
 
     #[test]

@@ -1,26 +1,29 @@
-//! 中栏工作台：当前卡片档案 + 卡片扇区编辑器（docs/06 §5.2-5.3）。
+//! 中栏工作台：当前卡片档案 + 扇区编辑器（docs/06 §5.2-5.3）。
 //!
-//! 数据源是解卡落盘后构建的内存快照（[`CardSnapshot`]），渲染不依赖
-//! 磁盘文件仍在与否；密钥已知 / 未知状态按逻辑扇区从 `AppState` 派生，
-//! 破解命中后（`unknown_key_info` 移除）行色与明文随之刷新，零额外状态。
+//! 扇区编辑器为**始终可编辑**形态——原 720×640 浮窗「转储编辑器」已并入
+//! 中栏（docs/02 §6.48）。编辑数据源是 [`crate::panels::EditorForm`]（可编辑
+//! 草稿，保存 / 写卡均以其为准）；档案条数据源是解卡落盘后构建的
+//! [`CardSnapshot`]。两者职责分离：档案条展示「卡片是谁」，编辑器展示并
+//! 修改「卡里有什么」。
 
-use egui::{Align, Color32, CursorIcon, Frame, Label, Layout, RichText, ScrollArea, Sense, Ui};
+use egui::{Align, Frame, Label, Layout, RichText, ScrollArea, Ui};
 
 use nfc_core::i18n::t;
 use nfc_core::model::{dump, dumpcheck, hex};
-use nfc_core::state::KeyType;
 use nfc_core::theme;
 
 use crate::app::NfcApp;
+use crate::panels::ViewMode;
 
 /// 解卡成功后的卡片快照。
 #[derive(Clone, Debug)]
 pub struct CardSnapshot {
-    /// 块 0 前 4 字节（大写冒号分隔）；更长 UID 以展开详情里的完整块 0 为准。
+    /// 块 0 前 4 字节（大写冒号分隔）。
     pub uid: String,
     /// 容量 → 卡型。
     pub card_type: String,
     /// [`dump::to_sector_lines`] 的编辑器组（1K=16、4K=64、Mini=5；每组 4 行 32-hex）。
+    /// UI 不再直接渲染（编辑器以 `forms.editor` 为准），保留供 selftest 容量断言。
     pub groups: Vec<dump::Sector>,
     /// 转储完整路径字符串——「写这张卡」直接沿用该参数走原确认链。
     pub dump_arg: String,
@@ -61,9 +64,6 @@ pub fn snapshot_from_bytes(
     })
 }
 
-/// 未知密钥的占位显示。
-const NK: &str = "?? ?? ?? ?? ?? ??";
-
 fn uid_from_block0(line: &str) -> String {
     match hex::hex_decode(line) {
         Ok(b) if b.len() >= 4 => b[..4]
@@ -83,23 +83,6 @@ fn card_type(len: usize) -> String {
         4096 => "MIFARE Classic 4K".to_owned(),
         _ => t("html_card_type_unknown"),
     }
-}
-
-/// 中英混排的 hex 展示：两位一组、空格分隔、大写。
-fn spaced(hex: &str) -> String {
-    let up = hex.to_uppercase();
-    up.as_bytes()
-        .chunks(2)
-        .map(|c| std::str::from_utf8(c).unwrap_or(""))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn spaced_bytes(b: &[u8]) -> String {
-    b.iter()
-        .map(|x| format!("{x:02X}"))
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 pub fn draw(ui: &mut Ui, app: &mut NfcApp, stacked: bool) {
@@ -231,7 +214,10 @@ fn card_context(ui: &mut Ui, app: &mut NfcApp) {
             });
         });
     if editor_clicked {
-        app.exec("open-dump-editor", None);
+        // 带**完整路径**：要载入的 dump 可能在 dumpfiles/ 之外（用户自选
+        // 目录），exec 分流按是否含路径分隔符决定走哪条载入链。
+        let arg = app.card_snapshot.as_ref().map(|s| s.dump_arg.clone());
+        app.exec("open-dump-editor", arg);
     }
     if write_clicked {
         let arg = app.card_snapshot.as_ref().map(|s| s.dump_arg.clone());
@@ -248,11 +234,17 @@ fn card_context(ui: &mut Ui, app: &mut NfcApp) {
     }
 }
 
-/// 扇区编辑器：组行（扇区 / KeyA / ACL / KeyB / 状态）+ 点击展开块数据与 ACL 解读。
+/// 扇区编辑器卡片：**始终可编辑**（docs/02 §6.48，原浮窗内容平移至此）。
 ///
-/// stack 档（`stacked`）卡片取**自然高度**且不套内层滚动：固定 480 + 内嵌
-/// `sector-table` 滚动区会把行区压在外层视口折叠线下（真机呈现「表头可见、
-/// 行空白」），改由外层 `stacked-main` 统一滚动。
+/// stack 档（`stacked`）取**自然高度**且不套内层滚动：固定高度 + 内嵌滚动
+/// 会把扇区框压在外层视口折叠线下（真机呈现「表头可见、行空白」），改由
+/// 外层 `stacked-main` 统一滚动（docs/02 §6.47）；其余档位占满中栏剩余
+/// 高度，扇区列表走内层滚动。
+///
+/// 落盘 / 各入口载入后置位的 `app.scroll_to_editor` 在此消费：把编辑器
+/// 卡片顶部对齐到视口——stack 档必需（编辑器在操作区之后、折叠线下）；
+/// 宽档无外层滚动区，`scroll_to_me` 自然 no-op。**渲染过才清标志**：
+/// 该帧没画到（理论上不会）就留到下一帧。
 fn sector_editor(ui: &mut Ui, app: &mut NfcApp, stacked: bool) {
     let paint = app.paint();
     let editor_h = if stacked {
@@ -260,25 +252,37 @@ fn sector_editor(ui: &mut Ui, app: &mut NfcApp, stacked: bool) {
     } else {
         Some((ui.available_height() - 8.0).max(260.0))
     };
-    Frame::NONE
+    let resp = Frame::NONE
         .fill(paint.color(paint.surface))
         .stroke(egui::Stroke::new(1.0, paint.color(paint.border)))
         .corner_radius(egui::CornerRadius::same(theme::RADIUS[1] as u8))
+        .inner_margin(egui::Margin::symmetric(12, 10))
         .show(ui, |ui| {
             if let Some(h) = editor_h {
                 ui.allocate_ui_with_layout(
                     egui::vec2(ui.available_width(), h),
-                    egui::Layout::top_down(Align::Min),
+                    Layout::top_down(Align::Min),
                     |ui| editor_body(ui, app, false),
                 );
             } else {
                 editor_body(ui, app, true);
             }
         });
+    if app.scroll_to_editor {
+        app.scroll_to_editor = false;
+        resp.response.scroll_to_me(Some(Align::TOP));
+    }
 }
 
+/// 编辑器正文：标题 + 图例 →（空态 | 逐扇区编辑框 + 实时体检）→ 文件条 → 按钮行。
 fn editor_body(ui: &mut Ui, app: &mut NfcApp, stacked: bool) {
     let paint = app.paint();
+    let legend = [
+        (t("html_uid_manufacture_info"), 0u8),
+        (t("html_key_a"), 1),
+        (t("html_key_b"), 3),
+        (t("html_access_control"), 2),
+    ];
     ui.horizontal(|ui| {
         ui.label(
             RichText::new(t("html_sector_editor"))
@@ -287,396 +291,316 @@ fn editor_body(ui: &mut Ui, app: &mut NfcApp, stacked: bool) {
                 .color(paint.color(paint.text_secondary)),
         );
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            // 图例（`dumpEditor.html:29-39`）——原版的「更新颜色」是重算高亮，
+            // egui 每帧按 token 着色本就实时，故只显示图例不给按钮。
             ui.label(
-                RichText::new(format!("● {}", t("html_known_key")))
-                    .size(11.0)
-                    .color(paint.color(theme::STATUS_OK)),
-            );
-            ui.label(
-                RichText::new(format!("● {}", t("html_legend_unknown")))
-                    .size(11.0)
-                    .color(paint.color(theme::STATUS_WARN)),
-            );
-        });
-    });
-    let key_w = ((ui.available_width() - 24.0 - 90.0 - 44.0 - 32.0) / 2.0).max(110.0);
-    ui.horizontal(|ui| {
-        cell(
-            ui,
-            24.0,
-            &t("html_sector"),
-            paint.color(paint.text_secondary),
-            false,
-        );
-        cell(
-            ui,
-            key_w,
-            &t("html_key_a"),
-            paint.color(paint.text_secondary),
-            false,
-        );
-        cell(
-            ui,
-            90.0,
-            &t("html_acl"),
-            paint.color(paint.text_secondary),
-            false,
-        );
-        cell(
-            ui,
-            key_w,
-            &t("html_key_b"),
-            paint.color(paint.text_secondary),
-            false,
-        );
-        cell(
-            ui,
-            44.0,
-            &t("html_detect_summary"),
-            paint.color(paint.text_secondary),
-            false,
-        );
-    });
-    ui.separator();
-    if stacked {
-        // stack 档：自然高度直接画行，外层 stacked-main 统一滚动。
-        sector_rows(ui, app);
-        return;
-    }
-    let scroll_h = (ui.available_height() - 4.0).max(120.0);
-    ScrollArea::vertical()
-        .id_salt("sector-table")
-        .max_height(scroll_h)
-        .auto_shrink([false, true])
-        .show(ui, |ui| sector_rows(ui, app));
-}
-
-/// 扇区表行 + 点击展开详情。stack 档直接画（自然高度），其余档位包在内层滚动区。
-fn sector_rows(ui: &mut Ui, app: &mut NfcApp) {
-    let paint = app.paint();
-    // 与表头行同一公式：两列密钥宽 = 剩余宽对半（扇区 24 / ACL 90 / 状态 44 +
-    // 间距 32），过窄时兜底 110。
-    let key_w = ((ui.available_width() - 24.0 - 90.0 - 44.0 - 32.0) / 2.0).max(110.0);
-    let Some(snap) = app.card_snapshot.as_ref() else {
-        ui.label(
-            RichText::new(t("html_card_none"))
-                .size(12.0)
-                .color(paint.color(paint.text_secondary)),
-        );
-        return;
-    };
-    let n = snap.groups.len();
-    let mut toggle: Option<usize> = None;
-    // P2-11：detail 需要 &mut app（复制事件），而 snap 借用了
-    // app.card_snapshot。先把展开组的行数据 clone 出来，借用即断开。
-    let open_detail = app.open_sector.and_then(|i| {
-        snap.groups
-            .get(i)
-            .map(|g| (i, g.clone(), dump::group_has_trailer(i, n)))
-    });
-    for (i, g) in snap.groups.iter().enumerate() {
-        let logical = dump::group_to_sector(i, n);
-        let has_trailer = dump::group_has_trailer(i, n);
-        let unknown = app
-            .state
-            .unknown_key_info
-            .iter()
-            .any(|(s, _)| *s as usize == logical);
-        let key_a = app
-            .state
-            .known_key_info
-            .iter()
-            .find(|(_, s, ty)| *s as usize == logical && *ty == KeyType::A);
-        let key_b = app
-            .state
-            .known_key_info
-            .iter()
-            .find(|(_, s, ty)| *s as usize == logical && *ty == KeyType::B);
-        let ka_text = key_a
-            .map(|(k, _, _)| spaced(k))
-            .unwrap_or_else(|| NK.to_owned());
-        let kb_text = key_b
-            .map(|(k, _, _)| spaced(k))
-            .unwrap_or_else(|| NK.to_owned());
-        let ka_color = if key_a.is_some() {
-            theme::STATUS_OK
-        } else {
-            theme::STATUS_WARN
-        };
-        let kb_color = if key_b.is_some() {
-            theme::STATUS_OK
-        } else {
-            theme::STATUS_WARN
-        };
-        let acl_text = if has_trailer {
-            hex::hex_decode(&g[3])
-                .ok()
-                .filter(|b| b.len() >= 9)
-                .map(|b| spaced_bytes(&b[6..9]))
-                .unwrap_or_else(|| "-".to_owned())
-        } else {
-            "-".to_owned()
-        };
-        let (tag, tag_color) = if unknown {
-            (t("html_detect_unknown"), theme::STATUS_WARN)
-        } else if key_a.is_some() || key_b.is_some() {
-            (t("html_detect_known"), theme::STATUS_OK)
-        } else {
-            ("-".to_owned(), paint.text_secondary)
-        };
-        let row = ui.horizontal(|ui| {
-            cell(
-                ui,
-                24.0,
-                &format!("{i:02}"),
-                paint.color(paint.text_secondary),
-                true,
-            );
-            cell(ui, key_w, &ka_text, paint.color(ka_color), true);
-            cell(ui, 90.0, &acl_text, paint.color(paint.text_secondary), true);
-            cell(ui, key_w, &kb_text, paint.color(kb_color), true);
-            cell(ui, 44.0, &tag, paint.color(tag_color), false);
-        });
-        // 子 Ui 的 response 固定 `Sense::hover`，`clicked()` 恒为 false，
-        // 展开详情从未生效过；用 interact 以整行矩形注册点击区。
-        let click = ui
-            .interact(
-                row.response.rect,
-                egui::Id::new("sector-row").with(i),
-                Sense::click(),
-            )
-            .on_hover_cursor(CursorIcon::PointingHand);
-        if click.clicked() {
-            toggle = Some(i);
-        }
-    }
-    if let Some(i) = toggle {
-        app.open_sector = if app.open_sector == Some(i) {
-            None
-        } else {
-            Some(i)
-        };
-    }
-    // 展开详情放在循环外：此时 snap 的借用已结束，可拿 &mut app。
-    if let Some((i, g, has_trailer)) = open_detail {
-        detail(ui, app, i, n, &g, has_trailer);
-    }
-}
-
-/// 单元格：定宽文本（等宽可选），超出宽度截断。
-fn cell(ui: &mut Ui, w: f32, text: &str, color: Color32, mono: bool) {
-    let mut rich = RichText::new(text).size(12.0).color(color);
-    if mono {
-        rich = rich.font(egui::FontId::monospace(12.0));
-    }
-    ui.add_sized([w, 18.0], Label::new(rich).truncate());
-}
-
-/// 展开详情：该组 4 行的完整 hex + （真尾块组）ACL 权限解读 + 行级快捷操作。
-fn detail(ui: &mut Ui, app: &mut NfcApp, i: usize, groups: usize, g: &[String], has_trailer: bool) {
-    let paint = app.paint();
-    let base = dump::group_first_block(i, groups);
-    let logical = dump::group_to_sector(i, groups);
-    // P2-11：行级快捷操作（复制单块 / 整组 hex）。egui 闭包里拿不到 &mut app，
-    // 先记下要复制的文本，Frame 结束后统一 copy + 记事件。
-    let mut copied: Option<String> = None;
-    Frame::NONE
-        .fill(paint.color(paint.surface2))
-        // 外层卡片是 RADIUS[1]；内嵌块补小一号圆角，避免直角嵌在圆角卡片里。
-        .corner_radius(egui::CornerRadius::same(theme::RADIUS[0] as u8))
-        .inner_margin(egui::Margin::symmetric(8, 6))
-        .show(ui, |ui| {
-            for (j, line) in g.iter().enumerate() {
-                let is_trailer = has_trailer && j == 3;
-                let kind = if is_trailer {
-                    t("html_block_kind_trailer")
-                } else {
-                    t("html_block_kind_data")
-                };
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(format!("{}{} · {}", t("html_block"), base + j, kind))
-                            .size(11.0)
-                            .color(paint.color(paint.text_secondary)),
-                    );
-                    if is_trailer {
-                        trailer_segments(ui, app, logical, line);
-                    } else {
-                        ui.add(
-                            Label::new(
-                                RichText::new(spaced(line))
-                                    .size(12.0)
-                                    .font(egui::FontId::monospace(12.0)),
-                            )
-                            .truncate(),
-                        );
-                    }
-                    if ui
-                        .small_button(RichText::new(t("html_copy")).size(11.0))
-                        .on_hover_text(t("html_tip_copy_hex"))
-                        .clicked()
-                    {
-                        copied = Some(line.clone());
-                    }
-                });
-            }
-            if ui
-                .small_button(RichText::new(t("html_copy_group")).size(11.0))
-                .on_hover_text(t("html_tip_copy_group"))
-                .clicked()
-            {
-                copied = Some(g.join(""));
-            }
-            if has_trailer {
-                acl_box(ui, app, &g[3]);
-            }
-        });
-    if let Some(hexline) = copied {
-        ui.ctx().copy_text(hexline);
-        app.push_event(
-            nfc_core::state::EventKind::Success,
-            &t("log_msg_hex_copied"),
-        );
-    }
-}
-
-/// 尾块行分段着色：KeyA（前 6 字节）/ ACL+GPB（第 7–10 字节）/ KeyB（后 6 字节）。
-/// 已知密钥绿色、未知黄色（与扇区表的密钥图例同色）；ACL 段用品牌色。
-fn trailer_segments(ui: &mut Ui, app: &NfcApp, logical: usize, line: &str) {
-    let paint = app.paint();
-    let mono = |s: String, c: Color32| {
-        RichText::new(s)
-            .size(12.0)
-            .color(c)
-            .font(egui::FontId::monospace(12.0))
-    };
-    let Ok(b) = hex::hex_decode(line) else {
-        ui.label(mono(spaced(line), paint.color(paint.text)));
-        return;
-    };
-    // 非标准尾块长度（手改过的 dump）不做分段，整行原样显示。
-    if b.len() < 16 {
-        ui.label(mono(spaced(line), paint.color(paint.text)));
-        return;
-    }
-    let known = |ty: KeyType| {
-        app.state
-            .known_key_info
-            .iter()
-            .any(|(_, s, k)| *s as usize == logical && *k == ty)
-    };
-    let ka = if known(KeyType::A) {
-        theme::STATUS_OK
-    } else {
-        theme::STATUS_WARN
-    };
-    let kb = if known(KeyType::B) {
-        theme::STATUS_OK
-    } else {
-        theme::STATUS_WARN
-    };
-    ui.label(mono(spaced_bytes(&b[0..6]), paint.color(ka)))
-        .on_hover_text(t("html_seg_key_a"));
-    ui.label(mono(spaced_bytes(&b[6..10]), paint.color(paint.primary)))
-        .on_hover_text(t("html_seg_acl"));
-    ui.label(mono(spaced_bytes(&b[10..16]), paint.color(kb)))
-        .on_hover_text(t("html_seg_key_b"));
-}
-
-/// ACL 权限解读（方案 B · 表格大白话）：算法与 `dumpcheck::check_trailer_access`
-/// 同源（前向 + 反向解码，一致才有效）。每块给「看 / 改」两列白话权限，
-/// C 值以次要色小字保留供对照；尾块单独说明「存的是钥匙和权限表本身」。
-fn acl_box(ui: &mut Ui, app: &NfcApp, trailer: &str) {
-    let paint = app.paint();
-    let Some(b) = hex::hex_decode(trailer).ok().filter(|b| b.len() >= 10) else {
-        return;
-    };
-    let ac = [b[6], b[7], b[8], b[9]];
-    let d = dumpcheck::decode_access(ac);
-    ui.separator();
-    if !d.consistent() {
-        ui.label(
-            RichText::new(t("html_acl_corrupt"))
-                .size(11.0)
-                .strong()
-                .color(paint.color(theme::STATUS_ERR)),
-        );
-        ui.label(
-            RichText::new(format!("[{:?}] ≠ [{:?}]", d.forward, d.reversed))
-                .size(11.0)
-                .color(paint.color(theme::STATUS_ERR))
-                .font(egui::FontId::monospace(11.0)),
-        );
-        return;
-    }
-    ui.label(
-        RichText::new(format!(
-            "{} {} · {}",
-            t("html_acl"),
-            spaced_bytes(&ac),
-            t("html_acl_ok")
-        ))
-        .size(11.0)
-        .strong(),
-    );
-    ui.label(
-        RichText::new(t("html_acl_intro"))
-            .size(11.0)
-            .color(paint.color(paint.text_secondary)),
-    );
-    let cval = |c: u8| {
-        RichText::new(format!("C={c}"))
-            .size(10.0)
-            .color(paint.color(paint.text_secondary))
-            .font(egui::FontId::monospace(10.0))
-    };
-    for (j, &c) in d.forward.iter().enumerate() {
-        if j < 3 {
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(format!(
-                        "{}{} · {}",
-                        t("html_block"),
-                        j,
-                        t("html_block_kind_data")
-                    ))
-                    .size(11.0)
-                    .color(paint.color(paint.text_secondary))
-                    .font(egui::FontId::monospace(11.0)),
-                );
-                ui.label(cval(c));
-                ui.label(
-                    RichText::new(format!(
-                        "{}：{} ｜ {}：{}",
-                        t("html_acl_see"),
-                        t(&format!("html_acl_data_read_{c}")),
-                        t("html_acl_edit"),
-                        t(&format!("html_acl_data_write_{c}"))
-                    ))
-                    .size(11.0),
-                );
-            });
-        } else {
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(format!(
-                        "{}{} · {}",
-                        t("html_block"),
-                        j,
-                        t("html_block_kind_trailer")
-                    ))
-                    .size(11.0)
-                    .color(paint.color(paint.text_secondary))
-                    .font(egui::FontId::monospace(11.0)),
-                );
-                ui.label(cval(c));
-            });
-            ui.label(
-                RichText::new(t("html_acl_trailer_note"))
+                RichText::new(format!("{}{}", t("html_caption"), ""))
                     .size(11.0)
                     .color(paint.color(paint.text_secondary)),
             );
-            ui.label(RichText::new(t(&format!("html_acl_trailer_perm_{c}"))).size(11.0));
+            for (label, w) in legend.iter() {
+                ui.colored_label(
+                    legend_color(paint, *w),
+                    RichText::new(format!("{label} | ")).size(11.0),
+                );
+            }
+        });
+    });
+    if app.forms.editor.sectors.is_empty() {
+        // 空态：与原浮窗一致显示「当前文件-」，补一句去向提示；
+        // 按钮行照常画出（「打开文件」是空态下的唯一入口）。
+        ui.vertical_centered(|ui| {
+            ui.add_space(18.0);
+            ui.label(format!("{}-", t("html_current_file")));
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(t("html_card_none"))
+                    .size(12.0)
+                    .color(paint.color(paint.text_secondary)),
+            );
+            ui.add_space(6.0);
+        });
+        editor_footer(ui, app);
+        return;
+    }
+    // 编辑粒度：原版每扇区一个 contenteditable div，此处每扇区一个
+    // 4 行 multiline 输入（verify_parity S10 守卫锚点 `desired_rows(4)`）。
+    // 字节视图改用显示缓存 + 独立控件 id（docs/02 §6.40）：缓存里是
+    // 「用户上次打出来的原文」，下一帧原样画回去，egui 的光标才不会
+    // 每次击键后跳回行首。
+    let editor_is_1k = app.forms.editor.sectors.len() == 16;
+    let in_byte = app.forms.editor.view_mode == ViewMode::Byte;
+    let mut byte_view_buf = if in_byte {
+        app.forms.editor.byte_view.clone()
+    } else {
+        Vec::new()
+    };
+    if stacked {
+        // stack 档：自然高度直接画，外层 stacked-main 统一滚动。
+        let dirty = sector_edit_rows(ui, app, editor_is_1k, in_byte, &mut byte_view_buf);
+        if dirty {
+            app.forms.editor.dirty = true;
+        }
+    } else {
+        let scroll_h = (ui.available_height() - 4.0).max(120.0);
+        let inner = ScrollArea::vertical()
+            .id_salt("sector-edit")
+            .max_height(scroll_h)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                sector_edit_rows(ui, app, editor_is_1k, in_byte, &mut byte_view_buf)
+            });
+        if inner.inner {
+            app.forms.editor.dirty = true;
         }
     }
+    if in_byte {
+        app.forms.editor.byte_view = byte_view_buf;
+    }
+    // S18：体检结果区——逐条列出问题 / 值块 / 未发现。
+    //
+    // 这里**每帧按当前 `sectors` 实时计算**，不缓存「上次点按钮的结果」：
+    // 编辑内容一变结论就变，缓存反而会让用户看到过期结论。代价是每帧一次
+    // O(卡容量) 的纯计算，对 1K/4K 可忽略。
+    let check_lines = nfc_core::model::dumpcheck::check_report(&app.forms.editor.sectors);
+    if !check_lines.is_empty() {
+        ui.add_space(4.0);
+        Frame::NONE
+            .fill(paint.color(paint.surface2))
+            .corner_radius(egui::CornerRadius::same(4))
+            .inner_margin(egui::Margin::symmetric(8, 6))
+            .show(ui, |ui| {
+                for line in &check_lines {
+                    // 以「!」开头的问题行用危险色，其余（值块 / 未发现）正常色
+                    let color = if line.starts_with('!') {
+                        paint.color(paint.danger)
+                    } else {
+                        paint.color(paint.text)
+                    };
+                    ui.label(RichText::new(line.clone()).size(12.0).color(color));
+                }
+            });
+    }
+    editor_footer(ui, app);
+}
+
+/// 逐扇区编辑框（原浮窗 `dump_editor` 的编辑区）。返回本帧是否有改动。
+fn sector_edit_rows(
+    ui: &mut Ui,
+    app: &mut NfcApp,
+    editor_is_1k: bool,
+    in_byte: bool,
+    byte_view_buf: &mut Vec<String>,
+) -> bool {
+    let paint = app.paint();
+    let danger = paint.color(paint.danger);
+    let mut dirty = false;
+    for (si, sector) in app.forms.editor.sectors.iter_mut().enumerate() {
+        // 校验（`dumpEditor.js:98-118` 的 checkData）：行数 / 行长任一不符
+        // 即整块红框包裹（原版 styles.invalid 的做法），比行尾「!」更难看漏。
+        let invalid = sector.len() != dump::BLOCKS_PER_SECTOR
+            || sector
+                .iter()
+                .any(|l| l.chars().count() != dump::BLOCK_SIZE * 2);
+        let mut frame = Frame::NONE
+            .inner_margin(egui::Margin::symmetric(6, 4))
+            .corner_radius(egui::CornerRadius::same(theme::RADIUS[0] as u8));
+        if invalid {
+            frame = frame.stroke(egui::Stroke::new(1.5, danger));
+        }
+        frame.show(ui, |ui| {
+            ui.horizontal(|ui| {
+                // 扇区号固定窄列，右对齐贴输入框
+                ui.set_width(56.0);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new(format!("{}{si}", t("html_sector")))
+                            .strong()
+                            .color(if invalid { danger } else { paint.color(paint.text) }),
+                    );
+                });
+                // S18：值块标记——该扇区含值块时在号后贴一个小徽章
+                // （对标 MyPN532 DumpSectorEditor 的 value block 高亮）。
+                // 只用当前这一扇区构造单元素切片，避免在 `iter_mut`
+                // 存续期间再不可变借用整个 `sectors`（E0502）。
+                if !dumpcheck::value_block_lines(si, std::slice::from_ref(&*sector), editor_is_1k)
+                    .is_empty()
+                {
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(t("html_value_block"))
+                            .size(10.0)
+                            .color(paint.color(paint.key_b)),
+                    );
+                }
+            });
+            // 把 4 行拼成带换行的单串，交给一个 multiline 输入。
+            let mut text = if in_byte {
+                byte_view_buf.get(si).cloned().unwrap_or_default()
+            } else {
+                sector.join("\n")
+            };
+            let builder = egui::TextEdit::multiline(&mut text)
+                .desired_rows(4)
+                .desired_width(f32::INFINITY)
+                .font(egui::TextStyle::Monospace);
+            // 字节视图的控件 id 按扇区区分：共用一个 id 会让多扇区的
+            // 交互状态互相覆盖（原浮窗遗留问题，顺手修正）。
+            let resp = if in_byte {
+                ui.add(builder.id_salt(("byte-view", si)))
+            } else {
+                ui.add(builder)
+            };
+            if resp.changed() {
+                dirty = true;
+                if in_byte {
+                    if let Some(slot) = byte_view_buf.get_mut(si) {
+                        *slot = text.clone();
+                    }
+                    *sector = from_byte_view_text(&text);
+                } else {
+                    *sector = text.split('\n').map(str::to_owned).collect();
+                }
+            }
+        });
+        ui.add_space(4.0);
+    }
+    dirty
+}
+
+/// 底部文件条（当前文件 + 显示视图切换）+ 操作按钮行。
+///
+/// 7 个按钮在窄窗口下装不下一行，`horizontal_wrapped` 自动换行而不横向
+/// 溢出（docs/02 §6.29）；视图切换属「怎么显示」，与处理操作分开放在
+/// 文件条上。
+fn editor_footer(ui: &mut Ui, app: &mut NfcApp) {
+    let paint = app.paint();
+    ui.separator();
+    let name = app
+        .forms
+        .editor
+        .file_name
+        .clone()
+        .unwrap_or_else(|| "-".to_owned());
+    ui.horizontal(|ui| {
+        // 文件名可能很长（含用户自定义名），截断防溢出，全名悬停可见。
+        ui.add(
+            Label::new(RichText::new(format!("{}{name}", t("html_current_file")))).truncate(),
+        )
+        .on_hover_text(name);
+        // 显示方式切换（docs/02 §6.40）：连续 hex ↔ 每字节空一格的大写。
+        // 按钮文字是**切换后的目标**视图，故两种状态各需一条文案。
+        let label = if app.forms.editor.view_mode == ViewMode::Continuous {
+            t("html_dump_view_byte")
+        } else {
+            t("html_dump_view_continuous")
+        };
+        if ui
+            .button(label)
+            .on_hover_text(t("html_tip_dump_view"))
+            .clicked()
+        {
+            app.forms.editor.toggle_view();
+        }
+    });
+    ui.horizontal_wrapped(|ui| {
+        if ui.button(t("html_open_file")).clicked() {
+            // 必须走 exec：engine 不认这个名字（不在纯 UI 名单里），
+            // 直接 push 会弹出 NotWired 错误事件。
+            app.exec("dump-editor-choose-file", None);
+        }
+        // 校验通过才允许保存（原版 checkData(true) 失败会 alert）
+        let ok = app.forms.editor.can_save();
+        if ui
+            .add_enabled(ok, egui::Button::new(t("html_save_file")))
+            .clicked()
+        {
+            // "0" = 非另存为；hex 由 app 侧从编辑器表单现取
+            app.exec("dump-editor-save", Some("0".to_owned()));
+        }
+        if ui
+            .add_enabled(ok, egui::Button::new(t("html_save_as_file")))
+            .clicked()
+        {
+            // "1" = 另存为，弹系统保存框
+            app.exec("dump-editor-save", Some("1".to_owned()));
+        }
+        // 写卡入口（原版 dumpEditor 没有）：先另存一份副本，再走既有
+        // write-IC 确认链。按 `command` 门禁置灰——未连接 / 有任务在跑时
+        // 悬停说明原因，与主面板写卡按钮同一套规则。
+        let gate = nfc_core::command::spec("write-IC").map(|s| nfc_core::command::gate(s, &app.state));
+        let can_write = ok && matches!(gate, Some(Ok(())) | None);
+        let write_tip = match &gate {
+            Some(Err(e)) => t(e.i18n_key()),
+            _ => t("html_write_this_dump"),
+        };
+        if ui
+            .add_enabled(can_write, egui::Button::new(t("html_write_this_dump")))
+            .on_hover_text(write_tip)
+            .clicked()
+        {
+            app.write_editor_to_card();
+        }
+        // S18：体检 / 修复 / 导出密钥（纯 UI 动作，不进 engine 队列）
+        if ui.button(t("html_check_dump")).clicked() {
+            // 体检结论每帧已实时显示在下方，这里把同样的结论写进控制台——
+            // 点按钮要有可见反馈，且日志可随「保存日志」留存。
+            for line in dumpcheck::check_report(&app.forms.editor.sectors) {
+                app.state
+                    .apply(nfc_core::state::Event::Log(format!("\n{line}\n")));
+            }
+        }
+        if ui.button(t("html_fix_dump")).clicked() {
+            match dumpcheck::fix(&app.forms.editor.sectors) {
+                Ok((fixed, items)) => {
+                    app.forms.editor.sectors = fixed;
+                    // 修复改写了扇区，字节视图的显示缓存必须跟着重建，
+                    // 否则停在字节视图时会继续看到修复前的内容（docs/02 §6.40）
+                    app.forms.editor.rebuild_byte_view();
+                    app.forms.editor.dirty = true;
+                    // 修复日志逐条写进控制台
+                    for line in dumpcheck::fix_report(&items) {
+                        app.state
+                            .apply(nfc_core::state::Event::Log(format!("\n{line}\n")));
+                    }
+                }
+                Err(issues) => {
+                    // 修复失败（结构/容量不合法）：逐条写进控制台，让用户看见原因。
+                    for line in issues.iter().map(dumpcheck::issue_text) {
+                        app.state
+                            .apply(nfc_core::state::Event::Log(format!("\n{line}\n")));
+                    }
+                }
+            }
+        }
+        if ui.button(t("html_export_keys")).clicked() {
+            app.exec("dump-editor-export-keys", None);
+        }
+    });
+}
+
+/// 原版图例的四段配色 token（`dumpEditor.html:31-37` + `tokens.css`）。
+/// egui 无 `<span class="uid">`，故按段着色，token 与原版一致。
+fn legend_color(paint: crate::theme_ui::Paint, which: u8) -> egui::Color32 {
+    match which {
+        0 => paint.color(paint.uid),
+        1 => paint.color(paint.key_a),
+        2 => paint.color(paint.access),
+        _ => paint.color(paint.key_b),
+    }
+}
+
+/// 字节视图的编辑内容 → 4 行 × 32 小写 hex。
+///
+/// 空白（含换行）一律当分隔符，因此整段粘贴连续 hex 同样可用。
+/// 尾部**不补零**：短了就让 `validate` 报 `LineLength`，而不是静默产出坏数据。
+fn from_byte_view_text(text: &str) -> Vec<String> {
+    let flat: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    flat.to_ascii_lowercase()
+        .chars()
+        .collect::<Vec<char>>()
+        .chunks(32)
+        .map(|row| row.iter().copied().collect::<String>())
+        .collect()
 }

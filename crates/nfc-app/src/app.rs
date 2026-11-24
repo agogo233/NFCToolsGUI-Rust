@@ -161,10 +161,14 @@ pub struct NfcApp {
     /// 自绘标题栏左上角的 logo 纹理。生产路径由 `main.rs` 注入，
     /// 测试 / 无头环境为 `None`（只少个标识，不影响任何功能）。
     pub logo: Option<egui::TextureHandle>,
-    /// 界面改版：解卡落盘后的卡片快照（中栏卡片档案 / 扇区编辑器数据源）。
+    /// 界面改版：解卡落盘后的卡片快照（中栏卡片档案条数据源）。
     pub card_snapshot: Option<crate::ui::workbench::CardSnapshot>,
-    /// 扇区编辑器当前展开的组（None = 全部收起）。
-    pub open_sector: Option<usize>,
+    /// 落盘 / 各入口载入转储后置位，由中栏扇区编辑器渲染帧消费：
+    /// 把编辑器卡片滚动对齐到视口（stack 档必需；宽档为 no-op）。
+    pub scroll_to_editor: bool,
+    /// dirty 确认通过后待执行的编辑器载入参数（`open-dump-editor` 的
+    /// 原始载荷）：确认框是异步的，载荷先挂起、批准后再执行载入。
+    pub pending_editor_load: Option<String>,
     /// 本次会话写卡已成功（左栏「写卡」组状态点=完成）。取消任务/失败不置位；
     /// 重新读卡（新卡快照）时重置——写的是新卡，旧完成态不再成立。
     pub write_done: bool,
@@ -218,7 +222,8 @@ impl NfcApp {
             file_dialogs_ok: dialogs_host::file_dialogs_supported(),
             logo: None,
             card_snapshot: None,
-            open_sector: None,
+            scroll_to_editor: false,
+            pending_editor_load: None,
             write_done: false,
             mfcuk_progress: None,
             resize_drag: None,
@@ -592,6 +597,8 @@ impl NfcApp {
     /// 一律拒绝。
     pub fn on_confirm_result(&mut self, m: dialogs_ui::ConfirmModal, ok: bool) -> bool {
         if !ok {
+            // 取消：挂起的编辑器载入一并放弃（只可能是 DropEditorEdits 置的）。
+            self.pending_editor_load = None;
             return false;
         }
         match m.kind {
@@ -645,6 +652,13 @@ impl NfcApp {
             // （engine 侧 `input_uid_write` 再做清洗 / 拼块 / BCC 判定）。
             dialogs_ui::ConfirmKind::UidInputWrite { text } => {
                 self.push_approved(Action::WithArg("done-input-uid-write", text));
+                false
+            }
+            // docs/02 §6.48：编辑器有未保存更改时覆盖载入，须先确认丢弃。
+            // 批准后执行确认期间挂起的载入（载荷在 `pending_editor_load`）。
+            dialogs_ui::ConfirmKind::DropEditorEdits => {
+                let arg = self.pending_editor_load.take();
+                self.do_open_dump_editor(arg.as_deref());
                 false
             }
         }
@@ -726,11 +740,6 @@ impl NfcApp {
         }
         self.card_snapshot = snap;
         self.write_done = false;
-        self.open_sector = if self.card_snapshot.is_some() {
-            Some(0)
-        } else {
-            None
-        };
         self.guidance = Some((
             name,
             vec![
@@ -894,13 +903,9 @@ impl NfcApp {
             )
         });
 
-        // 转储编辑器开着、校验通过且没有确认窗挡在上面时才保存；
-        // "0" = 非另存为（与面板按钮一致）。
-        if save
-            && self.confirm.is_none()
-            && self.state.panels.dump_editor
-            && self.forms.editor.can_save()
-        {
+        // 中栏编辑器有可保存内容（已载入 + 校验通过）且没有确认窗挡在上面
+        // 时才保存；"0" = 非另存为（与编辑器按钮行一致）。
+        if save && self.confirm.is_none() && self.forms.editor.can_save() {
             self.exec("dump-editor-save", Some("0".to_owned()));
             return;
         }
@@ -971,6 +976,8 @@ impl NfcApp {
                     Ok(()) => {
                         // 记住完整路径：「保存」要写回这个 dumpfiles 里的文件。
                         self.forms.editor.origin = Some(path);
+                        // 载入成功即请求定位中栏编辑器（stack 档必需）。
+                        self.scroll_to_editor = true;
                         true
                     }
                     Err(e) => {
@@ -999,6 +1006,8 @@ impl NfcApp {
             Ok(bytes) => match self.forms.editor.load(Some(name), &bytes) {
                 Ok(()) => {
                     self.forms.editor.origin = Some(path.to_path_buf());
+                    // 载入成功即请求定位中栏编辑器（stack 档必需）。
+                    self.scroll_to_editor = true;
                     true
                 }
                 Err(e) => {
@@ -1010,6 +1019,26 @@ impl NfcApp {
                 self.push_event(EventKind::Error, &format!("{e}"));
                 false
             }
+        }
+    }
+
+    /// 执行「重置编辑器表单 + 按载荷载入」（`open-dump-editor` 的实际动作）。
+    ///
+    /// 载荷分流：含路径分隔符 → 完整路径（档案条「编辑转储」/ 文件框回传，
+    /// 可在 dumpfiles/ 之外）；否则按裸文件名限定在 `dumpfiles/` 内（事件卡 /
+    /// 历史 / 注册表入口，[`Self::load_dump_into_editor`] 内部有 `is_plain_name`
+    /// 防穿越）。不带载荷则只重置表单（工具菜单点开），空编辑器的「打开文件」
+    /// 按钮继续承担选文件入口。载入成功后 `scroll_to_editor` 由 load 链置位。
+    fn do_open_dump_editor(&mut self, arg: Option<&str>) {
+        self.forms.editor = panels::EditorForm::default();
+        match arg {
+            Some(a) if a.contains('/') || a.contains('\\') => {
+                self.load_dump_from_path(std::path::Path::new(a));
+            }
+            Some(name) => {
+                self.load_dump_into_editor(name);
+            }
+            None => {}
         }
     }
 
@@ -1300,15 +1329,21 @@ impl NfcApp {
             }
             // S10：dump 三面板
             "open-dump-editor" => {
-                // 原版 `command.js:412-413`：
-                //   `createDumpEditorWindow(file ? path.join(dumpsFolder, file) : null)`
-                // 带文件名进来（从历史面板点「编辑转储」）就直接载入该 dump，
-                // 不带（工具菜单点开）则开空编辑器等用户选文件。
-                self.forms.editor = panels::EditorForm::default();
-                if let Some(name) = arg {
-                    self.load_dump_into_editor(&name);
+                // 原版 `command.js:412-413` 开独立 dumpEditor 窗口；编辑器并入
+                // 中栏后（docs/02 §6.48）本动作改为「载入 + 滚动定位」。
+                // 载荷两种形态：完整路径（档案条「编辑转储」/ 文件框回传，可
+                // 在 dumpfiles/ 之外）或裸文件名（事件卡 / 历史 / 注册表，限定
+                // dumpfiles/）。编辑器有未保存更改时先弹确认框，批准再覆盖。
+                if self.forms.editor.dirty {
+                    self.pending_editor_load = arg;
+                    self.confirm = Some(dialogs_ui::ConfirmModal::new(
+                        dialogs_ui::ConfirmKind::DropEditorEdits,
+                        &dialogs_ui::danger_title(),
+                        t("dialog_msg_confirm_drop_edits"),
+                    ));
+                } else {
+                    self.do_open_dump_editor(arg.as_deref());
                 }
-                panels::open(&mut self.state.panels, panels::Panel::DumpEditor);
             }
             "open-dump-comparator" => {
                 // 载荷是 `A` / `B` 两个文件名（`command.js:461`）；带参进来时
@@ -2048,7 +2083,7 @@ impl NfcApp {
         /// P2-9：新增「卡历史档案」（registry.json 可查表）。
         const ITEMS: [(&str, &str); 6] = [
             ("open-history-keys", "html_edit_history_key"),
-            ("open-dump-editor", "html_dump_editor"),
+            ("open-dump-editor", "html_sector_editor"),
             ("open-dump-comparator", "html_dump_comparator"),
             ("dump-history", "html_dump_history"),
             ("open-card-registry", "html_card_registry_title"),

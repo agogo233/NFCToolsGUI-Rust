@@ -198,6 +198,10 @@ HARDENING_EXTRA = {
 SNAPSHOT_UI_EXTRA = {
     "log_msg_snapshot_build_failed",
 }
+# 编辑器并入中栏批次（docs/02 §6.48）：覆盖未保存编辑前的确认文案。
+EDITOR_MERGE_EXTRA = {
+    "dialog_msg_confirm_drop_edits",
+}
 # S18 从「上游独有」挪回的 20 个 key：两版共有且文案逐字一致。
 S18_MIGRATED = {
     "dialog_msg_invalid_uid_input",
@@ -406,6 +410,7 @@ def h_i18n() -> None:
         + len(AUDIT_FIX_EXTRA)
         + len(HARDENING_EXTRA)
         + len(SNAPSHOT_UI_EXTRA)
+        + len(EDITOR_MERGE_EXTRA)
     )
     check(
         len(keys) == 194 + extras,
@@ -1100,6 +1105,7 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
 
     # ── S9 模态面板 ──────────────────────────────────────────────
     pa = rd(APP / "src/panels.rs")
+    wb = rd(APP / "src/ui/workbench.rs")
     ap = "\n".join(rd(p) for p in sorted(APP.glob("src/**/*.rs")))
     stf9 = rd(APP / "src/selftest.rs")
 
@@ -1173,8 +1179,8 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
                                  "dump-editor-save")),
           "P1 Ctrl(⌘)+S 保存转储（仅面板开着、校验通过且无确认窗时）")
     check("pub fn close_topmost" in pa, "P1 panels 有 close_topmost（倒序关第一个）")
-    check(pa.count("horizontal_wrapped") >= 4,
-          "P1 长按钮行自动换行", f"实际 {pa.count('horizontal_wrapped')}")
+    check(ap.count("horizontal_wrapped") >= 4,
+          "P1 长按钮行自动换行", f"实际 {ap.count('horizontal_wrapped')}")
     check(".max_height(360.0)" not in pa and "list_h" in pa,
           "P1 历史列表高度随窗口自适应（不再写死 360）")
     check("html_shortcut_close_panel" in pa and "html_shortcut_save_dump" in pa,
@@ -1190,8 +1196,8 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     # 按 ("名字", 标识符) 配对计数：标识符不一定以 `c_` 开头
     #（`case_phone_wristband` 就是一条），只数 `c_` 会少算 1 项。
     n_cases = len(re.findall(r'\(\s*\n?\s*"[^"]+",\s*\n?\s*[a-z][a-z0-9_]*\s*,?\s*\n?\s*\)', _vec))
-    check(n_cases == 102,
-          "S9-S19 UI selftest 102 项（79 原有 + S18 增 5 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1 + 连接收尾 cancel 1 + 重命名行渲染不提交 1 + 无门户收尾/重复回传 3 + R1 系统级关窗 1 + 导出空文件防护 1 + inputKeys 空输入 1 + 重命名同帧提交 1 + 无门户保存日志不留快照 1 + 界面改版 2 + stack 档滚动可见 1）",
+    check(n_cases == 104,
+          "S9-S19 UI selftest 104 项（79 原有 + S18 增 5 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1 + 连接收尾 cancel 1 + 重命名行渲染不提交 1 + 无门户收尾/重复回传 3 + R1 系统级关窗 1 + 导出空文件防护 1 + inputKeys 空输入 1 + 重命名同帧提交 1 + 无门户保存日志不留快照 1 + 界面改版 2 + stack 档滚动可见 1 + 编辑器合并 2）",
           f"实际 {n_cases}")
 
     # ── S10 dump 三面板 ──────────────────────────────────────────
@@ -1201,12 +1207,14 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     check("pub fn diff_sectors" in dumps and "pub enum DiffSeg" in dumps,
           "S10 core 有逐字符 diff（dumpComparator.js:32-89）")
     check("pub type SectorDiff" in dumps, "S10 SectorDiff 有类型别名")
-    check('"html_caption"' in pa and "html_update_colors" not in pa.split("fn dump_editor")[1][:2000],
+    # 编辑器已并入中栏（docs/02 §6.48）：图例随函数迁到 workbench，
+    # 「更新颜色」按钮不得复活（原版该按钮无实际作用）。
+    check('"html_caption"' in wb and "html_update_colors" not in wb,
           "S10 编辑器有图例（dumpEditor.html:29-39）")
     # 编辑粒度：原版每扇区一个 contenteditable div，不是 64 个块输入框
     # （锚点随上游 dumpEditor 重构更新：原 data.data.forEach 已不存在，
     # 改用 groupHasTrailer 作稳定锚点——每扇区一个 div、块 3 单独着色）。
-    check("desired_rows(4)" in pa, "S10 编辑器每扇区 4 行一个多行输入")
+    check("desired_rows(4)" in wb, "S10 编辑器每扇区 4 行一个多行输入")
     # 保存的两道检查
     check("pub fn can_save(&self) -> bool" in pa, "S10 有 can_save 封装（dumpEditor.js:16+20）")
     check("!self.sectors.is_empty() && self.validate(true).is_ok()" in pa,
@@ -1296,8 +1304,8 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     # selftest
     _vec2 = stf9[stf9.index("vec![") : stf9.index("];", stf9.index("vec!["))]
     n11 = len(re.findall(r'\(\s*\n?\s*"[^"]+",\s*\n?\s*[a-z][a-z0-9_]*\s*,?\s*\n?\s*\)', _vec2))
-    check(n11 == 102,
-          "S11-S19 UI selftest 102 项（含 S18 新增 5 项 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1 + 连接收尾 cancel 1 + 重命名行渲染不提交 1 + 无门户收尾/重复回传 3 + R1 系统级关窗 1 + 导出空文件防护 1 + inputKeys 空输入 1 + 重命名同帧提交 1 + 无门户保存日志不留快照 1 + 界面改版 2 + stack 档滚动可见 1）",
+    check(n11 == 104,
+          "S11-S19 UI selftest 104 项（含 S18 新增 5 项 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1 + 连接收尾 cancel 1 + 重命名行渲染不提交 1 + 无门户收尾/重复回传 3 + R1 系统级关窗 1 + 导出空文件防护 1 + inputKeys 空输入 1 + 重命名同帧提交 1 + 无门户保存日志不留快照 1 + 界面改版 2 + stack 档滚动可见 1 + 编辑器合并 2）",
           f"实际 {n11}")
 
     # ── S11-2 系统文件对话框 + 写卡接线 ───────────────────────────
@@ -1412,10 +1420,11 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
           "S11-4 write-ufuid-uid 确认正文含 block0 hex")
     check("ConfirmKind::WriteUid { dump: full }" in ap,
           "S11-4 WriteUid 载荷是完整路径（engine 要靠它读文件）")
-    # ⑤ 面板按钮必须走 exec，不能直接 push
+    # ⑤ 面板 / 中栏编辑器按钮必须走 exec，不能直接 push（编辑器按钮行已迁
+    # 中栏 workbench，docs/02 §6.48，故用全 app 源码检查）
     for name in ["open-dict-file", "dump-editor-choose-file", "dump-editor-save",
                  "dump-comparator-choose-file"]:
-        check(f'app.exec("{name}"' in pn, f"S11-4 面板的 {name} 走 exec")
+        check(f'app.exec("{name}"' in ap, f"S11-4 面板的 {name} 走 exec")
     check('Action::Plain("open-dict-file")' not in pn,
           "S11-4 面板不得直接 push open-dict-file（会无反应）")
     check("Action::SaveDump{" not in pn,

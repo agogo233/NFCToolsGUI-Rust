@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<!-- 中栏扇区编辑器合并 · 界面原型（docs/02 §6.48 的用户确认稿）。
+     静态预览：双击打开即可查看合并后中栏的形态与布局；非运行代码。 -->
+<head>
+<meta charset="UTF-8">
+<title>中栏扇区编辑器合并 · 原型预览</title>
+<style>
+:root{--bg:#16181d;--surface:#1f2229;--surface2:#272b35;--border:#3a3f4b;--text:#d6d9e0;
+--sec:#8a90a0;--primary:#4f8cff;--danger:#e5534b;--warn:#d4a72c;--ok:#57ab5a;
+--keyA:#4f8cff;--keyB:#c58ff0;--acl:#d4a72c;--uid:#57ab5a;--mono:Consolas,monospace}
+*{box-sizing:border-box}
+body{margin:0;padding:16px;background:var(--bg);color:var(--text);
+font:13px/1.5 system-ui,"Microsoft YaHei",sans-serif}
+.title{background:var(--surface);border:1px solid var(--border);border-radius:8px;
+padding:8px 12px;font-weight:600;margin-bottom:10px}
+.cols{display:flex;gap:10px;align-items:flex-start}
+.col{background:transparent;padding:0}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:8px;
+padding:10px 12px;margin-bottom:10px}
+.h{font-weight:700;font-size:12px;color:var(--sec);margin-bottom:6px;display:flex;
+align-items:center;gap:10px;flex-wrap:wrap}
+.tag{font-size:10px;font-weight:400;padding:1px 6px;border-radius:8px;border:1px solid var(--border);color:var(--sec)}
+.tag.new{color:#1e222a;background:var(--ok);border:none;font-weight:700}
+.tag.moved{color:#1e222a;background:var(--warn);border:none;font-weight:700}
+.btns{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+button{font:12px system-ui;padding:4px 12px;border-radius:6px;border:1px solid var(--border);
+background:var(--surface2);color:var(--text);cursor:pointer}
+button.primary{background:var(--primary);border:none;color:#fff;font-weight:700}
+button:disabled{opacity:.4;cursor:not-allowed}
+.kv{font-size:10px;color:var(--sec)}
+.uid{font:700 16px var(--mono);color:#6cb6ff}
+.fn{font:12px var(--mono);color:var(--sec)}
+.filebar{display:flex;justify-content:space-between;align-items:center;gap:8px;
+border-top:1px solid var(--border);border-bottom:1px solid var(--border);
+padding:5px 0;margin-bottom:8px;flex-wrap:wrap}
+.sec{margin-bottom:8px}
+.sec-head{font-size:11px;color:var(--sec);margin-bottom:3px;display:flex;gap:8px;align-items:center}
+.badge{font-size:10px;color:var(--keyB);border:1px solid var(--keyB);
+border-radius:6px;padding:0 5px}
+.hex{font:12px/1.35 var(--mono);background:var(--bg);border:1px solid var(--border);
+border-radius:6px;padding:6px 8px;white-space:pre;color:var(--text)}
+.sec.invalid .hex{border:1.5px solid var(--danger)}
+.sec.invalid .sec-head{color:var(--danger)}
+.c0{background:rgba(87,171,90,.35);border-radius:3px}
+.c1{background:rgba(79,140,255,.30);border-radius:3px}
+.c2{background:rgba(212,167,44,.30);border-radius:3px}
+.c3{background:rgba(197,143,240,.30);border-radius:3px}
+.legend{display:flex;gap:10px;font-size:10px;color:var(--sec);margin-left:auto}
+.dot{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:3px;vertical-align:middle}
+.check{background:var(--surface2);border-radius:6px;padding:6px 10px;margin:6px 0;
+font-size:12px}
+.check .bad{color:var(--danger)}
+.check .vb{color:var(--keyB)}
+.check .none{color:var(--sec)}
+.log{font:11px var(--mono);background:var(--bg);border:1px solid var(--border);
+border-radius:6px;padding:6px 8px;height:150px;overflow:auto;user-select:text;color:#a9d297}
+.mini{font-size:11px;color:var(--sec);line-height:2}
+.left-btn{display:block;width:100%;text-align:left;margin-bottom:4px;padding:5px 10px}
+</style>
+</head>
+<body>
+
+<div class="title">NFCToolsGUI — 三栏工作台（中栏 = 合并后的扇区编辑器）原型预览</div>
+
+<div class="cols">
+  <!-- ============ 左栏（不变） ============ -->
+  <div class="col" style="width:180px">
+    <div class="card"><div class="h">操作区（不变）</div>
+      <button class="left-btn">连接设备</button>
+      <button class="left-btn">读取卡内容</button>
+      <button class="left-btn">解卡（mfoc）</button>
+      <button class="left-btn">nested 攻击</button>
+      <button class="left-btn">字典攻击</button>
+      <button class="left-btn">扇区编辑器→</button>
+    </div>
+  </div>
+
+  <!-- ============ 中栏（重点） ============ -->
+  <div class="col" style="flex:1;min-width:480px">
+
+    <!-- 卡片档案条（保留） -->
+    <div class="card">
+      <div class="h">当前卡片 <span class="tag">保留不变</span></div>
+      <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-end">
+        <div><div class="kv">UID</div><div class="uid">A2:3D:C0:30 <button style="padding:0 6px">复制</button></div></div>
+        <div><div class="kv">卡型</div><b>MIFARE Classic 1K</b></div>
+        <div><div class="kv">检测结果</div><b>已知 32 · 未知 0</b></div>
+        <div><div class="kv">当前文件</div><div class="fn">a23dc030_2026_11_24_20_34_00.mfd</div></div>
+      </div>
+      <div class="btns" style="justify-content:flex-end">
+        <button class="primary">写入此转储</button>
+        <button>编辑转储</button>
+      </div>
+      <div class="mini" style="color:var(--ok)">✓ 「编辑转储」改为：就地载入下方编辑器并滚动定位（不再弹 720×640 浮窗）</div>
+    </div>
+
+    <!-- 合并后的中栏扇区编辑器 -->
+    <div class="card">
+      <div class="h">扇区编辑器
+        <span class="tag moved">合并自浮窗（始终可编辑形态）</span>
+        <span class="legend">
+          <span><i class="dot" style="background:var(--uid)"></i>UID 制造信息</span>
+          <span><i class="dot" style="background:var(--keyA)"></i>Key A</span>
+          <span><i class="dot" style="background:var(--acl)"></i>ACL</span>
+          <span><i class="dot" style="background:var(--keyB)"></i>Key B</span>
+        </span>
+      </div>
+
+      <!-- 文件条 -->
+      <div class="filebar">
+        <span class="fn">当前文件 a23dc030_2026_11_24_20_34_00.mfd</span>
+        <button>切换字节视图</button>
+      </div>
+
+      <!-- 扇区 0：正常（色块演示内容定位） -->
+      <div class="sec">
+        <div class="sec-head">扇区 0</div>
+        <div class="hex">A2 3D C0 30 88 04 00 04 00 00 00 00 00 00 00 00
+08 00 00 00 00 00 <span class="c1">FF FF FF FF FF FF</span> <span class="c2">FF 07 80 69</span> <span class="c3">FF FF FF FF FF FF</span></div>
+      </div>
+
+      <!-- 扇区 1：非法（红框 + 危险色扇区号） -->
+      <div class="sec invalid">
+        <div class="sec-head">扇区 1</div>
+        <div class="hex">00 11 22 33 …（仅示意：长度不足 / 非 hex 时整块红框）</div>
+      </div>
+
+      <!-- 扇区 2：值块徽章 -->
+      <div class="sec">
+        <div class="sec-head">扇区 2 <span class="badge">值块</span></div>
+        <div class="hex">00 00 00 00 00 00 00 01 …（4 行 × 32 hex，可直接点击编辑）</div>
+      </div>
+
+      <!-- 实时体检 -->
+      <div class="check">
+        <div class="bad">! 扇区 1 第 2 块数据长度不足 32 字符</div>
+        <div class="vb">扇区 2 含值块（0.02）</div>
+        <div class="none">未发现其他问题</div>
+      </div>
+
+      <!-- 按钮行 -->
+      <div class="btns">
+        <button>打开文件</button>
+        <button>保存</button>
+        <button>另存为</button>
+        <button class="primary">写入此转储</button>
+        <button>体检</button>
+        <button>修复</button>
+        <button>导出密钥</button>
+      </div>
+      <div class="mini">Ctrl+S 保存 · 「写入此转储」走确认框 + 写前自动另存副本安全闸 · <span style="color:var(--ok)">原只读行视图（展开详情/密钥着色）已移除</span></div>
+    </div>
+  </div>
+
+  <!-- ============ 右栏（日志改动①示意） ============ -->
+  <div class="col" style="width:230px">
+    <div class="card"><div class="h">控制台 <span class="tag new">可拖选复制</span></div>
+      <div class="log">### 运行完毕 ###
+
+已保存到 C:\Users\...\dumpfiles\a23dc030_2026_11_24_20_34_00.mfd
+
+—— 此处文本可鼠标拖选 /
+双击选词 / Ctrl+C 复制片段
+（「复制日志」按钮仍保留）</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
