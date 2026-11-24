@@ -390,7 +390,7 @@ fn sector_edit_rows(
     app: &mut NfcApp,
     editor_is_1k: bool,
     in_byte: bool,
-    byte_view_buf: &mut Vec<String>,
+    byte_view_buf: &mut [String],
 ) -> bool {
     let paint = app.paint();
     let danger = paint.color(paint.danger);
@@ -479,7 +479,6 @@ fn sector_edit_rows(
 /// 溢出（docs/02 §6.29）；视图切换属「怎么显示」，与处理操作分开放在
 /// 文件条上。
 fn editor_footer(ui: &mut Ui, app: &mut NfcApp) {
-    let paint = app.paint();
     ui.separator();
     let name = app
         .forms
