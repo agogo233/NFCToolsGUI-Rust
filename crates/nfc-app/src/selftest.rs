@@ -424,11 +424,7 @@ fn stack_tier_scroll_peak(with_wheel: bool) -> usize {
                 modifiers: egui::Modifiers::default(),
             });
         }
-        let verts = frame_verts(&ctx, input, &mut app);
-        if with_wheel && (frame == 1 || frame % 8 == 0) {
-            eprintln!("DBG scroll frame={frame} dy={dy} verts={verts}");
-        }
-        peak = peak.max(verts);
+        peak = peak.max(frame_verts(&ctx, input, &mut app));
     }
     peak
 }
