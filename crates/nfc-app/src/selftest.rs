@@ -397,10 +397,7 @@ fn stack_tier_scroll_peak(with_wheel: bool) -> usize {
     app.card_snapshot =
         crate::ui::workbench::snapshot_from_bytes(&bytes, "p".to_owned(), "x.mfd".to_owned());
     // 编辑器并入中栏后（docs/02 §6.48），滚动可见性针对编辑框（forms.editor 驱动）
-    app.forms
-        .editor
-        .load(Some("x.mfd".into()), &bytes)
-        .unwrap();
+    app.forms.editor.load(Some("x.mfd".into()), &bytes).unwrap();
     let ctx = Context::default();
     crate::theme_ui::apply_style(&ctx);
     crate::theme_ui::apply_visuals(&ctx);
@@ -521,7 +518,10 @@ fn c_editor_dirty_confirm() -> Result<(), String> {
     // 批准 → 执行挂起载入
     app.on_confirm_result(c2, true);
     if app.forms.editor.origin.as_ref() != Some(&target) {
-        return Err(format!("批准后未载入目标文件: {:?}", app.forms.editor.origin));
+        return Err(format!(
+            "批准后未载入目标文件: {:?}",
+            app.forms.editor.origin
+        ));
     }
     if app.forms.editor.dirty {
         return Err("重新载入后不应仍是脏标记".into());

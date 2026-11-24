@@ -501,7 +501,7 @@ impl EditorForm {
     }
 
     /// 用 `sectors` 重建字节视图显示缓存。
-    fn rebuild_byte_view(&mut self) {
+    pub fn rebuild_byte_view(&mut self) {
         self.byte_view = self
             .sectors
             .iter()

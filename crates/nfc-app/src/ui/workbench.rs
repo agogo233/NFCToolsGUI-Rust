@@ -417,7 +417,11 @@ fn sector_edit_rows(
                     ui.label(
                         RichText::new(format!("{}{si}", t("html_sector")))
                             .strong()
-                            .color(if invalid { danger } else { paint.color(paint.text) }),
+                            .color(if invalid {
+                                danger
+                            } else {
+                                paint.color(paint.text)
+                            }),
                     );
                 });
                 // S18：值块标记——该扇区含值块时在号后贴一个小徽章
@@ -485,10 +489,8 @@ fn editor_footer(ui: &mut Ui, app: &mut NfcApp) {
         .unwrap_or_else(|| "-".to_owned());
     ui.horizontal(|ui| {
         // 文件名可能很长（含用户自定义名），截断防溢出，全名悬停可见。
-        ui.add(
-            Label::new(RichText::new(format!("{}{name}", t("html_current_file")))).truncate(),
-        )
-        .on_hover_text(name);
+        ui.add(Label::new(RichText::new(format!("{}{name}", t("html_current_file")))).truncate())
+            .on_hover_text(name);
         // 显示方式切换（docs/02 §6.40）：连续 hex ↔ 每字节空一格的大写。
         // 按钮文字是**切换后的目标**视图，故两种状态各需一条文案。
         let label = if app.forms.editor.view_mode == ViewMode::Continuous {
@@ -529,7 +531,8 @@ fn editor_footer(ui: &mut Ui, app: &mut NfcApp) {
         // 写卡入口（原版 dumpEditor 没有）：先另存一份副本，再走既有
         // write-IC 确认链。按 `command` 门禁置灰——未连接 / 有任务在跑时
         // 悬停说明原因，与主面板写卡按钮同一套规则。
-        let gate = nfc_core::command::spec("write-IC").map(|s| nfc_core::command::gate(s, &app.state));
+        let gate =
+            nfc_core::command::spec("write-IC").map(|s| nfc_core::command::gate(s, &app.state));
         let can_write = ok && matches!(gate, Some(Ok(())) | None);
         let write_tip = match &gate {
             Some(Err(e)) => t(e.i18n_key()),
