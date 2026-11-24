@@ -277,15 +277,15 @@ fn console_card(ui: &mut Ui, app: &mut NfcApp, stacked: bool) {
                 .stick_to_bottom(!app.lock_scroll)
                 .max_height(body_h)
                 .show(ui, |ui| {
-                    // 只读展示：此前 `interactive(true)` + 每帧 clone 的副本，
-                    // 用户在控制台里打字看似能输入、实际不落任何状态（下一帧即丢）。
-                    // 控制台语义是「工具输出/回显」，编辑入口只有清空/复制/保存。
-                    let mut view = app.state.log_view();
+                    // 只读但仍可拖选复制：此前 `TextEdit::interactive(false)` 把
+                    // 文本选择也一并禁用（真机反馈「日志不能选择复制」），换
+                    // selectable Label——不可输入，保持控制台「工具输出/回显」
+                    // 只读语义，拖选/双击选词/Ctrl+C 复制片段；整段复制仍走
+                    // 「复制日志」按钮，编辑入口只有清空/复制/保存。
+                    let view = app.state.log_view();
                     ui.add(
-                        egui::TextEdit::multiline(&mut view)
-                            .desired_width(f32::INFINITY)
-                            .font(egui::TextStyle::Monospace)
-                            .interactive(false),
+                        egui::Label::new(RichText::new(view).font(egui::TextStyle::Monospace))
+                            .selectable(true),
                     );
                 });
         });

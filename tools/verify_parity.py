@@ -636,10 +636,11 @@ def m_contract() -> None:
         "M 截断 / 视图起点均校正字符边界（enforce_log_cap + log_view）",
         str(st.count("while cut < len && !self.log_buffer.is_char_boundary(cut)")),
     )
-    # UI 只渲染尾部窗口（98c06b7 起控制台改只读展示，变量名 view），保存 / 复制仍取全量（§6.35 同源保真）
+    # UI 只渲染尾部窗口（98c06b7 起控制台改只读展示；4a3ff1a 后渲染换 selectable
+    # Label，变量不再需要 mut），保存 / 复制仍取全量（§6.35 同源保真）
     app = "\n".join(rd(p) for p in sorted(APP.glob("src/**/*.rs")))
     check(
-        "let mut view = app.state.log_view();" in app,
+        "let view = app.state.log_view();" in app,
         "M 日志区渲染 log_view 尾部窗口",
     )
     check(
