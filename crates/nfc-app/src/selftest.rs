@@ -382,10 +382,10 @@ fn frame_verts(ctx: &Context, input: egui::RawInput, app: &mut NfcApp) -> usize 
 }
 
 /// stack 档（<820）滚动可见性回归：预置 1K 快照并打开扇区 0，逐帧向
-/// `stacked-main` 注入小步滚轮。修复后由外层滚动区统一接收滚轮，扇区
-/// 行会经过视口——滚动过程的顶点峰值应显著高于不滚动基线（此前内层
-/// 滚动吞滚轮 / 固定高度把行压在折叠线下，峰值不涨）。时间戳逐帧推进，
-/// 不依赖真实时钟，避免平滑动画带来跨平台差异。
+/// `stacked-main` 注入小步滚轮（先下后上双向扫掠）。修复后由外层滚动区
+/// 统一接收滚轮，扇区行会经过视口——滚动过程的顶点峰值应显著高于
+/// 不滚动基线（此前内层滚动吞滚轮 / 固定高度把行压在折叠线下，峰值不
+/// 涨）。时间戳逐帧推进，不依赖真实时钟，避免平滑动画带来跨平台差异。
 fn stack_tier_scroll_peak(with_wheel: bool) -> usize {
     let mut app = NfcApp::new(nfc_core::state::AppState::new());
     let mut bytes = vec![0u8; 1024];
@@ -404,7 +404,10 @@ fn stack_tier_scroll_peak(with_wheel: bool) -> usize {
         ..Default::default()
     };
     let mut peak = frame_verts(&ctx, base_input, &mut app);
+    // 前半程向下滚、后半程向上滚：不依赖 egui 对 +delta 的方向约定，
+    // 无论向哪边解释，扇区行区都会经过视口并被实际绘制。
     for frame in 1..=96u32 {
+        let dy = if frame <= 48 { 3.0 } else { -6.0 };
         let mut input = egui::RawInput {
             screen_rect: Some(rect),
             time: Some(f64::from(frame) * 0.016),
@@ -416,12 +419,16 @@ fn stack_tier_scroll_peak(with_wheel: bool) -> usize {
                 .push(egui::Event::PointerMoved(egui::pos2(400.0, 300.0)));
             input.events.push(egui::Event::MouseWheel {
                 unit: egui::MouseWheelUnit::Line,
-                delta: egui::vec2(0.0, 2.0),
+                delta: egui::vec2(0.0, dy),
                 phase: egui::TouchPhase::Move,
                 modifiers: egui::Modifiers::default(),
             });
         }
-        peak = peak.max(frame_verts(&ctx, input, &mut app));
+        let verts = frame_verts(&ctx, input, &mut app);
+        if with_wheel && (frame == 1 || frame % 8 == 0) {
+            eprintln!("DBG scroll frame={frame} dy={dy} verts={verts}");
+        }
+        peak = peak.max(verts);
     }
     peak
 }
