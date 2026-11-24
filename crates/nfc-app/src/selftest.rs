@@ -510,15 +510,18 @@ fn c_editor_dirty_confirm() -> Result<(), String> {
     // 取消 → 编辑器保持原状（仍 dirty、来源不变）。
     // 真实 UI 流程是模态层先关框再回调 on_confirm_result，这里同样先清。
     app.confirm = None;
-    app.on_confirm_result(c2.clone(), false);
+    app.on_confirm_result(c2, false);
     if app.pending_editor_load.is_some() {
         return Err("取消后挂起载入应被放弃".into());
     }
     if !app.forms.editor.dirty {
         return Err("取消后编辑不应被清掉".into());
     }
-    // 批准 → 执行挂起载入
-    app.on_confirm_result(c2, true);
+    // 再次载入 → dirty 未变，仍应先弹框；这次批准 → 执行挂起载入
+    app.exec("open-dump-editor", Some("next.mfd".to_owned()));
+    let c3 = app.confirm.clone().ok_or("再次载入未弹确认框")?;
+    app.confirm = None;
+    app.on_confirm_result(c3, true);
     if app.forms.editor.origin.as_ref() != Some(&target) {
         return Err(format!(
             "批准后未载入目标文件: {:?}",
