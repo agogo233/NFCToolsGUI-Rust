@@ -1030,16 +1030,22 @@ impl NfcApp {
     /// 防穿越）。不带载荷则只重置表单（工具菜单点开），空编辑器的「打开文件」
     /// 按钮继续承担选文件入口。载入成功后 `scroll_to_editor` 由 load 链置位。
     fn do_open_dump_editor(&mut self, arg: Option<&str>) {
-        self.forms.editor = panels::EditorForm::default();
         match arg {
+            // 完整路径：可在 dumpfiles/ 之外（档案条按钮 / 文件框回传）
             Some(a) if a.contains('/') || a.contains('\\') => {
+                self.forms.editor = panels::EditorForm::default();
                 self.load_dump_from_path(std::path::Path::new(a));
             }
+            // 裸名：限定 dumpfiles/（事件卡 / 历史 / 注册表 / 日志按钮）
             Some(name) => {
+                self.forms.editor = panels::EditorForm::default();
                 self.load_dump_into_editor(name);
             }
+            // 无载荷：不开新文件，保留编辑器当前内容（对标原版「打开浮窗
+            // 看当前转储」语义），仅请求把视图滚到编辑器。
             None => {}
         }
+        self.scroll_to_editor = true;
     }
 
     /// 把编辑器的当前内容写成二进制转储。返回是否落盘成功。

@@ -507,10 +507,12 @@ fn c_editor_dirty_confirm() -> Result<(), String> {
     if !matches!(c2.kind, ConfirmKind::DropEditorEdits) {
         return Err(format!("确认框类型错误: {:?}", c2.kind));
     }
-    // 取消 → 编辑器保持原状（仍 dirty、来源不变）
+    // 取消 → 编辑器保持原状（仍 dirty、来源不变）。
+    // 真实 UI 流程是模态层先关框再回调 on_confirm_result，这里同样先清。
+    app.confirm = None;
     app.on_confirm_result(c2.clone(), false);
-    if app.confirm.is_some() {
-        return Err("取消后确认框未关闭".into());
+    if app.pending_editor_load.is_some() {
+        return Err("取消后挂起载入应被放弃".into());
     }
     if !app.forms.editor.dirty {
         return Err("取消后编辑不应被清掉".into());
