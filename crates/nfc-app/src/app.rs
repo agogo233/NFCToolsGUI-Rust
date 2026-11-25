@@ -1936,7 +1936,12 @@ impl NfcApp {
                         }
                         blockers.push(self.theme_toggle_button(ui).interact_rect);
                         // S16：设置只保留标题栏一个入口，工具菜单不再重复挂。
-                        let settings = ui.button(RichText::new(t("html_settings")));
+                        // 定尺寸与 close/min/theme 同高（24px）：自然高的文字钮
+                        // 会比左右三个 24px 方块矮一截，右簇边缘参差（docs/02 §6.50）。
+                        let settings = ui.add_sized(
+                            [56.0, 24.0],
+                            egui::Button::new(RichText::new(t("html_settings")).size(13.0)),
+                        );
                         blockers.push(settings.interact_rect);
                         if settings.clicked() {
                             self.exec("open-settings-window", None);
@@ -2013,7 +2018,8 @@ impl NfcApp {
     fn maximize_button(&self, ui: &mut Ui) -> egui::Response {
         let paint = self.paint();
         let maximized = is_maximized(ui.ctx());
-        let (rect, resp) = ui.allocate_exact_size(egui::vec2(30.0, 26.0), egui::Sense::click());
+        // 与 close/min/theme 同为 32×24（此前 30×26 比兄弟控件高 2px，右簇不齐）
+        let (rect, resp) = ui.allocate_exact_size(egui::vec2(32.0, 24.0), egui::Sense::click());
         let painter = ui.painter();
         let stroke = egui::Stroke::new(1.5, paint.color(paint.text));
         if maximized {

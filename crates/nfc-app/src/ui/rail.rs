@@ -57,7 +57,9 @@ fn device_card(ui: &mut Ui, app: &mut NfcApp) {
         });
         ui.horizontal(|ui| {
             let dot = paint.device_dot(app.state.device_state);
-            ui.colored_label(dot, RichText::new("●").size(10.0));
+            // 圆点与 13pt 状态文字同行：字号随文本走，避免小圆点相对
+            // 大字号文本「浮」在行中央（docs/02 §6.50）
+            ui.colored_label(dot, RichText::new("●").size(12.0));
             let text = match app.state.device_state {
                 DeviceState::None => t("html_no_device"),
                 DeviceState::Connecting => t("html_device_connecting"),
@@ -96,7 +98,9 @@ fn task_card(ui: &mut Ui, app: &mut NfcApp) {
         }
         ui.horizontal(|ui| {
             let dot = paint.status_dot(app.state.status.indicator);
-            ui.colored_label(dot, RichText::new("●").size(10.0));
+            // 圆点与 13pt 状态文字同行：字号随文本走，避免小圆点相对
+            // 大字号文本「浮」在行中央（docs/02 §6.50）
+            ui.colored_label(dot, RichText::new("●").size(12.0));
             let text = if app.state.status.text.is_empty() {
                 t("indicator_free")
             } else {
@@ -173,7 +177,8 @@ fn events_card(ui: &mut Ui, app: &mut NfcApp) {
                 for (k, e) in app.state.events.iter().rev().enumerate() {
                     let color = event_color(app.theme, e.kind);
                     let row = ui.horizontal(|ui| {
-                        ui.colored_label(color, RichText::new("●").size(7.0));
+                        // 7pt 圆点在 12pt 事件文本旁近不可见，随文本放大到 10pt（docs/02 §6.50）
+                        ui.colored_label(color, RichText::new("●").size(10.0));
                         // 事件文本长度不可控，截断防溢出；全名走悬停提示。
                         ui.add(Label::new(RichText::new(&e.text).size(12.0)).truncate());
                     });
@@ -238,8 +243,10 @@ fn console_card(ui: &mut Ui, app: &mut NfcApp, stacked: bool) {
                     Layout::right_to_left(Align::Center).with_main_wrap(true),
                     |ui| {
                         let mut auto = !app.lock_scroll;
+                        // 复选框文案与三个 13pt 默认按钮同行：字号统一，避免
+                        // 同一行内控件高度参差（docs/02 §6.50）
                         if ui
-                            .checkbox(&mut auto, RichText::new(t("html_unlock_scroll")).size(11.0))
+                            .checkbox(&mut auto, RichText::new(t("html_unlock_scroll")).size(13.0))
                             .on_hover_text(t("html_tip_autoscroll"))
                             .changed()
                         {
