@@ -306,6 +306,20 @@ fn editor_body(ui: &mut Ui, app: &mut NfcApp, stacked: bool) {
             }
         });
     });
+    // 载入失败提示条：**与 sectors 是否为空无关**都显示——「失败不清空」
+    // 后编辑器可能仍画着上一份内容，失败必须独立可见（docs/02 §6.49）。
+    if let Some(err) = &app.forms.editor.load_error {
+        ui.add_space(4.0);
+        Frame::NONE
+            .fill(paint.color(paint.danger))
+            .corner_radius(egui::CornerRadius::same(4))
+            .inner_margin(egui::Margin::symmetric(8, 6))
+            .show(ui, |ui| {
+                // 文字色与 missing_tools_bar 同款：danger 底上走主题默认文字色
+                // （浅色主题下白字叠浅红对比不足，恒白不适配两主题）。
+                ui.label(RichText::new(format!("{}{err}", t("html_dump_load_failed"))).strong());
+            });
+    }
     if app.forms.editor.sectors.is_empty() {
         // 空态：与原浮窗一致显示「当前文件-」，补一句去向提示；
         // 按钮行照常画出（「打开文件」是空态下的唯一入口）。
@@ -313,11 +327,20 @@ fn editor_body(ui: &mut Ui, app: &mut NfcApp, stacked: bool) {
             ui.add_space(18.0);
             ui.label(format!("{}-", t("html_current_file")));
             ui.add_space(4.0);
-            ui.label(
-                RichText::new(t("html_card_none"))
-                    .size(12.0)
-                    .color(paint.color(paint.text_secondary)),
-            );
+            if app.forms.editor.load_error.is_some() {
+                // 载入失败：给重选提示，不再误显示「尚未读取卡片」
+                ui.label(
+                    RichText::new(t("html_dump_load_failed_hint"))
+                        .size(12.0)
+                        .color(paint.color(paint.text_secondary)),
+                );
+            } else {
+                ui.label(
+                    RichText::new(t("html_card_none"))
+                        .size(12.0)
+                        .color(paint.color(paint.text_secondary)),
+                );
+            }
             ui.add_space(6.0);
         });
         editor_footer(ui, app);
@@ -340,6 +363,9 @@ fn editor_body(ui: &mut Ui, app: &mut NfcApp, stacked: bool) {
         let dirty = sector_edit_rows(ui, app, editor_is_1k, in_byte, &mut byte_view_buf);
         if dirty {
             app.forms.editor.dirty = true;
+            // 用户已在改内容：上次的载入失败不再是现状，收起失败条（至下次
+            // 载入为止，避免过期错误挂着误导）
+            app.forms.editor.load_error = None;
         }
     } else {
         let scroll_h = (ui.available_height() - 4.0).max(120.0);
@@ -352,6 +378,9 @@ fn editor_body(ui: &mut Ui, app: &mut NfcApp, stacked: bool) {
             });
         if inner.inner {
             app.forms.editor.dirty = true;
+            // 用户已在改内容：上次的载入失败不再是现状，收起失败条（至下次
+            // 载入为止，避免过期错误挂着误导）
+            app.forms.editor.load_error = None;
         }
     }
     if in_byte {
@@ -561,6 +590,8 @@ fn editor_footer(ui: &mut Ui, app: &mut NfcApp) {
                     // 否则停在字节视图时会继续看到修复前的内容（docs/02 §6.40）
                     app.forms.editor.rebuild_byte_view();
                     app.forms.editor.dirty = true;
+                    // 内容已修复改写：收起过期的载入失败条（同上方 dirty 处）
+                    app.forms.editor.load_error = None;
                     // 修复日志逐条写进控制台
                     for line in dumpcheck::fix_report(&items) {
                         app.state

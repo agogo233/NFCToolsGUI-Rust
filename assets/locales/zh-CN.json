@@ -334,5 +334,8 @@
     "html_acl_trailer_perm_4": "KeyA：读不出，可用 A 写 ｜ 权限表：用 A 能看、能改 ｜ KeyB：用 A 能看、能改（传输配置）",
     "html_acl_trailer_perm_5": "KeyA：读不出，可用 B 写 ｜ 权限表：A、B 都能看，B 能改 ｜ KeyB：读不出，可用 B 写",
     "html_acl_trailer_perm_6": "KeyA：读不出、不能写 ｜ 权限表：A、B 都能看，B 能改 ｜ KeyB：读不出、不能写",
-    "html_acl_trailer_perm_7": "完全锁死：KeyA、权限表、KeyB 都不能读、不能写"
+    "html_acl_trailer_perm_7": "完全锁死：KeyA、权限表、KeyB 都不能读、不能写",
+    "html_dump_load_failed": "转储载入失败：",
+    "html_dump_load_failed_hint": "转储文件缺失或结构不合法，可点「打开文件」重新选择",
+    "log_msg_dump_editor_opened": "转储编辑器已打开："
 }

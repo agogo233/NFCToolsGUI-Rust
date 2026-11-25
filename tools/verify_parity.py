@@ -202,6 +202,13 @@ SNAPSHOT_UI_EXTRA = {
 EDITOR_MERGE_EXTRA = {
     "dialog_msg_confirm_drop_edits",
 }
+# 编辑器载入失败可见化批次（docs/02 §6.49）：失败不清空 + 中栏失败条；
+# 「编辑转储」点击无可见变化时的确认事件。
+EDITOR_ERR_VISIBLE_EXTRA = {
+    "html_dump_load_failed",
+    "html_dump_load_failed_hint",
+    "log_msg_dump_editor_opened",
+}
 # S18 从「上游独有」挪回的 20 个 key：两版共有且文案逐字一致。
 S18_MIGRATED = {
     "dialog_msg_invalid_uid_input",
@@ -411,6 +418,7 @@ def h_i18n() -> None:
         + len(HARDENING_EXTRA)
         + len(SNAPSHOT_UI_EXTRA)
         + len(EDITOR_MERGE_EXTRA)
+        + len(EDITOR_ERR_VISIBLE_EXTRA)
     )
     check(
         len(keys) == 194 + extras,
@@ -445,6 +453,8 @@ def h_i18n() -> None:
         check(k in keys, f"H zh-CN 含加固 {k}")
     for k in SNAPSHOT_UI_EXTRA:
         check(k in keys, f"H zh-CN 含快照构建失败 {k}")
+    for k in EDITOR_ERR_VISIBLE_EXTRA:
+        check(k in keys, f"H zh-CN 含编辑器失败可见 {k}")
     check(not (REPO / "assets/locales/en.json").exists(), "H 无 en.json（仅中文决策）")
     body = rd(CORE / "src/serial.rs")
     used = set()
@@ -1196,8 +1206,8 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     # 按 ("名字", 标识符) 配对计数：标识符不一定以 `c_` 开头
     #（`case_phone_wristband` 就是一条），只数 `c_` 会少算 1 项。
     n_cases = len(re.findall(r'\(\s*\n?\s*"[^"]+",\s*\n?\s*[a-z][a-z0-9_]*\s*,?\s*\n?\s*\)', _vec))
-    check(n_cases == 104,
-          "S9-S19 UI selftest 104 项（79 原有 + S18 增 5 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1 + 连接收尾 cancel 1 + 重命名行渲染不提交 1 + 无门户收尾/重复回传 3 + R1 系统级关窗 1 + 导出空文件防护 1 + inputKeys 空输入 1 + 重命名同帧提交 1 + 无门户保存日志不留快照 1 + 界面改版 2 + stack 档滚动可见 1 + 编辑器合并 2）",
+    check(n_cases == 107,
+          "S9-S19 UI selftest 107 项（79 原有 + S18 增 5 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1 + 连接收尾 cancel 1 + 重命名行渲染不提交 1 + 无门户收尾/重复回传 3 + R1 系统级关窗 1 + 导出空文件防护 1 + inputKeys 空输入 1 + 重命名同帧提交 1 + 无门户保存日志不留快照 1 + 界面改版 2 + stack 档滚动可见 1 + 编辑器合并 2 + 编辑器失败可见 3）",
           f"实际 {n_cases}")
 
     # ── S10 dump 三面板 ──────────────────────────────────────────
@@ -1304,8 +1314,8 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     # selftest
     _vec2 = stf9[stf9.index("vec![") : stf9.index("];", stf9.index("vec!["))]
     n11 = len(re.findall(r'\(\s*\n?\s*"[^"]+",\s*\n?\s*[a-z][a-z0-9_]*\s*,?\s*\n?\s*\)', _vec2))
-    check(n11 == 104,
-          "S11-S19 UI selftest 104 项（含 S18 新增 5 项 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1 + 连接收尾 cancel 1 + 重命名行渲染不提交 1 + 无门户收尾/重复回传 3 + R1 系统级关窗 1 + 导出空文件防护 1 + inputKeys 空输入 1 + 重命名同帧提交 1 + 无门户保存日志不留快照 1 + 界面改版 2 + stack 档滚动可见 1 + 编辑器合并 2）",
+    check(n11 == 107,
+          "S11-S19 UI selftest 107 项（含 S18 新增 5 项 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1 + 连接收尾 cancel 1 + 重命名行渲染不提交 1 + 无门户收尾/重复回传 3 + R1 系统级关窗 1 + 导出空文件防护 1 + inputKeys 空输入 1 + 重命名同帧提交 1 + 无门户保存日志不留快照 1 + 界面改版 2 + stack 档滚动可见 1 + 编辑器合并 2 + 编辑器失败可见 3）",
           f"实际 {n11}")
 
     # ── S11-2 系统文件对话框 + 写卡接线 ───────────────────────────

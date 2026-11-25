@@ -747,7 +747,8 @@ impl NfcApp {
                 ("open-dump-folder", t("html_open_dump_folder"), None),
             ],
         ));
-        self.forms.editor = panels::EditorForm::default();
+        // 失败不清空：载入失败时保留编辑器已有内容，`load_error` 驱动中栏
+        // 失败条（docs/02 §6.49）；成功则切换为刚落的转储。
         self.load_dump_from_path(&path);
     }
 
@@ -987,6 +988,8 @@ impl NfcApp {
                 }
             }
             Err(e) => {
+                // 读不出文件同样留痕：中栏失败条与结构错误同源展示。
+                self.forms.editor.load_error = Some(format!("读取出错：{e}"));
                 self.push_event(EventKind::Error, &format!("{file_name}: {e}"));
                 false
             }
@@ -1016,36 +1019,78 @@ impl NfcApp {
                 }
             },
             Err(e) => {
+                // 读不出文件同样留痕：中栏失败条与结构错误同源展示。
+                self.forms.editor.load_error = Some(format!("读取出错：{e}"));
                 self.push_event(EventKind::Error, &format!("{e}"));
                 false
             }
         }
     }
 
-    /// 执行「重置编辑器表单 + 按载荷载入」（`open-dump-editor` 的实际动作）。
+    /// 执行「按载负载入」（`open-dump-editor` 的实际动作）。
     ///
     /// 载荷分流：含路径分隔符 → 完整路径（档案条「编辑转储」/ 文件框回传，
     /// 可在 dumpfiles/ 之外）；否则按裸文件名限定在 `dumpfiles/` 内（事件卡 /
     /// 历史 / 注册表入口，[`Self::load_dump_into_editor`] 内部有 `is_plain_name`
-    /// 防穿越）。不带载荷则只重置表单（工具菜单点开），空编辑器的「打开文件」
-    /// 按钮继续承担选文件入口。载入成功后 `scroll_to_editor` 由 load 链置位。
+    /// 防穿越）。不带载荷则保留编辑器当前内容（对标原版「打开浮窗看当前
+    /// 转储」语义）。
+    ///
+    /// **失败不清空**：载入失败时已有内容保留（`EditorForm::load_error` 驱动
+    /// 中栏失败条，见 docs/02 §6.49）。成功载入后若内容与点击前无变化
+    /// （宽档滚动定位又是 no-op），追加一句确认事件——点击零反馈是曾经的
+    /// 缺陷：用户点「编辑转储」看不到任何动静。
     fn do_open_dump_editor(&mut self, arg: Option<&str>) {
         match arg {
             // 完整路径：可在 dumpfiles/ 之外（档案条按钮 / 文件框回传）
             Some(a) if a.contains('/') || a.contains('\\') => {
-                self.forms.editor = panels::EditorForm::default();
-                self.load_dump_from_path(std::path::Path::new(a));
+                let path = std::path::Path::new(a);
+                let unchanged = self.editor_shows(path);
+                let ok = self.load_dump_from_path(path);
+                if ok && unchanged {
+                    self.notify_editor_opened();
+                }
             }
             // 裸名：限定 dumpfiles/（事件卡 / 历史 / 注册表 / 日志按钮）
             Some(name) => {
-                self.forms.editor = panels::EditorForm::default();
-                self.load_dump_into_editor(name);
+                let target = self.paths.dumpfiles_dir().join(name);
+                let unchanged = self.editor_shows(&target);
+                let ok = self.load_dump_into_editor(name);
+                if ok && unchanged {
+                    self.notify_editor_opened();
+                }
             }
-            // 无载荷：不开新文件，保留编辑器当前内容（对标原版「打开浮窗
-            // 看当前转储」语义），仅请求把视图滚到编辑器。
-            None => {}
+            // 无载荷：内容从不变化（保留当前 + 滚动定位），点击同样需要一句
+            // 确认（宽档下滚动是 no-op，否则零反馈）。
+            None => {
+                self.notify_editor_opened();
+            }
         }
         self.scroll_to_editor = true;
+    }
+
+    /// 编辑器当前显示的内容是否正是 `path`（来源相同且无未保存修改）。
+    ///
+    /// 磁盘仍会重新读入（磁盘为准，外部改过文件时内容会刷新）；此判定只
+    /// 用于「本次点击是否还有可见效果」的确认事件。
+    fn editor_shows(&self, path: &std::path::Path) -> bool {
+        !self.forms.editor.dirty && self.forms.editor.origin.as_deref() == Some(path)
+    }
+
+    /// 「打开编辑器」点击无可见变化时的一句确认。
+    ///
+    /// 文案取当前已载入的文件名（空编辑器为 `-`），与复制 UID / 保存成功
+    /// 的 Success 事件同一风格。
+    fn notify_editor_opened(&mut self) {
+        let name = self
+            .forms
+            .editor
+            .file_name
+            .clone()
+            .unwrap_or_else(|| "-".to_owned());
+        self.push_event(
+            EventKind::Success,
+            &format!("{}{name}", t("log_msg_dump_editor_opened")),
+        );
     }
 
     /// 把编辑器的当前内容写成二进制转储。返回是否落盘成功。

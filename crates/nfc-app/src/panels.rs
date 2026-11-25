@@ -457,6 +457,13 @@ pub struct EditorForm {
     /// 重排会让每次击键后光标跳回行首。故编辑后把原文存进来，下一帧原样
     /// 画回去；仅在切模式 / 载入 / 修复时重建。
     pub byte_view: Vec<String>,
+    /// 最近一次「载入」失败的原因（结构不合法 / 文件读不出）。
+    ///
+    /// 载入**失败不清空**编辑器后，`sectors` 可能仍显示上一份有效数据，
+    /// 失败必须独立可见：中栏编辑器据此在标题行下渲染失败条（与是否为
+    /// 空无关）。成功载入时清除；用户开始编辑 / 修复内容时一并收起（旧
+    /// 失败不再是现状），至下次载入前持续保留。
+    pub load_error: Option<String>,
 }
 
 /// 一行 32 hex → `00 01 02 03 ...`（大写、每字节之间空一格）。
@@ -478,12 +485,24 @@ fn to_byte_view_line(line: &str) -> String {
 impl EditorForm {
     /// 从 dump 字节载入（对标 `command.js:425-432` 的分组）。
     pub fn load(&mut self, name: Option<String>, bytes: &[u8]) -> Result<(), String> {
-        self.sectors = dump::to_sector_lines(bytes).map_err(|e| e.to_string())?;
+        let sectors = match dump::to_sector_lines(bytes) {
+            Ok(s) => s,
+            Err(e) => {
+                // 失败原因留在表单上（不 panic、不清空已有 sectors）：中栏
+                // 编辑器据此渲染失败条。
+                let msg = e.to_string();
+                self.load_error = Some(msg.clone());
+                return Err(msg);
+            }
+        };
+        self.sectors = sectors;
         self.file_name = name;
         self.dirty = false;
         // 载入新内容即作废旧来源：调用方按需重设 origin，避免 file_name 与
         // origin 指向不同文件（两处 `load_dump_*` 都在成功处赋 origin）。
         self.origin = None;
+        // 成功载入即清除上次失败提示
+        self.load_error = None;
         // 显示缓存随数据一起重建，否则切到字节视图会看到上一份 dump 的旧内容
         self.rebuild_byte_view();
         Ok(())

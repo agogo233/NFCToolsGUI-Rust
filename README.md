@@ -109,7 +109,7 @@ cargo run -p nfc-app --release
 
 ```bash
 cargo run -p nfc-core -- --selftest   # 14 项核心行为
-cargo run -p nfc-app  -- --selftest   # 102 项界面 + 接线（S8 主窗口 + S9 面板 + S10 三面板 + S11 接线 + S13 设备层，S14/S18/S19 另增，界面改版 + 体验优化）
+cargo run -p nfc-app  -- --selftest   # 107 项界面 + 接线（S8 主窗口 + S9 面板 + S10 三面板 + S11 接线 + S13 设备层，S14/S18/S19 另增，界面改版 + 体验优化 + 编辑器合并 + 编辑器失败可见 3）
 ```
 
 ### 平台依赖

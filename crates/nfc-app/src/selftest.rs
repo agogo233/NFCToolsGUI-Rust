@@ -159,6 +159,10 @@ pub fn run() -> eframe::Result {
         // ── 编辑器并入中栏（docs/02 §6.48）──
         ("编辑器入口分流（路径/裸名）", c_editor_open_dispatch),
         ("dirty 载入先确认", c_editor_dirty_confirm),
+        // ── 编辑器载入失败可见（docs/02 §6.49）──
+        ("载入失败不清空编辑器", c_editor_load_fail_keeps_content),
+        ("点击无变化出确认事件", c_editor_open_unchanged_feedback),
+        ("落盘收尾产物非法不清空", c_dump_saved_truncated_no_wipe),
     ];
 
     let total = cases.len();
@@ -530,6 +534,101 @@ fn c_editor_dirty_confirm() -> Result<(), String> {
     }
     if app.forms.editor.dirty {
         return Err("重新载入后不应仍是脏标记".into());
+    }
+    Ok(())
+}
+
+/// 编辑器失败可见（docs/02 §6.49）：载入失败不得清空已有内容，
+/// 且 `load_error` 必须置位（驱动中栏失败条）。
+fn c_editor_load_fail_keeps_content() -> Result<(), String> {
+    let (_d, mut app) = app_with_temp_dumps("editor-load-fail");
+    let target = app.paths.dumpfiles_dir().join("good.mfd");
+    std::fs::write(&target, vec![0u8; 1024]).unwrap();
+    app.exec("open-dump-editor", Some("good.mfd".to_owned()));
+    if app.forms.editor.sectors.len() != 16 {
+        return Err(format!(
+            "载入后应为 16 扇区，实际 {}",
+            app.forms.editor.sectors.len()
+        ));
+    }
+    // 模拟目标文件随后被截断 / 损坏（解卡产物不合法同款路径）
+    std::fs::write(&target, vec![0u8; 100]).unwrap();
+    app.exec("open-dump-editor", Some("good.mfd".to_owned()));
+    // 失败不清空：旧扇区保留
+    if app.forms.editor.sectors.len() != 16 {
+        return Err("载入失败后编辑器应保留旧扇区".into());
+    }
+    let err = app
+        .forms
+        .editor
+        .load_error
+        .as_deref()
+        .ok_or("载入失败后 load_error 应置位（中栏失败条）")?;
+    if !err.contains("整数倍") {
+        return Err(format!("load_error 文案应说明结构原因: {err}"));
+    }
+    Ok(())
+}
+
+/// 「编辑转储」点击无可见变化（目标即当前来源、无未保存修改）时
+/// 追加一句确认事件；内容变化时不重复提示（可见变化本身即反馈）。
+fn c_editor_open_unchanged_feedback() -> Result<(), String> {
+    let (_d, mut app) = app_with_temp_dumps("editor-unchanged");
+    let target = app.paths.dumpfiles_dir().join("same.mfd");
+    std::fs::write(&target, vec![0u8; 1024]).unwrap();
+    let opened = nfc_core::i18n::t("log_msg_dump_editor_opened");
+    // 首次打开：空编辑器 → 内容有变化 → 不应有确认事件
+    app.exec("open-dump-editor", Some("same.mfd".to_owned()));
+    if app.state.events.iter().any(|e| e.text.starts_with(&opened)) {
+        return Err("首次载入（内容有变化）不应产生确认事件".into());
+    }
+    // 同来源再点一次：内容不变 → 追加确认
+    app.exec("open-dump-editor", Some("same.mfd".to_owned()));
+    if !app
+        .state
+        .events
+        .iter()
+        .any(|e| e.kind == nfc_core::state::EventKind::Success && e.text.starts_with(&opened))
+    {
+        return Err("点击无变化时应追加确认事件".into());
+    }
+    if app.forms.editor.sectors.len() != 16 {
+        return Err("重新载入后内容应保持".into());
+    }
+    // 无载荷入口（工具菜单）同样给一句确认
+    app.exec("open-dump-editor", None);
+    let n = app
+        .state
+        .events
+        .iter()
+        .filter(|e| e.text.starts_with(&opened))
+        .count();
+    if n != 2 {
+        return Err(format!("确认事件应为 2 条，实际 {n}"));
+    }
+    Ok(())
+}
+
+/// 落盘收尾（`DumpSaved`）产物不合法：编辑器保留旧内容、来源不变、
+/// 失败原因留痕——不再「先清空、后静默失败」。
+fn c_dump_saved_truncated_no_wipe() -> Result<(), String> {
+    use nfc_core::state::Event;
+    let (_d, mut app) = app_with_temp_dumps("dump-saved-trunc");
+    let good = app.paths.dumpfiles_dir().join("good.mfd");
+    std::fs::write(&good, vec![0u8; 1024]).unwrap();
+    app.exec("open-dump-editor", Some("good.mfd".to_owned()));
+    // 模拟一次落盘收尾，产物被截断
+    let bad = _d.0.join("trunc.mfd");
+    std::fs::write(&bad, vec![0u8; 100]).unwrap();
+    app.apply(Event::DumpSaved(bad));
+    if app.forms.editor.sectors.len() != 16 {
+        return Err("新转储载入失败时旧扇区应保留".into());
+    }
+    if app.forms.editor.load_error.is_none() {
+        return Err("载入失败后 load_error 应置位（中栏失败条）".into());
+    }
+    if app.forms.editor.origin.as_ref() != Some(&good) {
+        return Err("载入失败后来源应保持上一份文件".into());
     }
     Ok(())
 }
