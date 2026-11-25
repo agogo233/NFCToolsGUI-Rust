@@ -117,9 +117,9 @@ fn card_context(ui: &mut Ui, app: &mut NfcApp) {
             // 顶对齐换行行：`horizontal_wrapped` 内部用 `Align::Center`（egui 0.36
             // 无 with_layout 变体），四列不等高（UID 列 16pt 大字 + 复制钮）时
             // 「UID / 卡型 / 检测 / 当前文件」标签行会高低错位。此处按其内部
-            // 同款 `allocate_ui_with_layout` + main_wrap 复刻，仅换 `Align::Top`：
+            // 同款 `allocate_ui_with_layout` + main_wrap 复刻，仅换 `Align::Min`：
             // 标签行与值行各自等高起排，换行后的每一行同样顶对齐。
-            let layout = Layout::left_to_right(Align::Top).with_main_wrap(true);
+            let layout = Layout::left_to_right(Align::Min).with_main_wrap(true);
             let initial_size = egui::vec2(
                 ui.available_size_before_wrap().x,
                 ui.spacing().interact_size.y,
