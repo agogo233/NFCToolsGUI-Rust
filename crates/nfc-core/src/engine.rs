@@ -1373,14 +1373,15 @@ impl Engine {
             ) {
                 (Ok(c), Ok(w)) => (c, w),
                 _ => {
+                    let src_s = src.to_string_lossy();
                     state.apply(Event::Log(format!(
-                        "\n{}: {src}\n",
+                        "\n{}: {src_s}\n",
                         crate::i18n::t("log_msg_write_aborted_dump_unreadable")
                     )));
                     state.apply(Event::EventItem {
                         kind: EventKind::Error,
                         text: format!(
-                            "{}: {src}",
+                            "{}: {src_s}",
                             crate::i18n::t("log_msg_write_aborted_dump_unreadable")
                         ),
                     });
@@ -1396,7 +1397,7 @@ impl Engine {
                 && cur != want
             {
                 let text = format!(
-                    "{}",
+                    "{}（当前 {}，源 {}）",
                     crate::i18n::t("log_msg_write_aborted_uid_mismatch"),
                     tasks::card_write::uid_prefix(&cur),
                     tasks::card_write::uid_prefix(&want)
@@ -2985,7 +2986,7 @@ mod tests {
         let mut e = Engine::new(Box::new(MockToolRunner::new(vec![]).with_exit(Some(0))));
         let mut st = connected();
         // 预置「上一张卡」的身份
-        st.current_uid = Some("a1b2c3d4");
+        st.current_uid = Some("a1b2c3d4".to_string());
         st.card_lost = false;
         let mut dlg = MockDialog::new();
         e.dispatch(Action::Plain("read-IC"), &mut st, &p, &mut dlg)

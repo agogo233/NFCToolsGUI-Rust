@@ -173,7 +173,7 @@
     "log_msg_write_failed": "写卡失败",
     "log_msg_write_incomplete": "写入不完整，未写回全部数据块",
     "log_msg_write_success": "写卡成功",
-    "log_msg_write_aborted_uid_mismatch": "写卡已中止：当前卡 UID（{}）与转储 UID（{}）不一致；如确需跨卡克隆，请使用 CUID 写入",
+    "log_msg_write_aborted_uid_mismatch": "写卡已中止：当前卡与转储源不是同一张卡；如确需跨卡克隆，请使用 CUID 写入",
     "log_msg_write_aborted_dump_unreadable": "写卡已中止：无法读取转储文件 0 块",
     "log_msg_cancel_kept_temp": "已取消；本次读到的卡数据仍保留在临时文件",
     "log_msg_editor_origin_detached": "当前转储文件已被删除：编辑器内容保留，已解除来源关联（保存请另存为新名）",
