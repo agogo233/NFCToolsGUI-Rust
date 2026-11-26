@@ -405,10 +405,10 @@ pub struct Forms {
     ///
     /// 对标 `dumpHistory.js:29-53`：点铅笔后文件名变输入框，回车或失焦提交。
     /// egui 侧失焦用 `Response::lost_focus()`、回车查 `ui.input()`，两者皆可，
-    /// 另加一个「✓」按钮作为鼠标用户的后备（egui 的
+    /// 另加一个「确定」按钮作为鼠标用户的后备（egui 的
     /// `key_pressed(Enter)` 在 `TextEdit` 内不一定被识别为提交）。
     pub history_rename: Option<(String, String)>,
-    /// S11-2：点「✎」后下一帧让重命名输入框自动获焦。
+    /// S11-2：点「重命名」后下一帧让重命名输入框自动获焦。
     ///
     /// egui 不会把当帧的鼠标点击转成新控件的聚焦请求（控件是下一帧才画出来
     /// 的），否则用户得先点铅笔、再点一次输入框才能开始打字。
@@ -658,7 +658,7 @@ pub fn commit_rename_for_test(dir: &std::path::Path, old: &str, new: &str, app: 
 
 /// 重命名输入框本帧的三方交互 → 该做什么。
 ///
-/// 三个信号在同一帧可能**同时**成立，尤其是「点 ✓」：按钮拿到焦点会让
+/// 三个信号在同一帧可能**同时**成立，尤其是点「确定」：按钮拿到焦点会让
 /// TextEdit 失焦，于是 `lost_focus` 与 `confirm` 同为真。旧实现先按
 /// `lost_focus` 提交、再按 `confirm` 提交，第二次 `Option::take` 取到
 /// `None` 把结果覆盖掉，重命名被静默丢弃。此处把优先级定死：
@@ -1590,7 +1590,7 @@ fn dump_history(ui: &mut Ui, app: &mut NfcApp) -> bool {
             .show(ui, |ui| {
                 for f in &files {
                     // 一行一项（勾选 + 名字 + 操作按钮）。外层是竖排，若不套
-                    // horizontal，✎ / 输入框 / ✓✗ 会各占一行，像断开的碎片。
+                    // horizontal，「重命名」/ 输入框 /「确定」「取消」会各占一行，像断开的碎片。
                     ui.horizontal(|ui| {
                         let sel = app.forms.history_selected.iter().any(|s| s == f);
                         let mut checked = sel;
@@ -1620,17 +1620,17 @@ fn dump_history(ui: &mut Ui, app: &mut NfcApp) -> bool {
                                 let autofocus = app.forms.history_focus_request
                                     && !ui.input(|i| i.pointer.any_click());
                                 app.forms.history_focus_request = false;
-                                // 留出尾部 ✓/✗ 两个小按钮的位置，避免输入框越界压住按钮。
-                                let width = (ui.available_width() - 60.0).max(80.0);
+                                // 留出尾部「确定」「取消」两个文字按钮的位置，避免输入框越界压住按钮。
+                                let width = (ui.available_width() - 110.0).max(80.0);
                                 let r =
                                     ui.add(egui::TextEdit::singleline(text).desired_width(width));
                                 if autofocus {
                                     r.request_focus();
                                 }
-                                // 先取按钮结果、再判失焦：点 ✗ 会让输入框同一帧失焦，
+                                // 先取按钮结果、再判失焦：点「取消」会让输入框同一帧失焦，
                                 // 判定在前会把「取消」误当成提交（blur 提交本身对标原版）。
-                                let confirm = ui.small_button("✓").clicked();
-                                let cancel = ui.small_button("✗").clicked();
+                                let confirm = ui.small_button(t("dialog_button_ok")).clicked();
+                                let cancel = ui.small_button(t("dialog_button_cancel")).clicked();
                                 // 三方信号同帧成立的顺序问题见 `rename_intent` 的文档。
                                 match rename_intent(
                                     r.lost_focus(),
@@ -1647,11 +1647,7 @@ fn dump_history(ui: &mut Ui, app: &mut NfcApp) -> bool {
                                     RenameIntent::None => {}
                                 }
                             }
-                        } else if ui
-                            .small_button("✎")
-                            .on_hover_text(t("html_rename"))
-                            .clicked()
-                        {
+                        } else if ui.small_button(t("html_rename")).clicked() {
                             app.forms.history_rename = Some((f.clone(), f.clone()));
                             app.forms.history_focus_request = true;
                         }

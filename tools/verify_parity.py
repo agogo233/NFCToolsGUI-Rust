@@ -2007,6 +2007,116 @@ def safety_guard() -> None:
         check(f"fn {t}" in eng, f"P0 引擎测试存在: {t}")
 
 
+# ---------------------------------------------------------------- R3 UI 字形守卫
+
+# §6.44 P3 / §6.52：UI 字符串不得含无字形覆盖的 Dingbat（豆腐块回归）。
+# 禁用区间按数值定义（不在本文件嵌入字形字符）：Dingbat 整块 + U+29C9
+# （P3 复制按钮 ⧉ 同源）；→(U+2192) / √(U+221A) / ×(U+00D7) 等有覆盖的
+# 符号在区外，放行。
+_FORBIDDEN_GLYPH = set(range(0x2700, 0x27C0)) | {0x29C9}
+# Rust 转义形式（仅普通串/字符字面量生效，原始串不处理转义）：
+# `\u{270E}`（大括号）/ `\u270E`（4 位 hex）/ `\U0000270E`（8 位 hex）。
+# 守卫须解码三种形式，否则 `"\u270E"` 能绕过门禁。
+_GLYPH_ESC_RE = re.compile(
+    r"\\u\{([0-9a-fA-F]+)\}|\\u([0-9a-fA-F]{4})|\\U([0-9a-fA-F]{8})"
+)
+
+
+def _string_spans(src: str) -> list[tuple[str, int, int]]:
+    """单遍扫描 Rust 源码，返回 (kind, start, end) 字符串/字符字面量区间（不含引号）。
+
+    必须单遍状态机、不能「先剥注释再提字符串」：字面量可能含 `//`
+    （`"https://…"` 等 URL），先剥会损坏字面量；`//` / `/* */` 只在
+    非字符串内才当注释。kind: 'str' 普通串 / 'raw' 原始串 / 'char' 字符。
+    """
+    spans: list[tuple[str, int, int]] = []
+    i, n = 0, len(src)
+    while i < n:
+        c = src[i]
+        if c == "/" and i + 1 < n:
+            if src[i + 1] == "/":
+                j = src.find("\n", i)
+                i = n if j < 0 else j
+                continue
+            if src[i + 1] == "*":
+                j = src.find("*/", i + 2)
+                i = n if j < 0 else j + 2
+                continue
+        m = re.match(r'r(#+)"', src[i:]) if c == "r" else None
+        if m:
+            close = m.group(1) + '"'
+            j = src.find(close, i + len(m.group(0)))
+            end = j + len(close) if j >= 0 else n
+            spans.append(("raw", i + len(m.group(0)), end - 1))
+            i = end
+            continue
+        if c == '"':
+            j = i + 1
+            while j < n:
+                if src[j] == "\\":
+                    j += 2
+                    continue
+                if src[j] == '"':
+                    break
+                j += 1
+            spans.append(("str", i + 1, j))
+            i = j + 1
+            continue
+        if c == "'":
+            # 字符字面量 'x' / '\n' / '\u{…}'；生命周期 'a / 'static 不是字面量，
+            # 误判会让 span 漂移到下一个 ' 处、把中间注释/代码吞成「字符体」。
+            is_char_lit = False
+            if i + 1 < n and src[i + 1] == "\\":
+                is_char_lit = True
+            elif i + 2 < n and src[i + 1] != "'" and src[i + 2] == "'":
+                is_char_lit = True
+            if is_char_lit:
+                j = i + 1
+                while j < n and src[j] != "'":
+                    if src[j] == "\\":
+                        j += 1
+                    j += 1
+                spans.append(("char", i + 1, j))
+                i = j + 1
+                continue
+            i += 1
+            continue
+        i += 1
+    return spans
+
+
+def ui_glyph_guard() -> None:
+    """§6.52：nfc-app / nfc-core 的字符串字面量不得含 Dingbat(U+2700–U+27BF) / U+29C9。
+
+    应用只注册内嵌 SourceCodePro + 运行时探测 CJK 字体，不回落系统字体，
+    缺字形渲染成 notdef 豆腐块（§6.44 P3 的 ⧉ 复制按钮已发生过一次）；
+    本守卫把「UI 用文字而非无字形图标」钉成静态门禁。
+    """
+    hits: list[str] = []
+    files = sorted(APP.glob("src/**/*.rs")) + sorted(CORE.glob("src/**/*.rs"))
+    for f in files:
+        src = rd(f)
+        for kind, s, e in _string_spans(src):
+            body = src[s:e]
+            bad = sorted({ch for ch in body if ord(ch) in _FORBIDDEN_GLYPH})
+            # 防转义绕过：解码 `\u{…}` / `\u…`(4hex) / `\U…`(8hex) 后同判。
+            # 仅普通串/字符字面量做转义解码——原始串不处理转义，`r"\u{…}"` 是字面
+            # 文本、不会渲染成 Dingbat，判它属误报。
+            if kind != "raw":
+                for m in _GLYPH_ESC_RE.finditer(body):
+                    code = m.group(1) or m.group(2) or m.group(3)
+                    if code and int(code, 16) in _FORBIDDEN_GLYPH:
+                        bad.append(m.group(0))
+            if bad:
+                line = src.count("\n", 0, s) + 1
+                hits.append(f"{f.relative_to(REPO)}:{line} ({kind}) {''.join(bad)!r}")
+    check(
+        not hits,
+        "R 字符串字面量不含 Dingbat/U+29C9 码点（豆腐块回归守卫，§6.44 P3 同类）",
+        "; ".join(hits[:8]),
+    )
+
+
 def main() -> int:
     for fn in (
         a_agents_doc,
@@ -2024,6 +2134,7 @@ def main() -> int:
         s4_model,
         s14_phw,
         safety_guard,
+        ui_glyph_guard,
     ):
         try:
             fn()

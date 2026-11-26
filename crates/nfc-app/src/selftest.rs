@@ -120,7 +120,7 @@ pub fn run() -> eframe::Result {
         ("重命名提交", c_history_rename),
         ("重命名行渲染不提交", c_history_rename_render),
         (
-            "重命名 点✓与失焦同帧只提交一次",
+            "重命名 点「确定」与失焦同帧只提交一次",
             c_history_rename_commit_once,
         ),
         ("comparator 从历史载入两侧", c_comparator_from_history),
@@ -3234,7 +3234,7 @@ fn c_history_rename_commit_once() -> Result<(), String> {
     use panels::{rename_intent, RenameIntent};
     // ✓ 与失焦同帧 → 仍只承诺「提交一次」
     if rename_intent(true, false, true, false) != RenameIntent::Commit {
-        return Err("点✓与失焦同帧应判提交".into());
+        return Err("点「确定」与失焦同帧应判提交".into());
     }
     // 取消优先于一切（点 ✗ 也会让输入框失焦）
     if rename_intent(true, false, false, true) != RenameIntent::Cancel {
