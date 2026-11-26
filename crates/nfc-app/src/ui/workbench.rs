@@ -222,7 +222,7 @@ fn card_context(ui: &mut Ui, app: &mut NfcApp) {
             // 不能裸 `with_layout`：横向 + 非换行 + cross_align=Center 的行在
             // egui 里会把行高撑满剩余可用高度（`next_frame_ignore_wrap` 的
             // 填充逻辑 + 整帧 min_rect 扩到整行框），档案条 Frame 随之占满
-            // 中栏，扇区编辑器被排到视口外（docs/02 §6.52）。先分配定高
+            // 中栏，扇区编辑器被排到视口外（docs/02 §6.53）。先分配定高
             // 一行再在其中右对齐——与上方信息行同一修法。
             ui.allocate_ui_with_layout(
                 egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
@@ -409,14 +409,29 @@ fn editor_body(ui: &mut Ui, app: &mut NfcApp, stacked: bool) {
             // 载入为止，避免过期错误挂着误导）
             app.forms.editor.load_error = None;
         }
+        check_report_box(
+            ui,
+            paint,
+            &dumpcheck::check_report(&app.forms.editor.sectors),
+        );
     } else {
-        let scroll_h = (ui.available_height() - 4.0).max(120.0);
+        // 宽档：编辑器高度固定，滚动区必须给底部「文件条 + 按钮行」预留高度
+        // （最多两行 ≈ 120px），否则吃掉全部剩余高度，把 footer 排到面板
+        // 底边之外被裁剪（真机：解卡后编辑器有扇区块、没有保存/写卡按钮，
+        // docs/02 §6.53）。体检结果区随滚动区末尾，与扇区行一起滚动。
+        let scroll_h = (ui.available_height() - 120.0).max(120.0);
         let inner = ScrollArea::vertical()
             .id_salt("sector-edit")
             .max_height(scroll_h)
             .auto_shrink([false, true])
             .show(ui, |ui| {
-                sector_edit_rows(ui, app, editor_is_1k, in_byte, &mut byte_view_buf)
+                let dirty = sector_edit_rows(ui, app, editor_is_1k, in_byte, &mut byte_view_buf);
+                check_report_box(
+                    ui,
+                    paint,
+                    &dumpcheck::check_report(&app.forms.editor.sectors),
+                );
+                dirty
             });
         if inner.inner {
             app.forms.editor.dirty = true;
@@ -428,31 +443,34 @@ fn editor_body(ui: &mut Ui, app: &mut NfcApp, stacked: bool) {
     if in_byte {
         app.forms.editor.byte_view = byte_view_buf;
     }
-    // S18：体检结果区——逐条列出问题 / 值块 / 未发现。
-    //
-    // 这里**每帧按当前 `sectors` 实时计算**，不缓存「上次点按钮的结果」：
-    // 编辑内容一变结论就变，缓存反而会让用户看到过期结论。代价是每帧一次
-    // O(卡容量) 的纯计算，对 1K/4K 可忽略。
-    let check_lines = nfc_core::model::dumpcheck::check_report(&app.forms.editor.sectors);
-    if !check_lines.is_empty() {
-        ui.add_space(4.0);
-        Frame::NONE
-            .fill(paint.color(paint.surface2))
-            .corner_radius(egui::CornerRadius::same(4))
-            .inner_margin(egui::Margin::symmetric(8, 6))
-            .show(ui, |ui| {
-                for line in &check_lines {
-                    // 以「!」开头的问题行用危险色，其余（值块 / 未发现）正常色
-                    let color = if line.starts_with('!') {
-                        paint.color(paint.danger)
-                    } else {
-                        paint.color(paint.text)
-                    };
-                    ui.label(RichText::new(line.clone()).size(12.0).color(color));
-                }
-            });
-    }
     editor_footer(ui, app);
+}
+
+/// S18：体检结果区——逐条列出问题 / 值块 / 未发现。
+///
+/// 这里**每帧按当前 `sectors` 实时计算**（调用方传结果），不缓存「上次点
+/// 按钮的结果」：编辑内容一变结论就变，缓存反而会让用户看到过期结论。
+/// 代价是每帧一次 O(卡容量) 的纯计算，对 1K/4K 可忽略。
+fn check_report_box(ui: &mut Ui, paint: crate::theme_ui::Paint, lines: &[String]) {
+    if lines.is_empty() {
+        return;
+    }
+    ui.add_space(4.0);
+    Frame::NONE
+        .fill(paint.color(paint.surface2))
+        .corner_radius(egui::CornerRadius::same(4))
+        .inner_margin(egui::Margin::symmetric(8, 6))
+        .show(ui, |ui| {
+            for line in lines {
+                // 以「!」开头的问题行用危险色，其余（值块 / 未发现）正常色
+                let color = if line.starts_with('!') {
+                    paint.color(paint.danger)
+                } else {
+                    paint.color(paint.text)
+                };
+                ui.label(RichText::new(line.clone()).size(12.0).color(color));
+            }
+        });
 }
 
 /// 逐扇区编辑框（原浮窗 `dump_editor` 的编辑区）。返回本帧是否有改动。

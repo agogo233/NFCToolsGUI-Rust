@@ -473,12 +473,15 @@ fn c_stack_tier_scroll_sees_editor() -> Result<(), String> {
     Ok(())
 }
 
-/// 宽档（≥820）编辑器视口回归：档案条按钮行必须定高。
+/// 宽档（≥820）编辑器视口回归：解卡保存后中栏编辑器必须出现。
 ///
-/// 裸 `with_layout`（`Align::Center`）会把该行撑满中栏剩余高度，档案条
-/// 占满整列、扇区编辑器整卡被排到视口外（真机：解卡保存后中栏只剩卡片
-/// 档案条）。宽档无外层滚动区，被排出去就再也看不到——用 AccessKit
-/// 节点坐标直接断言编辑器标题在屏幕内（Label 角色文本存节点 `value`）。
+/// 历史上两个布局成因都会把编辑器挤出视口：①档案条按钮行裸
+/// `with_layout`（`Align::Center` 撑满剩余高度），整卡下移；②宽档滚动区
+/// 吃掉全部剩余高度，底部「文件条 + 按钮行」（含「打开文件」）被排到
+/// 面板底边之外（docs/02 §6.53）。宽档无外层滚动区，被排出去就永远
+/// 看不见——用 AccessKit 节点坐标断言编辑器标题（Label 角色，文本存
+/// 节点 `value`）与「打开文件」按钮（Button 角色，文本存 `label`）
+/// 都在 1280x800 屏幕内。
 fn c_wide_tier_editor_in_viewport() -> Result<(), String> {
     let mut app = NfcApp::new(nfc_core::state::AppState::new());
     let mut bytes = vec![0u8; 1024];
@@ -516,6 +519,21 @@ fn c_wide_tier_editor_in_viewport() -> Result<(), String> {
     if bounds.y0 < 0.0 || bounds.y1 > 800.0 {
         return Err(format!(
             "宽档编辑器标题在视口外：y={bounds.y0}..{bounds.y1}（屏幕高 800）"
+        ));
+    }
+    let open = nfc_core::i18n::t("html_open_file");
+    let node = update
+        .nodes
+        .iter()
+        .map(|(_, n)| n)
+        .find(|n| n.label() == Some(open.as_str()))
+        .ok_or_else(|| format!("未找到「{open}」无障碍节点"))?;
+    let bounds = node
+        .bounds()
+        .ok_or_else(|| format!("「{open}」节点无 bounds"))?;
+    if bounds.y0 < 0.0 || bounds.y1 > 800.0 {
+        return Err(format!(
+            "编辑器「{open}」按钮在视口外：y={bounds.y0}..{bounds.y1}（屏幕高 800）"
         ));
     }
     Ok(())
