@@ -482,6 +482,7 @@ mod tests {
             Event::DictFileName(_) => "DictFileName",
             Event::SavedBinary { .. } => "SavedBinary",
             Event::TaskDone { .. } => "TaskDone",
+            Event::CardContextInvalidated => "CardContextInvalidated",
         }
     }
 

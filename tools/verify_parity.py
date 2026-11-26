@@ -209,6 +209,19 @@ EDITOR_ERR_VISIBLE_EXTRA = {
     "html_dump_load_failed_hint",
     "log_msg_dump_editor_opened",
 }
+# 跨卡误写防护批次（docs/02 §6，P0–P3）：写卡 UID 硬闸 / 失卡复位 /
+# 非法转储预检 / 导出判空 / 门禁前置 / 删除后编辑器失联 等文案。
+SAFETY_GUARD_EXTRA = {
+    "log_msg_read_failed_context_reset",
+    "log_msg_dump_file_bad_layout",
+    "log_msg_write_aborted_uid_mismatch",
+    "log_msg_write_aborted_dump_unreadable",
+    "log_msg_cancel_kept_temp",
+    "log_msg_editor_origin_detached",
+    "html_detect_current_card",
+    "html_tip_detect_maybe_other_card",
+    "html_tip_write_uid_mismatch",
+}
 # S18 从「上游独有」挪回的 20 个 key：两版共有且文案逐字一致。
 S18_MIGRATED = {
     "dialog_msg_invalid_uid_input",
@@ -419,6 +432,7 @@ def h_i18n() -> None:
         + len(SNAPSHOT_UI_EXTRA)
         + len(EDITOR_MERGE_EXTRA)
         + len(EDITOR_ERR_VISIBLE_EXTRA)
+        + len(SAFETY_GUARD_EXTRA)
     )
     check(
         len(keys) == 194 + extras,
@@ -455,6 +469,8 @@ def h_i18n() -> None:
         check(k in keys, f"H zh-CN 含快照构建失败 {k}")
     for k in EDITOR_ERR_VISIBLE_EXTRA:
         check(k in keys, f"H zh-CN 含编辑器失败可见 {k}")
+    for k in SAFETY_GUARD_EXTRA:
+        check(k in keys, f"H zh-CN 含跨卡误写防护 {k}")
     check(not (REPO / "assets/locales/en.json").exists(), "H 无 en.json（仅中文决策）")
     body = rd(CORE / "src/serial.rs")
     used = set()
@@ -1061,7 +1077,7 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     # 测试数
     s6s7_units = sum(rd(CORE / f"src/{f}").count("#[test]")
                      for f in ["tasks/card_write.rs", "tasks/hard_nested.rs", "tasks/dict_test.rs"])
-    check(s6s7_units == 79, "S6/S7 新增 79 个单测（含 S17/S18 增量 + S19 的 uid_prefix/非hex 判定 + found_key 进展判据 + format-card 确认/取消与文案 2 项）", f"实际 {s6s7_units}")
+    check(s6s7_units == 82, "S6/S7 新增 82 个单测（含 S17/S18 增量 + S19 的 uid_prefix/非hex 判定 + found_key 进展判据 + format-card 确认/取消与文案 2 项 + P0 写卡预检/UID 归一化 3 项）", f"实际 {s6s7_units}")
     ints2 = rd(CORE / "tests/integration.rs")
     check(ints2.count("#[test]") == 58, "S6/S7 后集成测试 58", f"实际 {ints2.count('#[test]')}")
     check(ints2.count("fn s6_") == 7 and ints2.count("fn s7_") == 4, "S6/S7 新增 11 个集成测试",
@@ -1206,8 +1222,8 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     # 按 ("名字", 标识符) 配对计数：标识符不一定以 `c_` 开头
     #（`case_phone_wristband` 就是一条），只数 `c_` 会少算 1 项。
     n_cases = len(re.findall(r'\(\s*\n?\s*"[^"]+",\s*\n?\s*[a-z][a-z0-9_]*\s*,?\s*\n?\s*\)', _vec))
-    check(n_cases == 107,
-          "S9-S19 UI selftest 107 项（79 原有 + S18 增 5 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1 + 连接收尾 cancel 1 + 重命名行渲染不提交 1 + 无门户收尾/重复回传 3 + R1 系统级关窗 1 + 导出空文件防护 1 + inputKeys 空输入 1 + 重命名同帧提交 1 + 无门户保存日志不留快照 1 + 界面改版 2 + stack 档滚动可见 1 + 编辑器合并 2 + 编辑器失败可见 3）",
+    check(n_cases == 114,
+          "S9-S19 UI selftest 114 项（107 原有 + P0 失卡清档/UID 不符 2 + P1 打开文件 dirty 确认 1 + P2 写卡源缺失/非法转储无写卡入口 2 + P3 导出判空/门禁前置 2）",
           f"实际 {n_cases}")
 
     # ── S10 dump 三面板 ──────────────────────────────────────────
@@ -1314,8 +1330,8 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     # selftest
     _vec2 = stf9[stf9.index("vec![") : stf9.index("];", stf9.index("vec!["))]
     n11 = len(re.findall(r'\(\s*\n?\s*"[^"]+",\s*\n?\s*[a-z][a-z0-9_]*\s*,?\s*\n?\s*\)', _vec2))
-    check(n11 == 107,
-          "S11-S19 UI selftest 107 项（含 S18 新增 5 项 + 字典接线/引导直达/路径穿越 3 + 主题双桶 1 + 连接收尾 cancel 1 + 重命名行渲染不提交 1 + 无门户收尾/重复回传 3 + R1 系统级关窗 1 + 导出空文件防护 1 + inputKeys 空输入 1 + 重命名同帧提交 1 + 无门户保存日志不留快照 1 + 界面改版 2 + stack 档滚动可见 1 + 编辑器合并 2 + 编辑器失败可见 3）",
+    check(n11 == 114,
+          "S11-S19 UI selftest 114 项（107 原有 + P0 失卡清档/UID 不符 2 + P1 打开文件 dirty 确认 1 + P2 写卡源缺失/非法转储无写卡入口 2 + P3 导出判空/门禁前置 2）",
           f"实际 {n11}")
 
     # ── S11-2 系统文件对话框 + 写卡接线 ───────────────────────────
@@ -1942,6 +1958,55 @@ def s14_phw() -> None:
     check("block0_bcc_ok" in phw, "S14 数据层有 BCC 校验")
 
 
+def safety_guard() -> None:
+    """P0–P3 跨卡误写防护批次：钉死 Rust 侧安全不变量（docs/02 §6）。"""
+    eng = rd(CORE / "src/engine.rs")
+    st = rd(CORE / "src/state.rs")
+    cw = rd(CORE / "src/tasks/card_write.rs")
+    ap = rd(APP / "src/app.rs")
+    wb = rd(APP / "src/ui/workbench.rs")
+    # P0-A 引擎硬闸：备份段结束后比对当前卡与源转储的 block0，不一致中止。
+    check("source: Option<std::path::PathBuf>" in eng, "P0 NextStage 携带写卡源 dump")
+    _nss = eng[eng.index("fn start_next_stage"):]
+    check("log_msg_write_aborted_uid_mismatch" in _nss,
+          "P0 start_next_stage 有 UID 不一致硬闸")
+    check("read_block0_hex(&temp)" in _nss and "read_block0_hex(src)" in _nss,
+          "P0 硬闸比对备份卡与源转储 block0")
+    check("source: Some(src.clone())" in eng, "P0 write-IC 传 source 给硬闸")
+    # P0-B 失卡复位：读卡失败 → CardContextInvalidated（清 current_uid / 置 card_lost）。
+    check("CardContextInvalidated" in st, "P0 Event 有 CardContextInvalidated")
+    check("pub current_uid: Option<String>" in st and "pub card_lost: bool" in st,
+          "P0 AppState 跟踪当前卡身份 + 失卡标志")
+    check("state.apply(Event::CardContextInvalidated)" in eng,
+          "P0 引擎读卡失败发出 CardContextInvalidated")
+    check("fn sync_card_context" in ap and "card_lost" in ap,
+          "P0 app 每帧按失卡/身份不符清卡片档案")
+    check("uid_cmp: String" in wb, "P0 卡片快照带 UID 比对键")
+    # P1 编辑器「打开文件」走 dirty 确认（与档案条同源）。
+    check("fn request_open_dump_editor" in ap, "P1 统一编辑器载入入口")
+    _cho = ap[ap.index('"dump-editor-choose-file"'):]
+    check("request_open_dump_editor(Some(p))" in _cho,
+          "P1 打开文件带参入口走 dirty 确认")
+    # P2 写卡预检：源文件缺失/空/非 64 倍数不启动两段流程。
+    check("pub fn dump_file_failure" in cw and "pub fn uid_cmp_hex" in cw,
+          "P2 card_write 提供文件预检 + UID 归一化")
+    check("dump_file_failure(&src)" in eng, "P2 引擎写卡/写CUID 前置文件预检")
+    _wic = ap[ap.index('"write-IC"'):]
+    check("dump_file_failure(&resolved)" in _wic, "P2 app 写卡确认前预检源文件")
+    # P3 体验项：导出判空 + 门禁前置 + 删除后编辑器失联。
+    check("fn precheck_gate" in ap, "P3 危险动作确认前门禁预检")
+    _exp = ap[ap.index('"dump-editor-export-keys"'):]
+    check("key_dict(&self.forms.editor.sectors).is_empty()" in _exp,
+          "P3 导出密钥前置判空")
+    check("fn detach_deleted_editor_origin" in ap, "P3 删除命中编辑器来源时解绑")
+    # 关键引擎测试存在（防回归用例被删）
+    for t in ("write_ic_uid_mismatch_aborts_second_stage",
+              "write_ic_bad_source_layout_rejected_at_dispatch",
+              "read_ic_empty_dump_invalidates_context",
+              "read_ic_success_sets_current_uid"):
+        check(f"fn {t}" in eng, f"P0 引擎测试存在: {t}")
+
+
 def main() -> int:
     for fn in (
         a_agents_doc,
@@ -1958,6 +2023,7 @@ def main() -> int:
         n_generic,
         s4_model,
         s14_phw,
+        safety_guard,
     ):
         try:
             fn()

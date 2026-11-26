@@ -347,8 +347,32 @@ impl NfcApp {
         self.mfcuk_progress = self.engine.mfcuk_progress();
     }
 
+    /// P0（docs/02 §6）：读卡失败（`card_lost`）后清空卡片档案 / 引导条并出
+    /// 一次事件（数据仍在历史 / `dumpfiles/` 中，可重新打开）。
+    ///
+    /// **只**按 `card_lost` 清，不按 `current_uid` 与档案的临时失配清：成功读到
+    /// 另一张卡时 `on_dump_saved_ui` 会重建档案，此刻清档只会造成「档案短暂
+    /// 空态 + 误导错误事件」；真正的危险场景（换卡未读卡）`current_uid` 陈旧、
+    /// 失配也发现不了，由引擎 `start_next_stage` 硬闸兜底。
+    fn sync_card_context(&mut self) {
+        if !self.state.card_lost {
+            return;
+        }
+        if self.card_snapshot.is_none() {
+            return;
+        }
+        self.card_snapshot = None;
+        self.guidance = None;
+        self.push_event(EventKind::Error, &t("log_msg_read_failed_context_reset"));
+    }
+
     /// 派发单个动作：预置本次批准 → dispatch → 清空批准。
     fn dispatch_one(&mut self, action: Action) {
+        // P3：删除可能命中编辑器当前文件，先记下名单，dispatch 后同步 origin。
+        let deleted_names = match &action {
+            Action::DeleteDumps(names) => Some(names.clone()),
+            _ => None,
+        };
         let r = self
             .engine
             .dispatch(action, &mut self.state, &self.paths, &mut self.dialogs);
@@ -357,9 +381,36 @@ impl NfcApp {
         if let Err(e) = r {
             self.on_dispatch_error(&e);
         }
+        if let Some(names) = deleted_names {
+            self.detach_deleted_editor_origin(&names);
+        }
         // 写卡组状态点 / mfcuk 进度：统一在 tick 的 sync_task_flags 里
         // 从 engine 最新状态派生（pump 产生的日志不经过本函数）。
         self.sync_task_flags();
+    }
+
+    /// P3（docs/02 §6）：编辑器的「当前文件」被历史面板删除时，解除 `origin` /
+    /// `file_name` 关联（内容保留）——否则「保存」会按旧名把删掉的文件悄悄
+    /// 重建。用户可另存新名。
+    fn detach_deleted_editor_origin(&mut self, names: &[String]) {
+        let Some(origin) = self.forms.editor.origin.clone() else {
+            return;
+        };
+        let dir = self.paths.dumpfiles_dir();
+        // 仅当文件**确实不在了**才解绑：删除没成功（文件仍在）时保持来源，
+        // 否则「保存」会写到 dumpfiles/<默认名> 而非用户还看着的那份文件。
+        if names.iter().any(|n| {
+            let p = dir.join(n);
+            origin == p && !p.exists()
+        }) {
+            self.forms.editor.origin = None;
+            self.forms.editor.file_name = None;
+            self.state.apply(Event::Log(format!(
+                "\n{}\n",
+                t("log_msg_editor_origin_detached")
+            )));
+            self.push_event(EventKind::Success, &t("log_msg_editor_origin_detached"));
+        }
     }
 
     /// 把 engine 挂起的保存请求投递去弹框（每帧一次）。
@@ -523,9 +574,10 @@ impl NfcApp {
             }
             // command.js:423-432：读进来按 32 hex 切块、每 4 块一扇区。
             // 传**完整路径**：用户在文件框选的 dump 可能在 dumpfiles 之外，
-            // 「保存」须写回原文件（P2-4）。
+            // 「保存」须写回原文件（P2-4）。P1：与档案条「编辑转储」同源——
+            // 有未保存更改先弹丢弃确认，不再静默覆盖（docs/02 §6.48）。
             dialogs_host::FilePurpose::EditorFile => {
-                self.load_dump_from_path(&path);
+                self.request_open_dump_editor(Some(path.to_string_lossy().into_owned()));
             }
             // command.js:449-458：另存为
             dialogs_host::FilePurpose::EditorSaveAs => {
@@ -738,15 +790,17 @@ impl NfcApp {
                 ),
             );
         }
+        let has_snap = snap.is_some();
         self.card_snapshot = snap;
         self.write_done = false;
-        self.guidance = Some((
-            name,
-            vec![
-                ("write-IC", t("html_write_this_dump"), dump_arg),
-                ("open-dump-folder", t("html_open_dump_folder"), None),
-            ],
-        ));
+        // P2（docs/02 §6）：快照建不出（非法转储）时不展示「写这张卡」入口——
+        // 写了也必然走完 B6 确认 + 备份读卡后才在 mfclassic 处失败。
+        let mut buttons: Vec<GuidanceButton> = Vec::new();
+        if has_snap {
+            buttons.push(("write-IC", t("html_write_this_dump"), dump_arg));
+        }
+        buttons.push(("open-dump-folder", t("html_open_dump_folder"), None));
+        self.guidance = Some((name, buttons));
         // 失败不清空：载入失败时保留编辑器已有内容，`load_error` 驱动中栏
         // 失败条（docs/02 §6.49）；成功则切换为刚落的转储。
         self.load_dump_from_path(&path);
@@ -933,6 +987,7 @@ impl NfcApp {
         // 且 `exit()` 的观察契约要求 pump 先行。
         self.engine.pump(&mut self.state, &self.paths);
         self.sync_task_flags();
+        self.sync_card_context();
 
         // S11-2：系统文件框在别的线程上阻塞着，这里每帧收一次结果。
         while let Some(reply) = self.dialogs_host.poll() {
@@ -1024,6 +1079,23 @@ impl NfcApp {
                 self.push_event(EventKind::Error, &format!("{e}"));
                 false
             }
+        }
+    }
+
+    /// 「载入转储进编辑器」的统一入口（P1，docs/02 §6.48）：档案条「编辑转储」/
+    /// 事件卡 / 历史 / 注册表（`open-dump-editor`）与编辑器自带「打开文件」
+    /// （`dump-editor-choose-file`，含文件框回传）都走这里——有未保存更改时先弹
+    /// 丢弃确认，批准再覆盖；否则直接按载负载入。
+    fn request_open_dump_editor(&mut self, target: Option<String>) {
+        if self.forms.editor.dirty {
+            self.pending_editor_load = target;
+            self.confirm = Some(dialogs_ui::ConfirmModal::new(
+                dialogs_ui::ConfirmKind::DropEditorEdits,
+                &dialogs_ui::danger_title(),
+                t("dialog_msg_confirm_drop_edits"),
+            ));
+        } else {
+            self.do_open_dump_editor(target.as_deref());
         }
     }
 
@@ -1125,6 +1197,10 @@ impl NfcApp {
                     self.forms.editor.origin = Some(path.to_path_buf());
                     self.forms.editor.dirty = false;
                 }
+                // 内容已验证可写（`from_sector_lines` 过检）：收起过期的「载入
+                // 失败」条（§6.49 的「至下次载入」语义放宽为「内容一变即失效」
+                // 的同款逻辑——成功写盘同样证明内容合法）。
+                self.forms.editor.load_error = None;
                 let name = path.to_string_lossy().into_owned();
                 self.push_event(EventKind::Success, &name);
                 self.state.apply(Event::Log(format!(
@@ -1155,11 +1231,8 @@ impl NfcApp {
     pub fn write_editor_to_card(&mut self) {
         // 与主面板写卡按钮同一道门禁：未连接 / 有任务在跑时在这里给出原因，
         // 而不是点了之后才在日志里看到报错。
-        if let Some(s) = nfc_core::command::spec("write-IC") {
-            if let Err(e) = nfc_core::command::gate(s, &self.state) {
-                self.push_event(EventKind::Error, &t(e.i18n_key()));
-                return;
-            }
+        if !self.precheck_gate("write-IC") {
+            return;
         }
         // 与「保存」同一道把关：未载入文件 / 空内容 / 校验不过都不写。
         // UI 按钮已按 can_save 置灰，这里是防御性兜底。
@@ -1344,6 +1417,27 @@ impl NfcApp {
         );
     }
 
+    /// M1（docs/02 §6）：危险动作弹确认框**之前**的门禁预检。
+    ///
+    /// 引擎门禁在派发时才拒绝——那时用户已敲完 B6 随机码（或已走完文件框），
+    /// 白走一趟。这里在 exec 阶段先查「未连接 / 有任务在跑 / 正在连接」：
+    /// 失败直接出错误事件，连弹窗都不给。不在门禁表的动作（纯 UI 等）放行。
+    fn precheck_gate(&mut self, name: &str) -> bool {
+        let Some(spec) = nfc_core::command::spec(name) else {
+            return true;
+        };
+        match nfc_core::command::gate(spec, &self.state) {
+            Ok(()) => true,
+            Err(e) => {
+                let reason = t(e.i18n_key());
+                self.state
+                    .apply(nfc_core::state::Event::Log(format!("\n{reason}\n")));
+                self.push_event(EventKind::Error, &reason);
+                false
+            }
+        }
+    }
+
     /// 派发一个动作。
     pub fn exec(&mut self, name: &'static str, arg: Option<String>) {
         match name {
@@ -1385,16 +1479,7 @@ impl NfcApp {
                 // 载荷两种形态：完整路径（档案条「编辑转储」/ 文件框回传，可
                 // 在 dumpfiles/ 之外）或裸文件名（事件卡 / 历史 / 注册表，限定
                 // dumpfiles/）。编辑器有未保存更改时先弹确认框，批准再覆盖。
-                if self.forms.editor.dirty {
-                    self.pending_editor_load = arg;
-                    self.confirm = Some(dialogs_ui::ConfirmModal::new(
-                        dialogs_ui::ConfirmKind::DropEditorEdits,
-                        &dialogs_ui::danger_title(),
-                        t("dialog_msg_confirm_drop_edits"),
-                    ));
-                } else {
-                    self.do_open_dump_editor(arg.as_deref());
-                }
+                self.request_open_dump_editor(arg);
             }
             "open-dump-comparator" => {
                 // 载荷是 `A` / `B` 两个文件名（`command.js:461`）；带参进来时
@@ -1435,6 +1520,10 @@ impl NfcApp {
             // 「选哪个文件」与「是否真的写」是两步，故这里只管第一步。
             "write-IC" => match arg {
                 Some(dump) => {
+                    // M1：门禁预检前置（未连接/有任务时不给确认框）。
+                    if !self.precheck_gate("write-IC") {
+                        return;
+                    }
                     // 两种载荷：`dumpfiles/` 下的裸名（历史面板），或完整路径
                     // （读盘引导条、编辑器「写入此转储」刚另存的副本）。裸名要过
                     // `is_plain_name` 防线；完整路径不参与 join（engine 的
@@ -1445,6 +1534,22 @@ impl NfcApp {
                     if !plain && !abs {
                         self.push_event(EventKind::Error, "非法的转储文件名");
                     } else {
+                        // P2 预检（docs/02 §6）：源文件缺失 / 空 / 非 64 字节倍数
+                        // 时立即报错，不让用户白走 B6 随机码 + 备份读卡。
+                        let resolved = if plain {
+                            self.paths.dumpfiles_dir().join(&dump)
+                        } else {
+                            std::path::PathBuf::from(&dump)
+                        };
+                        if let Some(reason) =
+                            nfc_core::tasks::card_write::dump_file_failure(&resolved)
+                        {
+                            let msg = format!("{}: {}", t(reason.i18n_key()), resolved.display());
+                            self.state
+                                .apply(nfc_core::state::Event::Log(format!("\n{msg}\n")));
+                            self.push_event(EventKind::Error, &msg);
+                            return;
+                        }
                         // 写卡是覆盖性危险操作：统一挂 B6 随机码门槛。
                         self.confirm = Some(
                             dialogs_ui::ConfirmModal::new(
@@ -1456,10 +1561,23 @@ impl NfcApp {
                         );
                     }
                 }
-                None => self.open_file_for(dialogs_host::FilePurpose::WriteDump),
+                None => {
+                    if !self.precheck_gate("write-IC") {
+                        return;
+                    }
+                    self.open_file_for(dialogs_host::FilePurpose::WriteDump);
+                }
             },
-            "write-ufuid-uid" => self.open_file_for(dialogs_host::FilePurpose::WriteUidDump),
+            "write-ufuid-uid" => {
+                if !self.precheck_gate("write-ufuid-uid") {
+                    return;
+                }
+                self.open_file_for(dialogs_host::FilePurpose::WriteUidDump);
+            }
             "lock-ufuid" => {
+                if !self.precheck_gate("lock-ufuid") {
+                    return;
+                }
                 // 锁 UFUID 不可逆：随机码门槛与格式化同档。
                 self.confirm = Some(
                     dialogs_ui::ConfirmModal::new(
@@ -1520,6 +1638,9 @@ impl NfcApp {
             // S17：格式化卡片补应用内确认窗（原版 `command.js:144-149` 直接开跑，
             // 误点即清空卡片）。确认后 engine 侧 `prepare_format` 再过一道闸。
             "format-card" => {
+                if !self.precheck_gate("format-card") {
+                    return;
+                }
                 // 全卡访问位重置、不可逆：挂最高档 B6 随机码。
                 self.confirm = Some(
                     dialogs_ui::ConfirmModal::new(
@@ -1553,12 +1674,14 @@ impl NfcApp {
                 }
             }
             "open-dict-file" => self.open_file_for(dialogs_host::FilePurpose::DictFile),
-            // command.js:415-422：带路径则直接读，不弹框
+            // command.js:415-422：带路径则直接读，不弹框。P1：带参（完整路径）与
+            // 文件框回传统一走 `request_open_dump_editor`——有未保存更改先弹
+            // 丢弃确认，不再静默覆盖（docs/02 §6.48）。
             "dump-editor-choose-file" => match arg {
                 Some(p) => {
                     // 带参数进来的是完整路径（面板内触发选文件的回调直接塞路径），
                     // 按路径载入而非 basename——否则外部 dump 会被 is_plain_name 拒。
-                    self.load_dump_from_path(std::path::Path::new(&p));
+                    self.request_open_dump_editor(Some(p));
                 }
                 None => self.open_file_for(dialogs_host::FilePurpose::EditorFile),
             },
@@ -1632,19 +1755,24 @@ impl NfcApp {
             }
             // S18：CUID 空卡写入。带 dumpId（引导条带）直接进确认窗，
             // 不带则弹文件框选源 dump。
-            "cuid-write" => match arg {
-                Some(dump) => {
-                    self.confirm = Some(
-                        dialogs_ui::ConfirmModal::new(
-                            dialogs_ui::ConfirmKind::CuidWrite { dump },
-                            &dialogs_ui::danger_title(),
-                            t("dialog_msg_confirm_cuid_write"),
-                        )
-                        .with_code(dialogs_ui::random_code()),
-                    );
+            "cuid-write" => {
+                if !self.precheck_gate("cuid-write") {
+                    return;
                 }
-                None => self.open_file_for(dialogs_host::FilePurpose::CuidDump),
-            },
+                match arg {
+                    Some(dump) => {
+                        self.confirm = Some(
+                            dialogs_ui::ConfirmModal::new(
+                                dialogs_ui::ConfirmKind::CuidWrite { dump },
+                                &dialogs_ui::danger_title(),
+                                t("dialog_msg_confirm_cuid_write"),
+                            )
+                            .with_code(dialogs_ui::random_code()),
+                        );
+                    }
+                    None => self.open_file_for(dialogs_host::FilePurpose::CuidDump),
+                }
+            }
             // S18：手输卡号写 UFUID。开 UidInput 面板，载荷是初始文本（空串）。
             "input-uid-write" => {
                 self.forms.input_uid = String::new();
@@ -1660,6 +1788,9 @@ impl NfcApp {
                 let Some(text) = arg else {
                     return;
                 };
+                if !self.precheck_gate("done-input-uid-write") {
+                    return;
+                }
                 // 与 engine `input_uid_write` 同源：清洗 → 拼 0 块 → 判 BCC。
                 // 非法输入不弹确认框，只记一条错误。
                 let Some(cleaned) = nfc_core::tasks::card_write::clean_uid_input(&text) else {
@@ -1688,6 +1819,14 @@ impl NfcApp {
             // S18：编辑器体检/修复/导出。check/fix 是纯 UI 动作（不进队列）；
             // export 弹保存框，把当前编辑器内容的密钥字典另存为文件。
             "dump-editor-export-keys" => {
+                // M5：先判空再弹框——空 / 结构非法的编辑器内容没有可导出的
+                // 密钥，白走一趟系统保存框再报错是旧缺陷（docs/02 §6）。
+                if nfc_core::model::dumpcheck::key_dict(&self.forms.editor.sectors).is_empty() {
+                    let msg = t("html_data_not_classic_layout");
+                    self.state.apply(Event::Log(format!("\n{msg}\n")));
+                    self.push_event(EventKind::Error, &msg);
+                    return;
+                }
                 let default =
                     PathBuf::from(format!("NFCTools_keys_{}", nfc_core::paths::timestamp()));
                 // 这里没有需要预存的内容，故忽略「是否投递」的返回值。

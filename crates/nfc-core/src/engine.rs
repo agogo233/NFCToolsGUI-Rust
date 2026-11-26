@@ -77,6 +77,10 @@ struct NextStage {
     /// S18 CUID：第二段在备份成功后，用备份 block0 的 UID 生成 CUID 空卡密钥
     /// 文件，并改用大写 `W`（解锁写）+ 该密钥文件。`args[3]` 仍是源 dump。
     cuid: bool,
+    /// P0 安全闸（docs/02 §6）：写卡源 dump 路径。备份段结束后比对**当前卡**
+    /// 与**转储**的 block0 UID，不一致则中止第二段（防「旧卡数据写进新卡」）。
+    /// `None` = 无源文件可比对（`format-card`）或跨 UID 写入本就合法（CUID）。
+    source: Option<std::path::PathBuf>,
 }
 
 /// HardNested 闭环里当前跑的是哪一步。
@@ -598,7 +602,26 @@ impl Engine {
                 self.hn.sync(state);
                 self.hn_cfg = None;
                 self.hn_round = tasks::hard_nested::RoundContext::default();
+                // P3：挂起的保存框（read-IC 收尾 / collectOnly）被「停止」抢先
+                // 取消时，数据仍留在盘上——给一句去向提示，不静默。
+                // （`hn_saving` / `pending_save` 的判定必须在前两行复位之前取。）
+                let cancelled_nonces = self.hn_saving && self.pending_save.is_some();
+                let cancelled_read_save = !self.hn_saving && self.pending_save.is_some();
                 self.hn_saving = false;
+                if cancelled_nonces {
+                    state.apply(Event::Log(format!(
+                        "\n{} {}\n",
+                        crate::i18n::t("log_msg_nonce_kept_at"),
+                        paths.nonces_file().display()
+                    )));
+                }
+                if cancelled_read_save {
+                    state.apply(Event::Log(format!(
+                        "\n{} {}\n",
+                        crate::i18n::t("log_msg_cancel_kept_temp"),
+                        paths.temp_mfd().display()
+                    )));
+                }
                 self.pending_save = None;
                 // 连接握手中点「停止」：`conn` 必须一并清掉。否则它会一直残留，
                 // 而 `pump` 见到 `conn.is_some()` 就整帧只推进连接（不推进
@@ -627,6 +650,17 @@ impl Engine {
                 else {
                     return Ok(());
                 };
+                // P0 预检（docs/02 §6）：源文件缺失 / 空 / 非 64 倍数在此拦下，
+                // 不启动「备份 + 写卡」两段流程（app 侧确认前已同法预检，
+                // 这里是绕开 app 直派时的兜底）。
+                if let Some(reason) = tasks::card_write::dump_file_failure(&src) {
+                    tasks::card_write::report_failure(state, reason);
+                    state.apply(Event::Status {
+                        text: crate::i18n::t("indicator_error"),
+                        indicator: Indicator::Error,
+                    });
+                    return Ok(());
+                }
                 self.read_then_exec(
                     name,
                     state,
@@ -638,6 +672,7 @@ impl Engine {
                         report: true,
                         status_key: "indicator_writing_ic_card",
                         cuid: false,
+                        source: Some(src.clone()),
                     },
                 )
             }
@@ -650,6 +685,15 @@ impl Engine {
                 else {
                     return Ok(());
                 };
+                // 同 write-IC 的 P0 预检：源文件非法时不启动备份 + CUID 写流程。
+                if let Some(reason) = tasks::card_write::dump_file_failure(&src) {
+                    tasks::card_write::report_failure(state, reason);
+                    state.apply(Event::Status {
+                        text: crate::i18n::t("indicator_error"),
+                        indicator: Indicator::Error,
+                    });
+                    return Ok(());
+                }
                 self.read_then_exec(
                     name,
                     state,
@@ -661,6 +705,7 @@ impl Engine {
                         report: true,
                         status_key: "indicator_writing_cuid",
                         cuid: true,
+                        source: None,
                     },
                 )
             }
@@ -685,6 +730,7 @@ impl Engine {
                         report: true,
                         status_key: "indicator_formatting_ic_card",
                         cuid: false,
+                        source: None,
                     },
                 )
             }
@@ -945,6 +991,7 @@ impl Engine {
                     report: true,
                     status_key: "indicator_writing_phw_data",
                     cuid: false,
+                    source: None,
                 }),
                 phw_patch: Some(target),
                 ..Running::default()
@@ -1313,6 +1360,58 @@ impl Engine {
                 indicator: Indicator::Error,
             });
             return Ok(());
+        }
+        // P0 硬闸（docs/02 §6 安全偏离）：普通写卡（`source` 非 None，CUID /
+        // 格式化 / phw 写回均为 None 不受影响）比对**备份段刚读出的当前卡**
+        // 与**源转储**的完整 block0。换卡后拿着旧转储写新卡时，两者不一致 →
+        // 中止第二段，备份保留；源文件读不出 0 块同样中止（fail-safe）。
+        // 跨卡克隆请走 CUID 写入（本闸不拦 cuid）。
+        if let Some(src) = &next.source {
+            let (cur, want) = match (
+                tasks::card_write::read_block0_hex(&temp),
+                tasks::card_write::read_block0_hex(src),
+            ) {
+                (Ok(c), Ok(w)) => (c, w),
+                _ => {
+                    state.apply(Event::Log(format!(
+                        "\n{}: {src}\n",
+                        crate::i18n::t("log_msg_write_aborted_dump_unreadable")
+                    )));
+                    state.apply(Event::EventItem {
+                        kind: EventKind::Error,
+                        text: format!(
+                            "{}: {src}",
+                            crate::i18n::t("log_msg_write_aborted_dump_unreadable")
+                        ),
+                    });
+                    state.apply(Event::Status {
+                        text: crate::i18n::t("indicator_error"),
+                        indicator: Indicator::Error,
+                    });
+                    return Ok(());
+                }
+            };
+            if tasks::card_write::block0_is_valid(&cur)
+                && tasks::card_write::block0_is_valid(&want)
+                && cur != want
+            {
+                let text = format!(
+                    "{}",
+                    crate::i18n::t("log_msg_write_aborted_uid_mismatch"),
+                    tasks::card_write::uid_prefix(&cur),
+                    tasks::card_write::uid_prefix(&want)
+                );
+                state.apply(Event::Log(format!("\n{text}\n")));
+                state.apply(Event::EventItem {
+                    kind: EventKind::Error,
+                    text,
+                });
+                state.apply(Event::Status {
+                    text: crate::i18n::t("indicator_error"),
+                    indicator: Indicator::Error,
+                });
+                return Ok(());
+            }
         }
         // S18 CUID：备份成功后按当前卡号生成 CUID 空卡密钥文件，第二段改
         // 大写 `W`（解锁写）+ 该密钥文件。生成失败同样中止，绝不写卡。
@@ -1809,12 +1908,17 @@ impl Engine {
                     match tasks::card_write::read_block0_hex(&paths.temp_mfd()) {
                         Ok(hex) if tasks::card_write::block0_is_valid(&hex) => {
                             state.phw.block0 = Some(hex.clone());
+                            // P0（docs/02 §6）：卡号读通 = 未失卡、当前卡身份已知。
+                            state.card_lost = false;
+                            state.current_uid = Some(tasks::card_write::uid_cmp_hex(&hex));
                             state.apply(Event::EventItem {
                                 kind: EventKind::Success,
                                 text: format!("卡号: {}", tasks::card_write::uid_prefix(&hex)),
                             });
                         }
                         _ => {
+                            // 读不出 block0 → 当前卡身份不可知，复位上下文。
+                            state.apply(Event::CardContextInvalidated);
                             state.apply(Event::Log(format!(
                                 "\n{}\n",
                                 crate::i18n::t("log_msg_card_read_failed")
@@ -1919,6 +2023,17 @@ impl Engine {
                         // 能再发起一个 read-IC，它会覆盖同一个 temp.mfd ——
                         // 用户在保存框里选好的路径就指到另一张卡的数据上。
                         state.is_running_task = true;
+                        // P0（docs/02 §6）：读卡成功 = 未失卡；读到 NFCID 时刷新
+                        // 当前卡身份（读不出时保持旧值，写卡由 `start_next_stage`
+                        // 硬闸兜底）。
+                        state.card_lost = false;
+                        if let Some(uid) = run.uid.as_deref() {
+                            state.current_uid = Some(tasks::card_write::uid_cmp_hex(uid));
+                        }
+                    } else {
+                        // 空产物：没读到卡内容 → 当前卡身份不可知，复位上下文
+                        //（UI 侧据此清档案/引导，docs/02 §6）。
+                        state.apply(Event::CardContextInvalidated);
                     }
                 }
                 // PLAN v1：读到卡号就把这张卡追加进 registry（可查表）。
@@ -1968,6 +2083,14 @@ impl Engine {
                         crate::i18n::t("log_msg_backup_kept"),
                         kept
                     )));
+                }
+                // P0（docs/02 §6）：读卡 / 读卡号失败 → 当前卡身份不可知，
+                // 复位卡片上下文（UI 侧清档案/引导，写卡由硬闸兜底）。
+                if matches!(
+                    run.name,
+                    "read-IC" | "done-input-keys-read-IC" | "phw-read-uid"
+                ) {
+                    state.apply(Event::CardContextInvalidated);
                 }
                 state.apply(Event::Status {
                     text: crate::i18n::t("indicator_error"),
@@ -2834,6 +2957,108 @@ mod tests {
         );
     }
 
+    /// P0：读卡成功且读到 NFCID → `current_uid` 归一化（小写 8 hex）+ 未失卡。
+    #[test]
+    fn read_ic_success_sets_current_uid() {
+        let (_d, p) = paths("read-uid");
+        let mut e = Engine::new(Box::new(MockToolRunner::new(vec![Chunk::stdout(
+            "UID (NFCID1): a1b2c3d4\n",
+        )])));
+        let mut st = connected();
+        let mut dlg = MockDialog::new();
+        e.dispatch(Action::Plain("read-IC"), &mut st, &p, &mut dlg)
+            .unwrap();
+        std::fs::write(p.temp_mfd(), vec![0x5a; 64]).unwrap();
+        run_to_end(&mut e, &mut st, &p, 4);
+        assert_eq!(
+            st.current_uid.as_deref(),
+            Some("a1b2c3d4"),
+            "current_uid 未归一化"
+        );
+        assert!(!st.card_lost, "成功读卡不应置失卡");
+    }
+
+    /// P0：读卡空产物 → 复位当前卡身份 + 置失卡（UI 据此清档案/引导）。
+    #[test]
+    fn read_ic_empty_dump_invalidates_context() {
+        let (_d, p) = paths("read-empty-invalidate");
+        let mut e = Engine::new(Box::new(MockToolRunner::new(vec![]).with_exit(Some(0))));
+        let mut st = connected();
+        // 预置「上一张卡」的身份
+        st.current_uid = Some("a1b2c3d4");
+        st.card_lost = false;
+        let mut dlg = MockDialog::new();
+        e.dispatch(Action::Plain("read-IC"), &mut st, &p, &mut dlg)
+            .unwrap();
+        // 故意不造 temp.mfd（空读卡）
+        run_to_end(&mut e, &mut st, &p, 3);
+        assert!(st.current_uid.is_none(), "空读卡应清 current_uid");
+        assert!(st.card_lost, "空读卡应置失卡");
+        assert!(
+            st.log_buffer.contains("未读到卡内容"),
+            "实际: {}",
+            st.log_buffer
+        );
+    }
+
+    /// P0 硬闸：备份段读到的**当前卡** block0 与**源转储** block0 不一致 →
+    /// 中止第二段（不启动 mfclassic），保留备份，报 UID 不一致。
+    #[test]
+    fn write_ic_uid_mismatch_aborts_second_stage() {
+        let (_d, p) = paths("write-uid-mismatch");
+        let src = p.dumpfiles_dir().join("a.mfd");
+        std::fs::write(&src, vec![0x5a; 64]).unwrap();
+        let mut e = Engine::new(Box::new(MockToolRunner::new(vec![]).with_exit(Some(0))));
+        let mut st = connected();
+        let mut dlg = MockDialog::new().with_confirm(true);
+        e.dispatch(
+            Action::WithArg("write-IC", "a.mfd".into()),
+            &mut st,
+            &p,
+            &mut dlg,
+        )
+        .unwrap();
+        // 备份段的产出（当前卡）与源转储 block0 不同（0x7b vs 0x5a）
+        std::fs::write(p.temp_mfd(), vec![0x7b; 64]).unwrap();
+        run_to_end(&mut e, &mut st, &p, 3);
+        let (tool, _, _) = e.runner().started_last().unwrap();
+        assert_eq!(tool, "nfc-mfdetect", "UID 不一致却启动了写卡第二段");
+        assert_eq!(st.status.indicator, Indicator::Error);
+        assert!(
+            st.log_buffer.contains("写卡已中止"),
+            "应报 UID 不一致中止: {}",
+            st.log_buffer
+        );
+        assert!(
+            st.events.iter().any(|ev| ev.kind == EventKind::Error),
+            "UID 不一致应出错误事件"
+        );
+        assert!(p.temp_mfd().exists(), "中止后应保留备份");
+    }
+
+    /// P0 预检：源转储非 64 字节倍数 → 派发即拒（备份段都不启动）。
+    #[test]
+    fn write_ic_bad_source_layout_rejected_at_dispatch() {
+        let (_d, p) = paths("write-bad-layout");
+        std::fs::write(p.dumpfiles_dir().join("a.mfd"), vec![0x5a; 63]).unwrap();
+        let mut e = Engine::new(Box::new(MockToolRunner::new(vec![])));
+        let mut st = connected();
+        let mut dlg = MockDialog::new().with_confirm(true);
+        e.dispatch(
+            Action::WithArg("write-IC", "a.mfd".into()),
+            &mut st,
+            &p,
+            &mut dlg,
+        )
+        .unwrap();
+        assert!(!e.is_running(), "非法布局不应启动任何工具");
+        assert!(
+            st.log_buffer.contains("非 64 字节倍数"),
+            "应报布局非法: {}",
+            st.log_buffer
+        );
+    }
+
     /// **防 A3 回归的核心用例**：autoRun 必须能跑满多轮。
     ///
     /// 曾有一个致命 bug：`after_crack_guarded` 的第三参误用了 pop **之前**的
@@ -3419,7 +3644,7 @@ mod tests {
     #[test]
     fn write_ic_without_confirm_launches_nothing() {
         let (_d, p) = paths("write-no-confirm");
-        std::fs::write(p.dumpfiles_dir().join("a.mfd"), vec![0x5a; 32]).unwrap();
+        std::fs::write(p.dumpfiles_dir().join("a.mfd"), vec![0x5a; 64]).unwrap();
         let mut e = Engine::new(Box::new(MockToolRunner::new(vec![])));
         let mut st = connected();
         let src = p.dumpfiles_dir().join("a.mfd").display().to_string();
@@ -3436,7 +3661,7 @@ mod tests {
     #[test]
     fn write_ic_confirmed_starts_backup_stage() {
         let (_d, p) = paths("write-ok");
-        std::fs::write(p.dumpfiles_dir().join("a.mfd"), vec![0x5a; 32]).unwrap();
+        std::fs::write(p.dumpfiles_dir().join("a.mfd"), vec![0x5a; 64]).unwrap();
         let mut e = Engine::new(Box::new(MockToolRunner::new(vec![])));
         let mut st = connected();
         let mut dlg = MockDialog::new().with_confirm(true);
@@ -3458,7 +3683,7 @@ mod tests {
     fn write_ic_second_stage_uses_confirmed_source() {
         let (_d, p) = paths("write-stage2");
         let src = p.dumpfiles_dir().join("a.mfd");
-        std::fs::write(&src, vec![0x5a; 32]).unwrap();
+        std::fs::write(&src, vec![0x5a; 64]).unwrap();
         let mut e = Engine::new(Box::new(MockToolRunner::new(vec![])));
         let mut st = connected();
         let mut dlg = MockDialog::new().with_confirm(true);
@@ -3494,7 +3719,7 @@ mod tests {
     #[test]
     fn write_ic_backup_failure_blocks_second_stage() {
         let (_d, p) = paths("write-guard");
-        std::fs::write(p.dumpfiles_dir().join("a.mfd"), vec![0x5a; 32]).unwrap();
+        std::fs::write(p.dumpfiles_dir().join("a.mfd"), vec![0x5a; 64]).unwrap();
         let mut e = Engine::new(Box::new(MockToolRunner::new(vec![])));
         let mut st = connected();
         let mut dlg = MockDialog::new().with_confirm(true);
@@ -3517,7 +3742,7 @@ mod tests {
     #[test]
     fn write_ic_empty_backup_blocks_second_stage() {
         let (_d, p) = paths("write-empty-backup");
-        std::fs::write(p.dumpfiles_dir().join("a.mfd"), vec![0x5a; 32]).unwrap();
+        std::fs::write(p.dumpfiles_dir().join("a.mfd"), vec![0x5a; 64]).unwrap();
         let mut e = Engine::new(Box::new(MockToolRunner::new(vec![])));
         let mut st = connected();
         let mut dlg = MockDialog::new().with_confirm(true);
@@ -3540,7 +3765,7 @@ mod tests {
     #[test]
     fn write_ic_complete_deletes_temp_and_reports_success() {
         let (_d, p) = paths("write-complete");
-        std::fs::write(p.dumpfiles_dir().join("a.mfd"), vec![0x5a; 32]).unwrap();
+        std::fs::write(p.dumpfiles_dir().join("a.mfd"), vec![0x5a; 64]).unwrap();
         let mut e = Engine::new(Box::new(
             MockToolRunner::new(vec![])
                 .with_scripts(vec![
@@ -3575,7 +3800,7 @@ mod tests {
     #[test]
     fn write_ic_partial_write_keeps_temp_and_reports_failure() {
         let (_d, p) = paths("write-partial");
-        std::fs::write(p.dumpfiles_dir().join("a.mfd"), vec![0x5a; 32]).unwrap();
+        std::fs::write(p.dumpfiles_dir().join("a.mfd"), vec![0x5a; 64]).unwrap();
         let mut e = Engine::new(Box::new(
             MockToolRunner::new(vec![])
                 .with_scripts(vec![
@@ -3617,7 +3842,7 @@ mod tests {
     #[test]
     fn write_ic_tool_failure_keeps_temp() {
         let (_d, p) = paths("write-fail");
-        std::fs::write(p.dumpfiles_dir().join("a.mfd"), vec![0x5a; 32]).unwrap();
+        std::fs::write(p.dumpfiles_dir().join("a.mfd"), vec![0x5a; 64]).unwrap();
         let mut e = Engine::new(Box::new(
             MockToolRunner::new(vec![])
                 .with_scripts(vec![
@@ -3651,7 +3876,7 @@ mod tests {
     #[test]
     fn cuid_write_full_64_of_64_reports_success() {
         let (_d, p) = paths("cuid-complete");
-        std::fs::write(p.dumpfiles_dir().join("a.mfd"), vec![0x5a; 32]).unwrap();
+        std::fs::write(p.dumpfiles_dir().join("a.mfd"), vec![0x5a; 64]).unwrap();
         let mut e = Engine::new(Box::new(
             MockToolRunner::new(vec![])
                 .with_scripts(vec![

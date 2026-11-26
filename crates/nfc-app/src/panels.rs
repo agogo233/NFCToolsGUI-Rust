@@ -636,6 +636,15 @@ fn commit_rename(dir: &std::path::Path, old: &str, new: &str, app: &mut NfcApp) 
                     *s = new.clone();
                 }
             }
+            // 同步编辑器来源（P3）：若「当前文件」正是被改名的这份转储，
+            // origin / 文件名跟着走，否则「保存」会在旧路径上悄悄重建文件。
+            let old_path = dir.join(old);
+            if app.forms.editor.origin.as_deref() == Some(old_path.as_path()) {
+                app.forms.editor.origin = Some(dir.join(&new));
+            }
+            if app.forms.editor.file_name.as_deref() == Some(old) {
+                app.forms.editor.file_name = Some(new.clone());
+            }
             app.state.apply(Event::Log(format!("\n{old} → {new}\n")));
         }
         Err(e) => app.push_event(EventKind::Error, &e.to_string()),

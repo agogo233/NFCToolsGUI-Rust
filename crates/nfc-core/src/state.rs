@@ -261,6 +261,14 @@ pub struct AppState {
     pub dump_history: Vec<String>,
     pub hard_nested_task: HardNestedTask,
     pub phw: PhwPanelState,
+    /// 本次会话最近一次**读卡**得到的物理卡 UID（block0 前 8 hex，小写）。
+    /// 读卡失败时置 None（并伴 `Event::CardContextInvalidated`），UI 据此
+    /// 判断卡片档案 / 引导条是否已过期（docs/02 §6 登记的安全偏离）。
+    pub current_uid: Option<String>,
+    /// 读卡失败「失卡」标志（P0，docs/02 §6）：置位后 UI 应清空卡片档案 /
+    /// 引导。区别于 `current_uid=None`（那也可能是「从未读卡」的初始态）。
+    /// 读卡 / 读卡号成功时复位。
+    pub card_lost: bool,
 }
 
 impl AppState {
@@ -327,6 +335,12 @@ impl AppState {
                         self.exit_log(true);
                     }
                 }
+            }
+            // 读卡失败：当前卡身份不复存在（docs/02 §6）。UI 侧清档案/引导由
+            // 消费方对同一事件负责。
+            Event::CardContextInvalidated => {
+                self.current_uid = None;
+                self.card_lost = true;
             }
             // UI 主动发起或仅供渲染，不落状态
             Event::Guidance { .. }
@@ -512,6 +526,9 @@ pub enum Event {
         buttons: Vec<(&'static str, String)>,
     },
     DumpSaved(PathBuf),
+    /// 读卡失败：卡片上下文（当前卡身份 / 档案 / 引导）失效，应复位。
+    /// 状态侧清 `current_uid`；UI 侧清 `card_snapshot` / `guidance`（docs/02 §6）。
+    CardContextInvalidated,
     BinaryData {
         url: PathBuf,
         sectors: Vec<Sector>,

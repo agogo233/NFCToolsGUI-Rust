@@ -163,6 +163,29 @@ pub fn run() -> eframe::Result {
         ("载入失败不清空编辑器", c_editor_load_fail_keeps_content),
         ("点击无变化出确认事件", c_editor_open_unchanged_feedback),
         ("落盘收尾产物非法不清空", c_dump_saved_truncated_no_wipe),
+        // ── P0 跨卡误写防护（docs/02 §6）──
+        (
+            "失卡后 tick 清档案/引导",
+            c_card_context_lost_cleared_on_tick,
+        ),
+        (
+            "UID 临时失配不误清档案",
+            c_write_uid_mismatch_button_disabled,
+        ),
+        // ── P1 编辑器「打开文件」补 dirty 确认 ──
+        (
+            "打开文件入口走 dirty 确认",
+            c_editor_choose_file_dirty_confirm,
+        ),
+        // ── P2 写卡前预检 ──
+        ("写卡源文件缺失不弹确认", c_write_ic_missing_file_rejected),
+        (
+            "非法转储引导不给写卡入口",
+            c_dump_saved_bad_file_no_write_button,
+        ),
+        // ── P3 体验项 ──
+        ("导出密钥空不弹框", c_export_keys_empty_no_dialog),
+        ("未连接危险动作不弹确认", c_danger_gate_before_confirm),
     ];
 
     let total = cases.len();
@@ -807,10 +830,12 @@ fn c_hotplug_interval() -> Result<(), String> {
 
 fn c_dump_saved_guidance() -> Result<(), String> {
     use nfc_core::state::Event;
-    let mut app = NfcApp::new(nfc_core::state::AppState::new());
-    app.apply(Event::DumpSaved(std::path::PathBuf::from(
-        "/tmp/dumpfiles/aa.mfd",
-    )));
+    let (_d, mut app) = app_with_temp_dumps("dump-guidance");
+    // H3：引导条「写这张卡」只在快照能构建（合法转储）时给出，故用合法 1K 文件。
+    let path = app.paths.dumpfiles_dir().join("aa.mfd");
+    std::fs::create_dir_all(app.paths.dumpfiles_dir()).unwrap();
+    std::fs::write(&path, vec![0u8; 1024]).unwrap();
+    app.apply(Event::DumpSaved(path.clone()));
     // 引导条应给出「写这张卡 / 打开 dump 目录」两个入口（index.js:43-50）
     let (_, btns) = app.guidance.as_ref().ok_or("dump 已保存后未出引导")?;
     if btns.len() != 2 {
@@ -821,12 +846,12 @@ fn c_dump_saved_guidance() -> Result<(), String> {
         return Err("未追加 success 事件".into());
     }
     // 落盘收尾不应打开任何浮窗面板（编辑器已并入中栏，docs/02 §6.48）；
-    // 假路径载入必失败，表单应保持空态（不产生来源）。
+    // 合法文件载入应成功，编辑器来源指向该 dump。
     if app.state.panels.any_open() {
         return Err("落盘后不应打开任何浮窗面板".into());
     }
-    if app.forms.editor.origin.is_some() {
-        return Err("假路径载入应失败，编辑器不应有来源".into());
+    if app.forms.editor.origin.as_ref() != Some(&path) {
+        return Err("合法转储载入后编辑器应有来源".into());
     }
     // P2-12：该 success 事件应可点击 → 打开转储编辑器（同名 dump）。
     // 直接调用事件卡渲染路径不可行（需 egui 交互），这里只验证前置条件：
@@ -853,9 +878,18 @@ fn c_dump_saved_guidance() -> Result<(), String> {
 
 fn c_dump_saved_guidance_carries_dump_id() -> Result<(), String> {
     use nfc_core::state::Event;
-    let mut app = NfcApp::new(nfc_core::state::AppState::new());
-    let path = "/tmp/dumpfiles/aa.mfd";
-    app.apply(Event::DumpSaved(std::path::PathBuf::from(path)));
+    let (_d, mut app) = app_with_temp_dumps("dump-guidance-id");
+    // 合法 1K 转储：快照可构建 → 引导条带 write-IC 入口（H3）。
+    let path = app
+        .paths
+        .dumpfiles_dir()
+        .join("aa.mfd")
+        .to_string_lossy()
+        .into_owned();
+    let pbuf = app.paths.dumpfiles_dir().join("aa.mfd");
+    std::fs::create_dir_all(app.paths.dumpfiles_dir()).unwrap();
+    std::fs::write(&pbuf, vec![0u8; 1024]).unwrap();
+    app.apply(Event::DumpSaved(pbuf));
     let (_, btns) = app.guidance.as_ref().ok_or("dump 已保存后未出引导")?;
     // 「写这张卡」必须带 dumpId：点击后直达确认框，不再弹一次文件框
     // （对标 command.js:127-130 的带参跳确认框）。带的是**完整路径**而非裸名——
@@ -865,7 +899,7 @@ fn c_dump_saved_guidance_carries_dump_id() -> Result<(), String> {
         .iter()
         .find(|(action, _, _)| *action == "write-IC")
         .ok_or("引导缺少 write-IC")?;
-    if write.2.as_deref() != Some(path) {
+    if write.2.as_deref() != Some(path.as_str()) {
         return Err(format!("write-IC 未带完整路径: {:?}", write.2));
     }
     // 「打开 dump 目录」不需要参数
@@ -3511,6 +3545,147 @@ fn c_run_mfcuk_flow() -> Result<(), String> {
     use nfc_core::state::EventKind;
     if !app.state.events.iter().any(|e| e.kind == EventKind::Key) {
         return Err(format!("mfcuk 密钥未推 Key 事件: {:?}", app.state.events));
+    }
+    Ok(())
+}
+
+// ═══════════════════ P0/P1/P2/P3 流程修复（docs/02 §6） ═══════════════════
+
+/// P0：读卡失败（失卡）后 `tick` 应清卡片档案 / 引导条并出一次错误事件。
+fn c_card_context_lost_cleared_on_tick() -> Result<(), String> {
+    use crate::ui::workbench;
+    use nfc_core::state::EventKind;
+    let (_d, mut app) = app_with_temp_dumps("ctx-lost");
+    let snap = workbench::snapshot_from_bytes(&[0u8; 1024], "p".to_owned(), "x.mfd".to_owned())
+        .ok_or("快照构建失败")?;
+    app.card_snapshot = Some(snap);
+    app.guidance = Some(("x.mfd".to_owned(), Vec::new()));
+    app.state.card_lost = true;
+    app.tick();
+    if app.card_snapshot.is_some() || app.guidance.is_some() {
+        return Err("失卡后卡片档案/引导条应被清空".into());
+    }
+    if !app.state.events.iter().any(|e| e.kind == EventKind::Error) {
+        return Err("清卡片上下文未出事件".into());
+    }
+    Ok(())
+}
+/// P0：`current_uid` 与档案 UID 临时失配（读到另一张卡、档案尚未重建）**不**
+/// 清档——`on_dump_saved_ui` 会重建档案；清档只发生在读卡失败（`card_lost`）。
+fn c_write_uid_mismatch_button_disabled() -> Result<(), String> {
+    use crate::ui::workbench;
+    let (_d, mut app) = app_with_temp_dumps("ctx-mismatch");
+    let snap = workbench::snapshot_from_bytes(&[0u8; 1024], "p".to_owned(), "x.mfd".to_owned())
+        .ok_or("快照构建失败")?;
+    app.card_snapshot = Some(snap);
+    // 档案块 0 全 0（uid_cmp=00000000），当前卡却是另一张（ffffffff）
+    app.state.current_uid = Some("ffffffff".to_owned());
+    app.state.card_lost = false;
+    app.tick();
+    if app.card_snapshot.is_none() {
+        return Err("临时 UID 失配（读卡成功、档案待重建）不应清档案".into());
+    }
+    Ok(())
+}
+
+/// P1：编辑器「打开文件」（带完整路径入口）在 dirty 时也要走丢弃确认。
+fn c_editor_choose_file_dirty_confirm() -> Result<(), String> {
+    use crate::dialogs_ui::ConfirmKind;
+    let (_d, mut app) = app_with_temp_dumps("editor-choose-dirty");
+    let a = app.paths.dumpfiles_dir().join("a.mfd");
+    let b = app.paths.dumpfiles_dir().join("b.mfd");
+    std::fs::write(&a, vec![0u8; 1024]).unwrap();
+    std::fs::write(&b, vec![0u8; 1024]).unwrap();
+    // 首次载入 a（非 dirty，不弹框）
+    app.exec("open-dump-editor", Some(a.to_string_lossy().into_owned()));
+    if app.confirm.is_some() {
+        return Err("首次载入（非 dirty）不应弹确认框".into());
+    }
+    // 改脏后，「打开文件」带参入口须走 dirty 确认
+    app.forms.editor.dirty = true;
+    app.exec(
+        "dump-editor-choose-file",
+        Some(b.to_string_lossy().into_owned()),
+    );
+    let c = app.confirm.clone().ok_or("dirty「打开文件」未弹确认框")?;
+    if !matches!(c.kind, ConfirmKind::DropEditorEdits) {
+        return Err(format!("确认框类型错误: {:?}", c.kind));
+    }
+    // 取消 → 来源不变
+    app.confirm = None;
+    app.on_confirm_result(c, false);
+    if app.forms.editor.origin.as_ref() != Some(&a) {
+        return Err("取消后来源应保持原文件".into());
+    }
+    // 再试一次并批准 → 载入 b
+    app.exec(
+        "dump-editor-choose-file",
+        Some(b.to_string_lossy().into_owned()),
+    );
+    let c2 = app.confirm.take().ok_or("再次打开仍应弹确认框")?;
+    app.on_confirm_result(c2, true);
+    if app.forms.editor.origin.as_ref() != Some(&b) {
+        return Err("批准后应载入目标文件".into());
+    }
+    Ok(())
+}
+
+/// P2：写卡源文件不存在 → 不弹确认框、直接出错误事件（省一次 B6）。
+fn c_write_ic_missing_file_rejected() -> Result<(), String> {
+    use nfc_core::state::EventKind;
+    let (_d, mut app) = app_with_temp_dumps("write-missing");
+    app.exec("write-IC", Some("missing.mfd".to_owned()));
+    if app.confirm.is_some() {
+        return Err("源文件不存在不该弹确认框".into());
+    }
+    if !app.state.events.iter().any(|e| e.kind == EventKind::Error) {
+        return Err("应出错误事件".into());
+    }
+    Ok(())
+}
+
+/// H3：非法产物（非 64 倍数）落盘收尾 → 引导条**不给**「写这张卡」入口。
+fn c_dump_saved_bad_file_no_write_button() -> Result<(), String> {
+    use nfc_core::state::Event;
+    let (_d, mut app) = app_with_temp_dumps("dump-bad");
+    let path = app.paths.dumpfiles_dir().join("bad.mfd");
+    std::fs::create_dir_all(app.paths.dumpfiles_dir()).unwrap();
+    std::fs::write(&path, vec![0u8; 100]).unwrap(); // 非 64 倍数 → 快照建不出
+    app.apply(Event::DumpSaved(path));
+    let (_, btns) = app.guidance.as_ref().ok_or("落盘后未出引导")?;
+    if btns.iter().any(|(action, _, _)| *action == "write-IC") {
+        return Err("非法转储不该给写卡入口".into());
+    }
+    if app.card_snapshot.is_some() {
+        return Err("非法转储不该产出卡片档案".into());
+    }
+    Ok(())
+}
+
+/// M5：编辑器无可导出密钥（空内容）时「导出密钥」不弹保存框，直接报错。
+fn c_export_keys_empty_no_dialog() -> Result<(), String> {
+    use nfc_core::state::EventKind;
+    let (_d, mut app) = app_with_temp_dumps("export-empty");
+    app.exec("dump-editor-export-keys", None);
+    if app.dialogs_host.outstanding() != 0 {
+        return Err("无可导出内容不该弹保存框".into());
+    }
+    if !app.state.events.iter().any(|e| e.kind == EventKind::Error) {
+        return Err("应出错误事件".into());
+    }
+    Ok(())
+}
+
+/// M1：未连接时危险动作（格式化）不弹确认框，直接出门禁错误事件。
+fn c_danger_gate_before_confirm() -> Result<(), String> {
+    use nfc_core::state::EventKind;
+    let mut app = NfcApp::new(nfc_core::state::AppState::new()); // 未连接
+    app.exec("format-card", None);
+    if app.confirm.is_some() {
+        return Err("未连接不该弹确认框".into());
+    }
+    if !app.state.events.iter().any(|e| e.kind == EventKind::Error) {
+        return Err("应出门禁错误事件".into());
     }
     Ok(())
 }

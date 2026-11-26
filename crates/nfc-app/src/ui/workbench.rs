@@ -20,6 +20,9 @@ use crate::panels::ViewMode;
 pub struct CardSnapshot {
     /// 块 0 前 4 字节（大写冒号分隔）。
     pub uid: String,
+    /// 当前卡身份比对键（P0，docs/02 §6）：块 0 前 4 字节的 8 位小写 hex，
+    /// 与 `AppState::current_uid` 同格式；写卡 / 引导条门禁据此交叉核对。
+    pub uid_cmp: String,
     /// 容量 → 卡型。
     pub card_type: String,
     /// [`dump::to_sector_lines`] 的编辑器组（1K=16、4K=64、Mini=5；每组 4 行 32-hex）。
@@ -50,13 +53,16 @@ pub fn snapshot_from_bytes(
     file_name: String,
 ) -> Option<CardSnapshot> {
     let groups = dump::to_sector_lines(bytes).ok()?;
-    let uid = groups
-        .first()
-        .and_then(|g| g.first())
+    let block0 = groups.first().and_then(|g| g.first());
+    let uid = block0
         .map(|line| uid_from_block0(line))
         .unwrap_or_else(|| String::from("--"));
     Some(CardSnapshot {
         uid,
+        // 与 `AppState::current_uid` 同格式（块 0 前 4 字节、8 位小写 hex）。
+        uid_cmp: block0
+            .map(nfc_core::tasks::card_write::uid_cmp_hex)
+            .unwrap_or_default(),
         card_type: card_type(bytes.len()),
         groups,
         dump_arg,
@@ -114,6 +120,14 @@ fn card_context(ui: &mut Ui, app: &mut NfcApp) {
                 return;
             };
             let uid = snap.uid.clone();
+            // P0 门禁（docs/02 §6）：当前卡身份已知且与档案不符（换卡后未读卡）
+            // → 禁用「写这张卡」，防止把旧卡数据写进新卡；身份未知（None / 块 0
+            // 解不出）不在 UI 拦截，由引擎 `start_next_stage` 硬闸做最后防线。
+            let write_allowed = app
+                .state
+                .current_uid
+                .as_deref()
+                .is_none_or(|u| u == snap.uid_cmp);
             // 顶对齐换行行：`horizontal_wrapped` 内部用 `Align::Center`（egui 0.36
             // 无 with_layout 变体），四列不等高（UID 列 16pt 大字 + 复制钮）时
             // 「UID / 卡型 / 检测 / 当前文件」标签行会高低错位。此处按其内部
@@ -170,10 +184,11 @@ fn card_context(ui: &mut Ui, app: &mut NfcApp) {
                     let known = app.state.known_key_info.len();
                     let unknown = app.state.unknown_key_info.len();
                     ui.label(
-                        RichText::new(t("html_detect_summary"))
+                        RichText::new(t("html_detect_current_card"))
                             .size(10.0)
                             .color(paint.color(paint.text_secondary)),
-                    );
+                    )
+                    .on_hover_text(t("html_tip_detect_maybe_other_card"));
                     ui.label(
                         RichText::new(format!(
                             "{} {known} · {} {unknown}",
@@ -218,7 +233,15 @@ fn card_context(ui: &mut Ui, app: &mut NfcApp) {
                         .color(paint.color(paint.text_inverse)),
                 )
                 .fill(paint.color(paint.primary));
-                if ui.add(write).clicked() {
+                // P0 门禁（docs/02 §6）：当前卡与转储 UID 不一致时禁用写卡，
+                // 悬停说明原因（引擎硬闸仍会在执行前再拦一次）。
+                let write_resp = if write_allowed {
+                    ui.add(write)
+                } else {
+                    ui.add_enabled(false, write)
+                        .on_disabled_hover_text(t("html_tip_write_uid_mismatch"))
+                };
+                if write_resp.clicked() {
                     write_clicked = true;
                 }
             });

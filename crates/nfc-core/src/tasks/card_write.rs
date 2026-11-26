@@ -46,6 +46,9 @@ pub enum WriteFailure {
     ReadFailed,
     /// 转储文件不足 16 字节，读不出完整 block0，对标 `command.js:200`
     TooShort,
+    /// 转储文件大小非 64 字节倍数（P0 预检，docs/02 §6）：mfclassic 必然失败，
+    /// 提前拦下省一次 B6 确认 + 备份读卡。
+    BadLayout,
 }
 
 impl WriteFailure {
@@ -54,8 +57,35 @@ impl WriteFailure {
         match self {
             WriteFailure::ReadFailed => "log_msg_read_dump_file_failed",
             WriteFailure::TooShort => "log_msg_dump_file_too_short",
+            WriteFailure::BadLayout => "log_msg_dump_file_bad_layout",
         }
     }
+}
+
+/// 卡号标识归一化（P0 交叉核对，docs/02 §6）：任取 UID / block0 hex 的前 8 位
+/// （4 字节），小写。7 字节卡号取 4 字节前缀（与档案条显示一致）；引擎写卡
+/// 硬闸另按**完整 block0** 比对，不受此归一化削弱。
+pub fn uid_cmp_hex(uid_or_block0: &str) -> String {
+    uid_or_block0
+        .chars()
+        .take(8)
+        .collect::<String>()
+        .to_lowercase()
+}
+
+/// 写卡源文件预检（P0，docs/02 §6）：非文件 / 空 / 非 64 倍数 → 对应失败原因。
+/// 成功（可继续写卡）返回 `None`。
+pub fn dump_file_failure(path: &Path) -> Option<WriteFailure> {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return Some(WriteFailure::ReadFailed);
+    };
+    if !meta.is_file() || meta.len() == 0 {
+        return Some(WriteFailure::ReadFailed);
+    }
+    if meta.len() % 64 != 0 {
+        return Some(WriteFailure::BadLayout);
+    }
+    None
 }
 
 /// 读取 dump 的 block0 并转大写 hex，对标 `command.js:193-196`。
@@ -758,6 +788,51 @@ mod tests {
         let mut s2 = AppState::new();
         report_failure(&mut s2, WriteFailure::ReadFailed);
         assert!(s2.log_buffer.contains("无法读取转储文件"));
+    }
+
+    // ---------------------------------------------------------- P0 写卡预检 / UID 归一化
+
+    #[test]
+    fn uid_cmp_hex_normalizes_uid_and_block0() {
+        // 4 字节 UID（8 hex）原样小写。
+        assert_eq!(uid_cmp_hex("A1B2C3D4"), "a1b2c3d4");
+        // 7 字节 UID（14 hex）取前 8 位（4 字节前缀），与档案条显示一致。
+        assert_eq!(uid_cmp_hex("A1B2C3D4000890"), "a1b2c3d4");
+        // 32 位 block0 hex 同样取前 8 位。
+        assert_eq!(uid_cmp_hex("AABBCCDD556677889900112233445566"), "aabbccdd");
+        // 不足 8 位不 panic（退化整串）。
+        assert_eq!(uid_cmp_hex("ab"), "ab");
+    }
+
+    #[test]
+    fn dump_file_failure_rejects_missing_empty_and_bad_size() {
+        let dir = tempdir("dump-file-failure");
+        let _guard = TempGuard(dir.clone());
+        // 缺失 → ReadFailed
+        assert_eq!(
+            dump_file_failure(&dir.join("nope.mfd")),
+            Some(WriteFailure::ReadFailed)
+        );
+        // 空文件 → ReadFailed
+        let empty = dir.join("empty.mfd");
+        std::fs::write(&empty, b"").unwrap();
+        assert_eq!(dump_file_failure(&empty), Some(WriteFailure::ReadFailed));
+        // 非 64 倍数 → BadLayout
+        let odd = dir.join("odd.mfd");
+        std::fs::write(&odd, vec![0u8; 63]).unwrap();
+        assert_eq!(dump_file_failure(&odd), Some(WriteFailure::BadLayout));
+        // 64 倍数（合法转储）→ None
+        let ok = dir.join("ok.mfd");
+        std::fs::write(&ok, vec![0u8; 1024]).unwrap();
+        assert_eq!(dump_file_failure(&ok), None);
+    }
+
+    #[test]
+    fn bad_layout_maps_to_i18n_key() {
+        assert_eq!(
+            WriteFailure::BadLayout.i18n_key(),
+            "log_msg_dump_file_bad_layout"
+        );
     }
 
     // ---------------------------------------------------------- S18 新增
