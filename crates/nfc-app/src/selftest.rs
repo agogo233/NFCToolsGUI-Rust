@@ -2683,7 +2683,7 @@ fn c_write_ic_cancel_confirm() -> Result<(), String> {
 fn c_engine_never_opens_dialog() -> Result<(), String> {
     // 关键回归：路径已由 app 预选好，engine 绝不能再弹文件框
     let (_d, mut app) = app_with_temp_dumps("no-open-dialog");
-    std::fs::write(app.paths.dumpfiles_dir().join("card.mfd"), vec![0x5a; 32]).unwrap();
+    std::fs::write(app.paths.dumpfiles_dir().join("card.mfd"), vec![0x5a; 64]).unwrap();
     let mut dlg = nfc_core::dialogs::ScriptedDialog::new().with_confirm(true);
     app.engine
         .dispatch(
@@ -3013,7 +3013,7 @@ fn c_backup_nonzero_blocks_write() -> Result<(), String> {
     let (_d, mut app) = app_with_temp_dumps("backup-nonzero");
     app.paths.base();
     let d = app.paths.dumpfiles_dir();
-    std::fs::write(d.join("card.mfd"), vec![0x5a; 32]).unwrap();
+    std::fs::write(d.join("card.mfd"), vec![0x5a; 64]).unwrap();
     // 用「第一段非 0 退出」的 runner：Engine 的 mock 契约是 pump 一次后认 exit
     app.engine = nfc_core::engine::Engine::new(Box::new(
         nfc_core::runner::MockToolRunner::new(vec![]).with_exit(Some(1)),
