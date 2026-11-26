@@ -500,7 +500,10 @@ fn c_wide_tier_editor_in_viewport() -> Result<(), String> {
         time: Some(0.0),
         ..Default::default()
     };
-    let out = ctx.run_ui(input, |ui| app.draw(ui));
+    let mut out = ctx.run_ui(input, |ui| app.draw(ui));
+    // epaint 的 TexturesDelta 未消费就 drop 会 panic（epaint textures.rs:337），
+    // 与 frame_verts 同款处理：先 clear 再断言。
+    out.textures_delta.clear();
     let update = out
         .platform_output
         .accesskit_update
