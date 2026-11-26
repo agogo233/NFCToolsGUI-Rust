@@ -409,11 +409,8 @@ fn editor_body(ui: &mut Ui, app: &mut NfcApp, stacked: bool) {
             // 载入为止，避免过期错误挂着误导）
             app.forms.editor.load_error = None;
         }
-        check_report_box(
-            ui,
-            paint,
-            &dumpcheck::check_report(&app.forms.editor.sectors),
-        );
+        let check_lines = dumpcheck::check_report(&app.forms.editor.sectors);
+        check_report_box(ui, paint, &check_lines);
     } else {
         // 宽档：编辑器高度固定，滚动区必须给底部「文件条 + 按钮行」预留高度
         // （最多两行 ≈ 120px），否则吃掉全部剩余高度，把 footer 排到面板
@@ -426,11 +423,8 @@ fn editor_body(ui: &mut Ui, app: &mut NfcApp, stacked: bool) {
             .auto_shrink([false, true])
             .show(ui, |ui| {
                 let dirty = sector_edit_rows(ui, app, editor_is_1k, in_byte, &mut byte_view_buf);
-                check_report_box(
-                    ui,
-                    paint,
-                    &dumpcheck::check_report(&app.forms.editor.sectors),
-                );
+                let check_lines = dumpcheck::check_report(&app.forms.editor.sectors);
+                check_report_box(ui, paint, &check_lines);
                 dirty
             });
         if inner.inner {
@@ -468,7 +462,7 @@ fn check_report_box(ui: &mut Ui, paint: crate::theme_ui::Paint, lines: &[String]
                 } else {
                     paint.color(paint.text)
                 };
-                ui.label(RichText::new(line.clone()).size(12.0).color(color));
+                ui.label(RichText::new(line.as_str()).size(12.0).color(color));
             }
         });
 }
