@@ -1208,8 +1208,8 @@ const OPEN_SOURCE: [(&str, &str, &str); 18] = [
     ("open", "https://github.com/open/open", "MIT OR Apache-2.0"),
 ];
 
-const REPO_URL: &str = "https://github.com/GSWXXN/NFCToolsGUI";
-const LICENSE_URL: &str = "https://github.com/GSWXXN/NFCToolsGUI/blob/main/LICENSE";
+const REPO_URL: &str = "https://github.com/agogo233/NFCToolsGUI-Rust";
+const LICENSE_URL: &str = "https://github.com/agogo233/NFCToolsGUI-Rust/blob/main/LICENSE";
 
 /// `about.html`：图标 + 版本 + 编译者 + 仓库 + 许可证 + 开源清单。
 fn about(ui: &mut Ui) -> bool {
