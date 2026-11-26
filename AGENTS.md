@@ -23,7 +23,7 @@ NFCToolsGUI 的 Rust 重写版（AGPL-3.0）。与 PN532 交互的跨平台桌�
 cargo build --release              # → target/release/nfc-app(.exe)
 cargo run -p nfc-app --release     # 运行 GUI
 cargo run -p nfc-core -- --selftest   # 14 项核心行为（不开窗口）
-cargo run -p nfc-app  -- --selftest   # 114 项界面 + 接线（S8~S19 + 界面改版 + 体验优化 + 编辑器合并 + 编辑器失败可见 3 + 跨卡误写防护 P0~P3 7）
+cargo run -p nfc-app  -- --selftest   # 115 项界面 + 接线（S8~S19 + 界面改版 + 体验优化 + 编辑器合并 + 编辑器失败可见 3 + 跨卡误写防护 P0~P3 7 + 宽档编辑器视口 1）
 
 cargo test --workspace             # 600+ 项
 cargo test -p nfc-core --test real_tools --test tool_cli   # 需要 framework/bin（否则自动跳过）

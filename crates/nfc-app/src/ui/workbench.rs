@@ -219,32 +219,41 @@ fn card_context(ui: &mut Ui, app: &mut NfcApp) {
                 });
             });
             ui.add_space(6.0);
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui
-                    .button(RichText::new(t("html_edit_dump")).size(12.0))
-                    .clicked()
-                {
-                    editor_clicked = true;
-                }
-                let write = egui::Button::new(
-                    RichText::new(t("html_write_this_dump"))
-                        .size(12.0)
-                        .strong()
-                        .color(paint.color(paint.text_inverse)),
-                )
-                .fill(paint.color(paint.primary));
-                // P0 门禁（docs/02 §6）：当前卡与转储 UID 不一致时禁用写卡，
-                // 悬停说明原因（引擎硬闸仍会在执行前再拦一次）。
-                let write_resp = if write_allowed {
-                    ui.add(write)
-                } else {
-                    ui.add_enabled(false, write)
-                        .on_disabled_hover_text(t("html_tip_write_uid_mismatch"))
-                };
-                if write_resp.clicked() {
-                    write_clicked = true;
-                }
-            });
+            // 不能裸 `with_layout`：横向 + 非换行 + cross_align=Center 的行在
+            // egui 里会把行高撑满剩余可用高度（`next_frame_ignore_wrap` 的
+            // 填充逻辑 + 整帧 min_rect 扩到整行框），档案条 Frame 随之占满
+            // 中栏，扇区编辑器被排到视口外（docs/02 §6.52）。先分配定高
+            // 一行再在其中右对齐——与上方信息行同一修法。
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
+                Layout::right_to_left(Align::Center),
+                |ui| {
+                    if ui
+                        .button(RichText::new(t("html_edit_dump")).size(12.0))
+                        .clicked()
+                    {
+                        editor_clicked = true;
+                    }
+                    let write = egui::Button::new(
+                        RichText::new(t("html_write_this_dump"))
+                            .size(12.0)
+                            .strong()
+                            .color(paint.color(paint.text_inverse)),
+                    )
+                    .fill(paint.color(paint.primary));
+                    // P0 门禁（docs/02 §6）：当前卡与转储 UID 不一致时禁用写卡，
+                    // 悬停说明原因（引擎硬闸仍会在执行前再拦一次）。
+                    let write_resp = if write_allowed {
+                        ui.add(write)
+                    } else {
+                        ui.add_enabled(false, write)
+                            .on_disabled_hover_text(t("html_tip_write_uid_mismatch"))
+                    };
+                    if write_resp.clicked() {
+                        write_clicked = true;
+                    }
+                },
+            );
         });
     if editor_clicked {
         // 带**完整路径**：要载入的 dump 可能在 dumpfiles/ 之外（用户自选

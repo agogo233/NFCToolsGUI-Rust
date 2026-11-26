@@ -156,6 +156,8 @@ pub fn run() -> eframe::Result {
         ("ACL 解读解码", c_acl_decode),
         // ── 界面改版 · stack 档（<820）回归 ──
         ("stack 档滚动后编辑器可见", c_stack_tier_scroll_sees_editor),
+        // ── 界面改版 · 宽档（≥820）回归 ──
+        ("宽档解卡后编辑器在视口内", c_wide_tier_editor_in_viewport),
         // ── 编辑器并入中栏（docs/02 §6.48）──
         ("编辑器入口分流（路径/裸名）", c_editor_open_dispatch),
         ("dirty 载入先确认", c_editor_dirty_confirm),
@@ -466,6 +468,54 @@ fn c_stack_tier_scroll_sees_editor() -> Result<(), String> {
     if peak < base + 1000 {
         return Err(format!(
             "stack 档滚动后编辑器扇区框未见绘制：无滚轮基线 {base} 顶点 vs 滚动峰值 {peak} 顶点"
+        ));
+    }
+    Ok(())
+}
+
+/// 宽档（≥820）编辑器视口回归：档案条按钮行必须定高。
+///
+/// 裸 `with_layout`（`Align::Center`）会把该行撑满中栏剩余高度，档案条
+/// 占满整列、扇区编辑器整卡被排到视口外（真机：解卡保存后中栏只剩卡片
+/// 档案条）。宽档无外层滚动区，被排出去就再也看不到——用 AccessKit
+/// 节点坐标直接断言编辑器标题在屏幕内（Label 角色文本存节点 `value`）。
+fn c_wide_tier_editor_in_viewport() -> Result<(), String> {
+    let mut app = NfcApp::new(nfc_core::state::AppState::new());
+    let mut bytes = vec![0u8; 1024];
+    bytes[0..4].copy_from_slice(&[0xa2, 0x3d, 0xc0, 0x30]);
+    bytes[4] = 0xa2 ^ 0x3d ^ 0xc0 ^ 0x30;
+    app.card_snapshot =
+        crate::ui::workbench::snapshot_from_bytes(&bytes, "p".to_owned(), "x.mfd".to_owned());
+    app.forms.editor.load(Some("x.mfd".into()), &bytes).unwrap();
+    let ctx = Context::default();
+    crate::theme_ui::apply_style(&ctx);
+    crate::theme_ui::apply_visuals(&ctx);
+    ctx.enable_accesskit();
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+    let input = egui::RawInput {
+        screen_rect: Some(screen),
+        time: Some(0.0),
+        ..Default::default()
+    };
+    let out = ctx.run_ui(input, |ui| app.draw(ui));
+    let update = out
+        .platform_output
+        .accesskit_update
+        .as_ref()
+        .ok_or("未生成 AccessKit 树（enable_accesskit 未生效）")?;
+    let title = nfc_core::i18n::t("html_sector_editor");
+    let node = update
+        .nodes
+        .iter()
+        .map(|(_, n)| n)
+        .find(|n| n.value() == Some(title.as_str()))
+        .ok_or_else(|| format!("未找到「{title}」无障碍节点"))?;
+    let bounds = node
+        .bounds()
+        .ok_or_else(|| format!("「{title}」节点无 bounds"))?;
+    if bounds.y0 < 0.0 || bounds.y1 > 800.0 {
+        return Err(format!(
+            "宽档编辑器标题在视口外：y={bounds.y0}..{bounds.y1}（屏幕高 800）"
         ));
     }
     Ok(())

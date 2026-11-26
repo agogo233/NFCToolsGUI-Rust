@@ -1222,8 +1222,8 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     # 按 ("名字", 标识符) 配对计数：标识符不一定以 `c_` 开头
     #（`case_phone_wristband` 就是一条），只数 `c_` 会少算 1 项。
     n_cases = len(re.findall(r'\(\s*\n?\s*"[^"]+",\s*\n?\s*[a-z][a-z0-9_]*\s*,?\s*\n?\s*\)', _vec))
-    check(n_cases == 114,
-          "S9-S19 UI selftest 114 项（107 原有 + P0 失卡清档/UID 不符 2 + P1 打开文件 dirty 确认 1 + P2 写卡源缺失/非法转储无写卡入口 2 + P3 导出判空/门禁前置 2）",
+    check(n_cases == 115,
+          "S9-S19 UI selftest 115 项（107 原有 + P0 失卡清档/UID 不符 2 + P1 打开文件 dirty 确认 1 + P2 写卡源缺失/非法转储无写卡入口 2 + P3 导出判空/门禁前置 2 + 宽档编辑器视口 1）",
           f"实际 {n_cases}")
 
     # ── S10 dump 三面板 ──────────────────────────────────────────
@@ -1330,8 +1330,8 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     # selftest
     _vec2 = stf9[stf9.index("vec![") : stf9.index("];", stf9.index("vec!["))]
     n11 = len(re.findall(r'\(\s*\n?\s*"[^"]+",\s*\n?\s*[a-z][a-z0-9_]*\s*,?\s*\n?\s*\)', _vec2))
-    check(n11 == 114,
-          "S11-S19 UI selftest 114 项（107 原有 + P0 失卡清档/UID 不符 2 + P1 打开文件 dirty 确认 1 + P2 写卡源缺失/非法转储无写卡入口 2 + P3 导出判空/门禁前置 2）",
+    check(n11 == 115,
+          "S11-S19 UI selftest 115 项（107 原有 + P0 失卡清档/UID 不符 2 + P1 打开文件 dirty 确认 1 + P2 写卡源缺失/非法转储无写卡入口 2 + P3 导出判空/门禁前置 2 + 宽档编辑器视口 1）",
           f"实际 {n11}")
 
     # ── S11-2 系统文件对话框 + 写卡接线 ───────────────────────────
