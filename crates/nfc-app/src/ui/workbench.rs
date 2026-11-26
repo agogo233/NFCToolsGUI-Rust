@@ -61,7 +61,7 @@ pub fn snapshot_from_bytes(
         uid,
         // 与 `AppState::current_uid` 同格式（块 0 前 4 字节、8 位小写 hex）。
         uid_cmp: block0
-            .map(nfc_core::tasks::card_write::uid_cmp_hex)
+            .map(|b| nfc_core::tasks::card_write::uid_cmp_hex(b))
             .unwrap_or_default(),
         card_type: card_type(bytes.len()),
         groups,
