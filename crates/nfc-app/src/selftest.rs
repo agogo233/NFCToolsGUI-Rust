@@ -518,7 +518,8 @@ fn c_wide_tier_editor_in_viewport() -> Result<(), String> {
         .ok_or_else(|| format!("「{title}」节点无 bounds"))?;
     if bounds.y0 < 0.0 || bounds.y1 > 800.0 {
         return Err(format!(
-            "宽档编辑器标题在视口外：y={bounds.y0}..{bounds.y1}（屏幕高 800）"
+            "宽档编辑器标题在视口外：y={}..{}（屏幕高 800）",
+            bounds.y0, bounds.y1
         ));
     }
     let open = nfc_core::i18n::t("html_open_file");
@@ -533,7 +534,8 @@ fn c_wide_tier_editor_in_viewport() -> Result<(), String> {
         .ok_or_else(|| format!("「{open}」节点无 bounds"))?;
     if bounds.y0 < 0.0 || bounds.y1 > 800.0 {
         return Err(format!(
-            "编辑器「{open}」按钮在视口外：y={bounds.y0}..{bounds.y1}（屏幕高 800）"
+            "编辑器「{open}」按钮在视口外：y={}..{}（屏幕高 800）",
+            bounds.y0, bounds.y1
         ));
     }
     Ok(())
