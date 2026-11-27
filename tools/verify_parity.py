@@ -171,6 +171,7 @@ UX_POLISH_EXTRA = {
     "html_card_registry_title",
     "html_card_registry_empty",
     "html_card_registry_empty_hint",
+    "html_date",
     "log_msg_uid_copied",
     "html_tip_copy_uid",
     "html_tip_open_event_dump",
@@ -1854,7 +1855,7 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
           f"{[k for k in i18n_asset if k[-1:] in {':', '.', ',', ' ', '-', '_'}]}")
     # 本地补的 key 数量原本写死在 Rust 测试与此处两处，已漂移过一次。双向钉死。
     check(len(LOCAL_EXTRA) == 14 + len(S16_EXTRA) + len(S17_EXTRA) + len(S18_EXTRA) + len(MFOC_PROBES_EXTRA) + len(LOG_COPY_EXTRA) + len(DUMP_VIEW_EXTRA) + len(PANEL_VALIDATION_EXTRA) + len(NO_PORTAL_EXTRA) + len(REDESIGN_EXTRA) + len(MAXIMIZE_EXTRA) + len(UX_POLISH_EXTRA) + len(AUDIT_FIX_EXTRA) + len(SNAPSHOT_UI_EXTRA),
-          "R 本地补的 i18n key 恰为 134 个", f"实际 {len(LOCAL_EXTRA)}")
+          "R 本地补的 i18n key 恰为 135 个", f"实际 {len(LOCAL_EXTRA)}")
     cd = rd(CORE / "src/command.rs")
     # rustfmt 会把字段拆成多行，故用 DOTALL 匹配整个结构体字面量
     specs = re.findall(

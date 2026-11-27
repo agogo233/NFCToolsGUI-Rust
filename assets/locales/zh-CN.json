@@ -249,6 +249,7 @@
     "html_auto_run_hint": "勾选“自动执行”后，下方参数将被忽略",
     "html_appearance": "外观",
     "html_data_dir": "数据目录",
+    "html_date": "日期",
     "html_tool_dir": "工具目录",
     "html_check_dump": "体检全卡",
     "html_check_all_ok": "未发现问题",

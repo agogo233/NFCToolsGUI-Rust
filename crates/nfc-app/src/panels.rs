@@ -807,68 +807,82 @@ fn settings(ui: &mut Ui, app: &mut NfcApp) -> bool {
     let mut open_dump = false;
 
     scroll_body(ui, 56.0, |ui| {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(t("html_data_dir")).strong());
-            ui.add(egui::Label::new(RichText::new(dump_dir.display().to_string())).truncate())
-                .on_hover_text(dump_dir.display().to_string());
-            open_dump = ui.button(t("html_open_dump_folder")).clicked();
-        });
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(t("html_tool_dir")).strong());
-            let path = if tool_dir.as_os_str().is_empty() {
-                "-".to_owned()
-            } else {
-                tool_dir.display().to_string()
-            };
-            ui.add(egui::Label::new(RichText::new(path.clone())).truncate())
-                .on_hover_text(&path);
-            if !tool_ok {
-                ui.colored_label(ui.visuals().error_fg_color, missing.join("、"));
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(t("html_current_version")).strong());
-            ui.label(env!("APP_VERSION"));
-            ui.label(env!("BUILDER"));
-        });
-        // S18 B2：通信速度 + 深层扫描。改完**不立即生效**——要等下次连接
-        // （`connect()` 才读 `state.current_speed` / `GateState.deep_scan`），
-        // 故文案提示「将在重连设备后生效」。
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(t("html_speed")).strong());
-            let speeds: [(u32, &str); 5] = [
-                (115200, "115200"),
-                (230400, "230400"),
-                (460800, "460800"),
-                (921600, "921600"),
-                (19200, "19200"),
-            ];
-            let cur = app.state.current_speed;
-            egui::ComboBox::from_id_salt("conn_speed")
-                .selected_text(
-                    speeds
-                        .iter()
-                        .find(|(s, _)| *s == cur)
-                        .map(|(_, l)| *l)
-                        .unwrap_or("115200"),
-                )
-                .width(110.0)
-                .show_ui(ui, |ui| {
-                    for (s, l) in speeds {
-                        if ui.selectable_label(s == cur, l).clicked() {
-                            app.state.current_speed = s;
-                        }
+        // 五项配置改用 Grid 对齐标签列：原 `ui.horizontal` 各标签字数不一，
+        // 值列（路径 / 版本 / 下拉 / 滑块）左缘参差。Grid 按最宽标签
+        // （「MFOC 探测次数」）自动定列宽，值列统一左缘对齐。
+        egui::Grid::new("settings-rows")
+            .num_columns(2)
+            .spacing(egui::vec2(12.0, 8.0))
+            .show(ui, |ui| {
+                ui.label(RichText::new(t("html_data_dir")).strong());
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::Label::new(RichText::new(dump_dir.display().to_string())).truncate(),
+                    )
+                    .on_hover_text(dump_dir.display().to_string());
+                    open_dump = ui.button(t("html_open_dump_folder")).clicked();
+                });
+                ui.end_row();
+
+                ui.label(RichText::new(t("html_tool_dir")).strong());
+                ui.horizontal(|ui| {
+                    let path = if tool_dir.as_os_str().is_empty() {
+                        "-".to_owned()
+                    } else {
+                        tool_dir.display().to_string()
+                    };
+                    ui.add(egui::Label::new(RichText::new(path.clone())).truncate())
+                        .on_hover_text(&path);
+                    if !tool_ok {
+                        ui.colored_label(ui.visuals().error_fg_color, missing.join("、"));
                     }
                 });
-        });
+                ui.end_row();
+
+                ui.label(RichText::new(t("html_current_version")).strong());
+                ui.horizontal(|ui| {
+                    ui.label(env!("APP_VERSION"));
+                    ui.label(env!("BUILDER"));
+                });
+                ui.end_row();
+
+                ui.label(RichText::new(t("html_speed")).strong());
+                let speeds: [(u32, &str); 5] = [
+                    (115200, "115200"),
+                    (230400, "230400"),
+                    (460800, "460800"),
+                    (921600, "921600"),
+                    (19200, "19200"),
+                ];
+                let cur = app.state.current_speed;
+                egui::ComboBox::from_id_salt("conn_speed")
+                    .selected_text(
+                        speeds
+                            .iter()
+                            .find(|(s, _)| *s == cur)
+                            .map(|(_, l)| *l)
+                            .unwrap_or("115200"),
+                    )
+                    .width(110.0)
+                    .show_ui(ui, |ui| {
+                        for (s, l) in speeds {
+                            if ui.selectable_label(s == cur, l).clicked() {
+                                app.state.current_speed = s;
+                            }
+                        }
+                    });
+                ui.end_row();
+
+                ui.label(RichText::new(t("html_mfoc_probes")).strong());
+                ui.add(egui::Slider::new(&mut app.state.mfoc_probes, 1..=255))
+                    .on_hover_text(t("html_mfoc_probes_tip"));
+                ui.end_row();
+            });
+        // S18 B2：通信速度 + 深层扫描改完**不立即生效**——要等下次连接
+        // （`connect()` 才读 `state.current_speed` / `GateState.deep_scan`），
+        // 故文案提示「将在重连设备后生效」。复选框与提示非标签值行，不入 Grid。
         ui.checkbox(&mut app.state.deep_scan, t("html_deep_scan"))
             .on_hover_text(t("html_deep_scan"));
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(t("html_mfoc_probes")).strong());
-            ui.add(egui::Slider::new(&mut app.state.mfoc_probes, 1..=255))
-                .on_hover_text(t("html_mfoc_probes_tip"));
-        });
         if app.state.is_device_connected {
             ui.label(RichText::new(t("html_applies_after_reconnect")).size(11.0))
                 .on_hover_text(t("html_applies_after_reconnect"));
@@ -1289,8 +1303,10 @@ fn phone_wristband(ui: &mut Ui, app: &mut NfcApp) -> bool {
                 ui.label(t("html_phw_block"));
                 ui.add(egui::TextEdit::singleline(&mut app.forms.phw.block).desired_width(56.0));
                 ui.end_row();
-                ui.label(t("html_phw_range"));
             });
+        // 范围提示独立成整行（原先挤在 Grid 左列、右列留空，观感别扭）
+        ui.add_space(4.0);
+        ui.label(t("html_phw_range"));
 
         // docs/02 §6.42：扇区 0..=15、块 1..=2 前置红字提示。读卡号不依赖扇区/块，
         // 故不禁用 read；写数据扇区仍由引擎侧 is_valid 兜底，这里把提示提前到输入时。
@@ -1492,7 +1508,7 @@ fn card_registry(ui: &mut Ui, app: &mut NfcApp) -> bool {
                         ui.label(RichText::new("UID").strong().size(12.0));
                         ui.label(RichText::new(t("html_current_file")).strong().size(12.0));
                         ui.label(RichText::new(t("html_detect_summary")).strong().size(12.0));
-                        ui.label(RichText::new(t("html_phw_card_no")).strong().size(12.0));
+                        ui.label(RichText::new(t("html_date")).strong().size(12.0));
                         ui.end_row();
                         for r in &registry.registry {
                             ui.label(
@@ -1541,7 +1557,7 @@ fn card_registry(ui: &mut Ui, app: &mut NfcApp) -> bool {
                             ui.label(RichText::new(keys).size(12.0));
                             ui.label(
                                 RichText::new(&r.date)
-                                    .size(11.0)
+                                    .size(12.0)
                                     .color(paint.color(paint.text_secondary)),
                             );
                             ui.end_row();

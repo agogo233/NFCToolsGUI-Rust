@@ -273,6 +273,7 @@ fn c_widgets_exist() -> Result<(), String> {
         "html_auto_run_hint",
         "html_appearance",
         "html_data_dir",
+        "html_date",
         "html_tool_dir",
     ] {
         let v = nfc_core::i18n::t(key);
