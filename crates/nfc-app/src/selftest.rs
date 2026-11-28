@@ -2888,8 +2888,8 @@ fn c_format_card_two_stage() -> Result<(), String> {
     if t2 != "nfc-mfclassic" {
         return Err(format!("第二段应是 nfc-mfclassic，实为 {t2}"));
     }
-    // f A u <temp> <temp> f
-    if a2.len() != 6 || a2[0] != "f" || a2[3] != a2[4] {
+    // f A u <temp> <temp>（§6.55 起无 force 尾参）
+    if a2.len() != 5 || a2[0] != "f" || a2[3] != a2[4] {
         return Err(format!("第二段参数错: {a2:?}"));
     }
     Ok(())
