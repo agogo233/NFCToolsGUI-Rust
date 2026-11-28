@@ -1362,9 +1362,10 @@ impl Engine {
             return Ok(());
         }
         // P0 硬闸（docs/02 §6 安全偏离）：普通写卡（`source` 非 None，CUID /
-        // 格式化 / phw 写回均为 None 不受影响）比对**备份段刚读出的当前卡**
-        // 与**源转储**的完整 block0。换卡后拿着旧转储写新卡时，两者不一致 →
-        // 中止第二段，备份保留；源文件读不出 0 块同样中止（fail-safe）。
+        // 格式化 / phw 写回均为 None 不受影响）比对**备份段刚读出的当前卡**与
+        // **源转储**的卡号（block0 前 4 字节；普通写卡跳过 block0，厂商字节
+        // 不写入、不参与判定）。换卡后拿旧转储写新卡时，两者不一致 → 中止
+        // 第二段，备份保留；任一侧卡号读不出 / 非法同样中止（fail-safe）。
         // 跨卡克隆请走 CUID 写入（本闸不拦 cuid）。
         if let Some(src) = &next.source {
             let (cur, want) = match (
@@ -1392,15 +1393,39 @@ impl Engine {
                     return Ok(());
                 }
             };
-            if tasks::card_write::block0_is_valid(&cur)
-                && tasks::card_write::block0_is_valid(&want)
-                && cur != want
-            {
+            let (cur_uid, want_uid) = match (
+                tasks::card_write::uid_gate(&cur),
+                tasks::card_write::uid_gate(&want),
+            ) {
+                (Some(c), Some(w)) => (c, w),
+                _ => {
+                    // 任一侧卡号不可解析（备份残缺 / 源文件块 0 异常）：
+                    // fail-safe，宁停勿写（docs/02 §6 P0-A）。
+                    let src_s = src.to_string_lossy();
+                    state.apply(Event::Log(format!(
+                        "\n{}: {src_s}\n",
+                        crate::i18n::t("log_msg_write_aborted_dump_unreadable")
+                    )));
+                    state.apply(Event::EventItem {
+                        kind: EventKind::Error,
+                        text: format!(
+                            "{}: {src_s}",
+                            crate::i18n::t("log_msg_write_aborted_dump_unreadable")
+                        ),
+                    });
+                    state.apply(Event::Status {
+                        text: crate::i18n::t("indicator_error"),
+                        indicator: Indicator::Error,
+                    });
+                    return Ok(());
+                }
+            };
+            if cur_uid != want_uid {
                 let text = format!(
                     "{}（当前 {}，源 {}）",
                     crate::i18n::t("log_msg_write_aborted_uid_mismatch"),
-                    tasks::card_write::uid_prefix(&cur),
-                    tasks::card_write::uid_prefix(&want)
+                    cur_uid.to_uppercase(),
+                    want_uid.to_uppercase()
                 );
                 state.apply(Event::Log(format!("\n{text}\n")));
                 state.apply(Event::EventItem {
@@ -3037,6 +3062,76 @@ mod tests {
         assert!(p.temp_mfd().exists(), "中止后应保留备份");
     }
 
+    /// P0 硬闸口径（docs/02 §6 P0-A）：卡号相同、厂商字节不同 → **放行**。
+    /// 普通写卡跳过 block0，厂商字节根本不会写进卡片，不应参与判定。
+    #[test]
+    fn write_ic_same_uid_manufacturer_differs_proceeds() {
+        let (_d, p) = paths("write-same-uid");
+        let src = p.dumpfiles_dir().join("a.mfd");
+        let mut srcb = vec![0x00u8; 64];
+        srcb[0..4].copy_from_slice(&[0x11, 0x22, 0x33, 0x44]);
+        std::fs::write(&src, &srcb).unwrap();
+        let mut e = Engine::new(Box::new(
+            MockToolRunner::new(vec![Chunk::stdout("Done, 63 of 64 blocks written.\n")])
+                .with_exit(Some(0)),
+        ));
+        let mut st = connected();
+        let mut dlg = MockDialog::new().with_confirm(true);
+        e.dispatch(
+            Action::WithArg("write-IC", "a.mfd".into()),
+            &mut st,
+            &p,
+            &mut dlg,
+        )
+        .unwrap();
+        // 备份段产出（当前卡）：卡号相同（0x11..0x44），厂商字节不同（0xff）
+        let mut tmp = vec![0xffu8; 64];
+        tmp[0..4].copy_from_slice(&[0x11, 0x22, 0x33, 0x44]);
+        std::fs::write(p.temp_mfd(), &tmp).unwrap();
+        run_to_end(&mut e, &mut st, &p, 3);
+        let (tool, _, _) = e.runner().started_last().unwrap();
+        assert_eq!(
+            tool, "nfc-mfclassic",
+            "卡号相同（厂商字节不同）应进入写卡第二段: {}",
+            st.log_buffer
+        );
+        assert!(
+            !st.log_buffer.contains("写卡已中止"),
+            "同卡号不应被误判中止: {}",
+            st.log_buffer
+        );
+    }
+
+    /// P0 硬闸 fail-safe（docs/02 §6 P0-A）：备份文件读不出完整卡号（不足
+    /// 4 字节）→ 一律中止第二段，绝不跳过校验继续写。
+    #[test]
+    fn write_ic_unreadable_uid_aborts_second_stage() {
+        let (_d, p) = paths("write-unreadable-uid");
+        let src = p.dumpfiles_dir().join("a.mfd");
+        std::fs::write(&src, vec![0x5a; 64]).unwrap();
+        let mut e = Engine::new(Box::new(MockToolRunner::new(vec![]).with_exit(Some(0))));
+        let mut st = connected();
+        let mut dlg = MockDialog::new().with_confirm(true);
+        e.dispatch(
+            Action::WithArg("write-IC", "a.mfd".into()),
+            &mut st,
+            &p,
+            &mut dlg,
+        )
+        .unwrap();
+        // 备份残缺：只有 3 字节（6 位 hex，卡号不完整）
+        std::fs::write(p.temp_mfd(), vec![0x11, 0x22, 0x33]).unwrap();
+        run_to_end(&mut e, &mut st, &p, 3);
+        let (tool, _, _) = e.runner().started_last().unwrap();
+        assert_eq!(tool, "nfc-mfdetect", "卡号读不出却启动了写卡第二段");
+        assert!(
+            st.log_buffer.contains("写卡已中止"),
+            "应报中止: {}",
+            st.log_buffer
+        );
+        assert!(p.temp_mfd().exists(), "中止后应保留备份");
+    }
+
     /// P0 预检：源转储非 64 字节倍数 → 派发即拒（备份段都不启动）。
     #[test]
     fn write_ic_bad_source_layout_rejected_at_dispatch() {
@@ -3679,7 +3774,7 @@ mod tests {
         assert!(args.contains(&format!("-O{}", p.temp_mfd().display())));
     }
 
-    /// 备份成功后接第二段：`nfc-mfclassic w A u <src> <temp> f`。
+    /// 备份成功后接第二段：`nfc-mfclassic w A u <src> <temp>`（§6.55 起去 force）。
     #[test]
     fn write_ic_second_stage_uses_confirmed_source() {
         let (_d, p) = paths("write-stage2");

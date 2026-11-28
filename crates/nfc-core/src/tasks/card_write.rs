@@ -64,13 +64,25 @@ impl WriteFailure {
 
 /// 卡号标识归一化（P0 交叉核对，docs/02 §6）：任取 UID / block0 hex 的前 8 位
 /// （4 字节），小写。7 字节卡号取 4 字节前缀（与档案条显示一致）；引擎写卡
-/// 硬闸另按**完整 block0** 比对，不受此归一化削弱。
+/// 硬闸按同一口径比对（见 [`uid_gate`]）。
 pub fn uid_cmp_hex(uid_or_block0: &str) -> String {
     uid_or_block0
         .chars()
         .take(8)
         .collect::<String>()
         .to_lowercase()
+}
+
+/// 写卡硬闸的卡号判据（P0-A，docs/02 §6）：取 block0 hex 前 4 字节（8 位
+/// hex，小写）。普通写卡 `w` **跳过 block0**——厂商字节（bytes 4..16）根本
+/// 不会写进卡片，因此只比卡号、不比整个 block0：用户改了厂商字节不应被误拦。
+/// 与 `nfc-mfclassic` 自带的 UID 校验（keyfile 前 4 字节 vs 当前卡）同口径。
+///
+/// 前 8 字符不足 8 位或含非 hex 字符（读卡未成 / 备份残缺）时返回 `None`，
+/// 调用方一律**中止写卡**（fail-safe，而非跳过校验继续写）。
+pub fn uid_gate(block0_hex: &str) -> Option<String> {
+    let head: String = block0_hex.chars().take(8).collect();
+    (head.len() == 8 && head.chars().all(|c| c.is_ascii_hexdigit())).then(|| head.to_lowercase())
 }
 
 /// 写卡源文件预检（P0，docs/02 §6）：非文件 / 空 / 非 64 倍数 → 对应失败原因。
@@ -168,26 +180,31 @@ pub fn resolve_dump_id(dump_id: &str, dumps_dir: &Path) -> PathBuf {
     }
 }
 
-/// `nfc-mfclassic <sub> A u <src> <dst> f` 的公共拼装逻辑。
+/// `nfc-mfclassic <sub> A u <src> <dst>` 的公共拼装逻辑。
 fn mfclassic_args(sub: &str, src: &Path, dst: &Path) -> Vec<String> {
+    // 五个位置参数：子命令、鉴权键、卡号模式、源 dump、keyfile。
+    // **不加**原版 `command.js` 末尾的 `f`（force）：C 工具自带「keyfile 卡号
+    // vs 当前卡卡号」校验（前 4 字节），force 会关掉它、卡号不符也照写
+    // （docs/02 §6.55 P0-D）。去掉后写卡 / 格式化 / phw 写回 / CUID 在两段
+    // 间隙换卡时由 C 工具层直接中止，与引擎 P0 硬闸形成双保险。
     vec![
         sub.to_string(),
         "A".to_string(),
         "u".to_string(),
         src.display().to_string(),
         dst.display().to_string(),
-        "f".to_string(),
     ]
 }
 
-/// `nfc-mfclassic w A u <src> <temp> f`，对标 `command.js:117`。
+/// `nfc-mfclassic w A u <src> <temp>`（无 force，见 [`mfclassic_args`]），
+/// 对标 `command.js:117`（原版的 `f` 已按 §6.55 移除）。
 ///
-/// 六个参数分别是：子命令、目标扇区、UID 模式、源 dump、临时读出 dump、扇区过滤标志。
+/// 五个参数分别是：子命令、鉴权键、卡号模式、源 dump、keyfile（备份卡）。
 pub fn mfclassic_write_args(src: &Path, temp: &Path) -> Vec<String> {
     mfclassic_args(MFCLASSIC_WRITE, src, temp)
 }
 
-/// `nfc-mfclassic f A u <temp> <temp> f`，对标 `command.js:145`。
+/// `nfc-mfclassic f A u <temp> <temp>`（无 force），对标 `command.js:145`。
 ///
 /// 源与目标同为 `temp.mfd`——先读出当前卡内容到 temp，再把 temp 写回去。
 pub fn mfclassic_format_args(temp: &Path) -> Vec<String> {
@@ -354,8 +371,8 @@ fn hex4(s: &str) -> Option<[u8; 4]> {
     Some([b[0], b[1], b[2], b[3]])
 }
 
-/// `cuid-write` 的第二段参数：`nfc-mfclassic W A u <src> <cuidkey> f`
-/// （大写 W = 解锁写，keyfile 用 CUID 空卡）。
+/// `cuid-write` 的第二段参数：`nfc-mfclassic W A u <src> <cuidkey>`
+/// （大写 W = 解锁写，keyfile 用 CUID 空卡；无 force，§6.55）。
 pub fn cuid_write_args(src: &Path, keyfile: &Path) -> Vec<String> {
     vec![
         "W".to_string(),
@@ -363,7 +380,6 @@ pub fn cuid_write_args(src: &Path, keyfile: &Path) -> Vec<String> {
         "u".to_string(),
         src.display().to_string(),
         keyfile.display().to_string(),
-        "f".to_string(),
     ]
 }
 
@@ -446,16 +462,16 @@ mod tests {
     // ---------------------------------------------------------- 参数拼装
 
     #[test]
-    fn mfclassic_write_args_match_original_six_tokens() {
+    fn mfclassic_write_args_five_tokens_without_force() {
         let a = mfclassic_write_args(Path::new("/d/in.mfd"), Path::new("/d/temp.mfd"));
-        assert_eq!(a.len(), 6);
-        assert_eq!(a, vec!["w", "A", "u", "/d/in.mfd", "/d/temp.mfd", "f"]);
+        assert_eq!(a.len(), 5, "无 force：C 工具层卡号校验生效（§6.55 P0-D）");
+        assert_eq!(a, vec!["w", "A", "u", "/d/in.mfd", "/d/temp.mfd"]);
     }
 
     #[test]
     fn mfclassic_format_args_use_temp_twice() {
         let a = mfclassic_format_args(Path::new("/d/temp.mfd"));
-        assert_eq!(a, vec!["f", "A", "u", "/d/temp.mfd", "/d/temp.mfd", "f"]);
+        assert_eq!(a, vec!["f", "A", "u", "/d/temp.mfd", "/d/temp.mfd"]);
         // 源与目标同路径
         assert_eq!(a[3], a[4]);
     }
@@ -805,6 +821,27 @@ mod tests {
     }
 
     #[test]
+    fn uid_gate_takes_first_four_bytes_and_fails_safe() {
+        // 完整 32 位 block0：取前 4 字节（卡号），小写。
+        assert_eq!(
+            uid_gate("11223344FFFF0804006263646566676869"),
+            Some("11223344".to_string())
+        );
+        // 厂商字节（后 24 位）不参与判定。
+        assert_eq!(
+            uid_gate("11223344000000000000000000000000"),
+            Some("11223344".to_string())
+        );
+        // 备份残缺（< 4 字节 = 不足 8 位 hex）→ fail-safe 返回 None。
+        assert_eq!(uid_gate("112233"), None, "3 字节备份读不出完整卡号");
+        assert_eq!(uid_gate(""), None);
+        // 非 hex 字符（脏数据）→ None，不放行到比较。
+        assert_eq!(uid_gate("ZZZZ3344FFFF"), None);
+        // 小写 hex 合法，归一化为小写。
+        assert_eq!(uid_gate("aabbccddFFFF"), Some("aabbccdd".to_string()));
+    }
+
+    #[test]
     fn dump_file_failure_rejects_missing_empty_and_bad_size() {
         let dir = tempdir("dump-file-failure");
         let _guard = TempGuard(dir.clone());
@@ -868,7 +905,7 @@ mod tests {
     #[test]
     fn cuid_write_args_are_uppercase_w_with_keyfile() {
         let a = cuid_write_args(Path::new("/d/src.mfd"), Path::new("/d/cuid.mfd"));
-        assert_eq!(a, vec!["W", "A", "u", "/d/src.mfd", "/d/cuid.mfd", "f"]);
+        assert_eq!(a, vec!["W", "A", "u", "/d/src.mfd", "/d/cuid.mfd"]);
     }
 
     #[test]

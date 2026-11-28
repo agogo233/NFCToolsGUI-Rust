@@ -196,7 +196,7 @@ fn case_write_ic() {
         "write-IC 必须把选中的 dump 路径带回，否则第 4 个参数无从构造"
     );
     let args = mfclassic_write_args(&src, &e.paths.temp_mfd());
-    assert_eq!(args.len(), 6);
+    assert_eq!(args.len(), 5, "§6.55 P0-D：无 force 尾参");
     assert_eq!(&args[..3], &["w", "A", "u"]);
     assert!(args[4].ends_with("temp.mfd"));
 }
@@ -207,7 +207,7 @@ fn case_format_card() {
     let args = mfclassic_format_args(&e.paths.temp_mfd());
     assert_eq!(args[0], "f");
     assert_eq!(args[3], args[4], "源与目标同为 temp.mfd");
-    assert_eq!(args[5], "f");
+    assert_eq!(args.len(), 5, "§6.55 P0-D：无 force 尾参");
 }
 
 /// 5. write-uid / lock。

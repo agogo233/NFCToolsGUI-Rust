@@ -1051,7 +1051,7 @@ fn s6_write_chain_builds_mfclassic_and_confirms() {
         PrepareOutcome::Ready(src.clone()),
         "write-IC 选中的文件必须随结果返回，否则调用方无从构造 nfc-mfclassic 第 4 参"
     );
-    // 参数逐字断言
+    // 参数逐字断言（§6.55 P0-D：无 force 尾参，C 工具层卡号校验生效）
     let args = mfclassic_write_args(&src, &paths.temp_mfd());
     assert_eq!(
         args,
@@ -1060,10 +1060,10 @@ fn s6_write_chain_builds_mfclassic_and_confirms() {
             "A".to_string(),
             "u".to_string(),
             args[3].clone(),
-            args[4].clone(),
-            "f".to_string()
+            args[4].clone()
         ]
     );
+    assert_eq!(args.len(), 5);
     assert!(args[3].ends_with("src.mfd"));
     assert!(args[4].ends_with("temp.mfd"));
 }
@@ -1090,7 +1090,7 @@ fn s6_format_chain_uses_temp_twice() {
     assert_eq!(args[0], "f");
     assert_eq!(args[3], args[4]);
     assert!(args[3].ends_with("temp.mfd"));
-    assert_eq!(args[5], "f");
+    assert_eq!(args.len(), 5, "§6.55 P0-D：无 force 尾参");
 }
 
 #[test]
@@ -1295,11 +1295,11 @@ fn s14_phw_write_data_read_back_patch_and_self_keys() {
     assert_eq!(&check[16..32], hex_bytes(block0), "目标块应被改写");
     assert_eq!(check[32..48], [0xEE; 16], "块 2 不应被动");
 
-    // 整卡写回：nfc-mfclassic w A u <temp> <temp> f（temp 自作 keys）
+    // 整卡写回：nfc-mfclassic w A u <temp> <temp>（temp 自作 keys，§6.55 无 force）
     let args = mfclassic_write_args(&paths.temp_mfd(), &paths.temp_mfd());
     assert_eq!(&args[..3], &["w", "A", "u"]);
     assert_eq!(args[3], args[4], "源与 keys 必须同为读回 dump");
-    assert_eq!(args[5], "f");
+    assert_eq!(args.len(), 5, "§6.55 P0-D：无 force 尾参");
 }
 
 /// 32 位 hex → 16 字节。
