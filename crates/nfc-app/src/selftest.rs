@@ -188,6 +188,16 @@ pub fn run() -> eframe::Result {
         // ── P3 体验项 ──
         ("导出密钥空不弹框", c_export_keys_empty_no_dialog),
         ("未连接危险动作不弹确认", c_danger_gate_before_confirm),
+        // ── 写卡安全加固批次（docs/02 §6.55）──
+        ("档案表按卡号关联转储", c_card_registry_dump_link),
+        (
+            "CUID 写源文件缺失不弹确认",
+            c_cuid_write_precheck_missing_file,
+        ),
+        (
+            "写入转储取消清快照副本",
+            c_editor_write_cancel_removes_snapshot,
+        ),
     ];
 
     let total = cases.len();
@@ -3760,6 +3770,100 @@ fn c_danger_gate_before_confirm() -> Result<(), String> {
     }
     if !app.state.events.iter().any(|e| e.kind == EventKind::Error) {
         return Err("应出门禁错误事件".into());
+    }
+    Ok(())
+}
+
+// ── 写卡安全加固批次（docs/02 §6.55）──
+
+/// 卡历史档案（P2-9）必须按卡号前缀关联转储文件：`<uid>_<时间>.mfd` 与档案卡号
+/// 匹配；编辑器副本 `<uid>_…_edit_<时间>.mfd` 同卡号；非 hex 卡号（文件名
+/// 兜底成 `card_…`）一律不关联，防多个卡号误链到同一个兜底文件。
+fn c_card_registry_dump_link() -> Result<(), String> {
+    let d = TempDir::new("registry-link");
+    let dir = d.0.join("dumpfiles");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("11223344_2026_01_01_00_00_00.mfd"),
+        vec![0u8; 1024],
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("aabbcccc_2026_01_01_00_00_00_edit_2026_01_02_00_00_00.mfd"),
+        vec![0u8; 64],
+    )
+    .unwrap();
+    if panels::registry_dump_for(&dir, "11223344").is_none() {
+        return Err("应按卡号前缀关联到转储文件".into());
+    }
+    if panels::registry_dump_for(&dir, "aabbcccc").is_none() {
+        return Err("编辑器副本应按卡号前缀关联".into());
+    }
+    if panels::registry_dump_for(&dir, "card").is_some() {
+        return Err("非 hex 卡号不得关联（防误链 card_ 兜底文件）".into());
+    }
+    // 长度达标但字符非法（≥6 位）：同样必须拒绝（hex 校验分支，非长度分支）
+    if panels::registry_dump_for(&dir, "zzzzzz").is_some() {
+        return Err("≥6 位的非 hex 卡号不得关联".into());
+    }
+    Ok(())
+}
+
+/// CUID 写与写卡同一道源文件预检（§6.55 P0-E）：源文件缺失时确认窗**前**
+/// 拒绝——不弹框、出错误事件。
+fn c_cuid_write_precheck_missing_file() -> Result<(), String> {
+    use nfc_core::state::EventKind;
+    let (_d, mut app) = app_with_temp_dumps("cuid-missing");
+    app.exec("cuid-write", Some("no_such.mfd".into()));
+    if app.confirm.is_some() {
+        return Err("源文件缺失时不该弹确认框".into());
+    }
+    if !app.state.events.iter().any(|e| e.kind == EventKind::Error) {
+        return Err("拒绝时应出错误事件".into());
+    }
+    if !app.pending_with_approval.is_empty() || !app.pending.is_empty() {
+        return Err("拒绝后不应留下待派发 / 待批准动作".into());
+    }
+    Ok(())
+}
+
+/// 编辑器「写入此转储」的快照副本（§6.55 P0-F）：取消确认即删除，不留
+/// `dumpfiles/` 垃圾；批准则保留（历史面板可复查 / 删除的既有语义不变）。
+fn c_editor_write_cancel_removes_snapshot() -> Result<(), String> {
+    let (_d, mut app) = app_with_temp_dumps("editor-snap");
+    app.forms
+        .editor
+        .load(Some("a.mfd".into()), &vec![0u8; 1024])
+        .unwrap();
+    app.write_editor_to_card();
+    let c = app.confirm.take().ok_or("编辑器写入后应有确认窗")?;
+    let snap = app
+        .editor_snapshot_path
+        .clone()
+        .ok_or("应记录快照副本路径")?;
+    if !snap.exists() {
+        return Err("快照副本未落盘".into());
+    }
+    // 取消 → 副本被清理
+    if app.on_confirm_result(c, false) {
+        return Err("取消不该要求关窗".into());
+    }
+    if snap.exists() {
+        return Err("取消后应清理快照副本".into());
+    }
+    if !app.state.events.iter().any(|e| e.text.contains("快照")) {
+        return Err("清理快照应出一条事件说明去向".into());
+    }
+    // 再次写入 → 批准 → 副本保留
+    app.write_editor_to_card();
+    let c2 = app.confirm.take().ok_or("二次写入仍应弹确认窗")?;
+    let snap2 = app
+        .editor_snapshot_path
+        .clone()
+        .ok_or("二次快照路径未记录")?;
+    let _ = app.on_confirm_result(c2, true);
+    if !snap2.exists() {
+        return Err("批准后快照副本应保留".into());
     }
     Ok(())
 }

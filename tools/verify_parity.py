@@ -222,6 +222,7 @@ SAFETY_GUARD_EXTRA = {
     "html_detect_current_card",
     "html_tip_detect_maybe_other_card",
     "html_tip_write_uid_mismatch",
+    "log_msg_editor_snapshot_removed",
 }
 # S18 从「上游独有」挪回的 20 个 key：两版共有且文案逐字一致。
 S18_MIGRATED = {
@@ -1078,7 +1079,7 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     # 测试数
     s6s7_units = sum(rd(CORE / f"src/{f}").count("#[test]")
                      for f in ["tasks/card_write.rs", "tasks/hard_nested.rs", "tasks/dict_test.rs"])
-    check(s6s7_units == 82, "S6/S7 新增 82 个单测（含 S17/S18 增量 + S19 的 uid_prefix/非hex 判定 + found_key 进展判据 + format-card 确认/取消与文案 2 项 + P0 写卡预检/UID 归一化 3 项）", f"实际 {s6s7_units}")
+    check(s6s7_units == 83, "S6/S7 新增 83 个单测（含 S17/S18 增量 + S19 的 uid_prefix/非hex 判定 + found_key 进展判据 + format-card 确认/取消与文案 2 项 + P0 写卡预检/UID 归一化 3 项 + §6.55 的 uid_gate 判据 1 项）", f"实际 {s6s7_units}")
     ints2 = rd(CORE / "tests/integration.rs")
     check(ints2.count("#[test]") == 58, "S6/S7 后集成测试 58", f"实际 {ints2.count('#[test]')}")
     check(ints2.count("fn s6_") == 7 and ints2.count("fn s7_") == 4, "S6/S7 新增 11 个集成测试",
@@ -1223,8 +1224,8 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     # 按 ("名字", 标识符) 配对计数：标识符不一定以 `c_` 开头
     #（`case_phone_wristband` 就是一条），只数 `c_` 会少算 1 项。
     n_cases = len(re.findall(r'\(\s*\n?\s*"[^"]+",\s*\n?\s*[a-z][a-z0-9_]*\s*,?\s*\n?\s*\)', _vec))
-    check(n_cases == 115,
-          "S9-S19 UI selftest 115 项（107 原有 + P0 失卡清档/UID 不符 2 + P1 打开文件 dirty 确认 1 + P2 写卡源缺失/非法转储无写卡入口 2 + P3 导出判空/门禁前置 2 + 宽档编辑器视口 1）",
+    check(n_cases == 118,
+          "S9-S19 UI selftest 118 项（107 原有 + P0 失卡清档/UID 不符 2 + P1 打开文件 dirty 确认 1 + P2 写卡源缺失/非法转储无写卡入口 2 + P3 导出判空/门禁前置 2 + 宽档编辑器视口 1 + 写卡安全加固 档案关联/CUID 预检/快照清理 3）",
           f"实际 {n_cases}")
 
     # ── S10 dump 三面板 ──────────────────────────────────────────
@@ -1331,8 +1332,8 @@ def check_s4_m_generic(mf: ModelFiles) -> None:
     # selftest
     _vec2 = stf9[stf9.index("vec![") : stf9.index("];", stf9.index("vec!["))]
     n11 = len(re.findall(r'\(\s*\n?\s*"[^"]+",\s*\n?\s*[a-z][a-z0-9_]*\s*,?\s*\n?\s*\)', _vec2))
-    check(n11 == 115,
-          "S11-S19 UI selftest 115 项（107 原有 + P0 失卡清档/UID 不符 2 + P1 打开文件 dirty 确认 1 + P2 写卡源缺失/非法转储无写卡入口 2 + P3 导出判空/门禁前置 2 + 宽档编辑器视口 1）",
+    check(n11 == 118,
+          "S11-S19 UI selftest 118 项（107 原有 + P0 失卡清档/UID 不符 2 + P1 打开文件 dirty 确认 1 + P2 写卡源缺失/非法转储无写卡入口 2 + P3 导出判空/门禁前置 2 + 宽档编辑器视口 1 + 写卡安全加固 3）",
           f"实际 {n11}")
 
     # ── S11-2 系统文件对话框 + 写卡接线 ───────────────────────────
@@ -1966,14 +1967,28 @@ def safety_guard() -> None:
     cw = rd(CORE / "src/tasks/card_write.rs")
     ap = rd(APP / "src/app.rs")
     wb = rd(APP / "src/ui/workbench.rs")
-    # P0-A 引擎硬闸：备份段结束后比对当前卡与源转储的 block0，不一致中止。
+    pn = rd(APP / "src/panels.rs")
+    # P2-9 卡历史档案：转储文件按卡号前缀关联（文件名 `<uid>_<时间>.mfd`），
+    # 非 hex 卡号跳过关联（防多个卡号误链到 `card_` 兜底文件）。
+    check("fn registry_dump_for" in pn, "P2-9 档案表按卡号前缀关联转储文件")
+    check("split_once('_')" in pn and "is_ascii_hexdigit()" in pn,
+          "P2-9 档案关联取文件名首个下划线段且校验 hex")
+    # P0-A 引擎硬闸：备份段结束后比对当前卡与源转储的卡号（block0 前 4 字节），
+    # 不一致 / 读不出（fail-safe）均中止。
     check("source: Option<std::path::PathBuf>" in eng, "P0 NextStage 携带写卡源 dump")
     _nss = eng[eng.index("fn start_next_stage"):]
     check("log_msg_write_aborted_uid_mismatch" in _nss,
           "P0 start_next_stage 有 UID 不一致硬闸")
     check("read_block0_hex(&temp)" in _nss and "read_block0_hex(src)" in _nss,
-          "P0 硬闸比对备份卡与源转储 block0")
+          "P0 硬闸读取备份卡与源转储 block0")
+    check("uid_gate(&cur)" in _nss and "uid_gate(&want)" in _nss,
+          "P0 硬闸按卡号（前 4 字节）判据 + 读不出即中止（§6.55 P0-A 修订）")
+    check("pub fn uid_gate" in cw, "P0 card_write 提供 uid_gate 卡号判据提取")
     check("source: Some(src.clone())" in eng, "P0 write-IC 传 source 给硬闸")
+    # P0-D C 工具层卡号校验复原（§6.55）：mfclassic 参数不再带 force 尾参，
+    # 写卡 / 格式化 / phw 写回 / CUID 全路径换卡时由 C 工具自身中止。
+    check('"f".to_string()' not in cw,
+          "P0-D card_write 无 force 参数（nfc-mfclassic 原生卡号校验生效）")
     # P0-B 失卡复位：读卡失败 → CardContextInvalidated（清 current_uid / 置 card_lost）。
     check("CardContextInvalidated" in st, "P0 Event 有 CardContextInvalidated")
     check("pub current_uid: Option<String>" in st and "pub card_lost: bool" in st,
@@ -1994,6 +2009,13 @@ def safety_guard() -> None:
     check("dump_file_failure(&src)" in eng, "P2 引擎写卡/写CUID 前置文件预检")
     _wic = ap[ap.index('"write-IC"'):]
     check("dump_file_failure(&resolved)" in _wic, "P2 app 写卡确认前预检源文件")
+    # P2 共用预检入口：写卡 / CUID 写在确认窗前同法拒绝非法源文件（§6.55 P0-E）。
+    check("fn precheck_dump_file" in ap, "P2 app 提供写卡/CUID 共用源文件预检入口")
+    _cuid = ap[ap.index('"cuid-write"'):]
+    check("precheck_dump_file(&dump)" in _cuid,
+          "P2 CUID 写确认窗前预检源文件")
+    # P0-F 编辑器「写入此转储」快照副本：取消确认即清理，不留垃圾（§6.55 P0-F）。
+    check("editor_snapshot_path" in ap, "P0-F 编辑器写卡快照副本取消后清理")
     # P3 体验项：导出判空 + 门禁前置 + 删除后编辑器失联。
     check("fn precheck_gate" in ap, "P3 危险动作确认前门禁预检")
     _exp = ap[ap.index('"dump-editor-export-keys"'):]
@@ -2002,6 +2024,8 @@ def safety_guard() -> None:
     check("fn detach_deleted_editor_origin" in ap, "P3 删除命中编辑器来源时解绑")
     # 关键引擎测试存在（防回归用例被删）
     for t in ("write_ic_uid_mismatch_aborts_second_stage",
+              "write_ic_same_uid_manufacturer_differs_proceeds",
+              "write_ic_unreadable_uid_aborts_second_stage",
               "write_ic_bad_source_layout_rejected_at_dispatch",
               "read_ic_empty_dump_invalidates_context",
               "read_ic_success_sets_current_uid"):
