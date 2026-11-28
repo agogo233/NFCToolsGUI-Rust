@@ -80,8 +80,8 @@
 | **普通卡** | 否 | block0 生产写保护 |
 
 > 本项目 `write-ufuid-uid` 用 `nfc-mfsetuid`（Gen1a 后门），
-> `cuid-write`（S17 起）用 `nfc-mfclassic W A u <src> <keyfile> f`（Gen2 风格，
-> 大写 `W` + `u`）。备份段用 `nfc-mfdetect -S`（严格模式，缺块不落盘）。
+> `cuid-write`（S17 起）用 `nfc-mfclassic W A u <src> <keyfile>`（Gen2 风格，
+> 大写 `W` + `u`；§6.55 起去 force）。备份段用 `nfc-mfdetect -S`（严格模式，缺块不落盘）。
 
 ### 3.2 Gen1a 后门命令（nfc-mfsetuid）
 
