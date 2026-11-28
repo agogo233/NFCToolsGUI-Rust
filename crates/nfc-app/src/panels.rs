@@ -1477,6 +1477,26 @@ fn render_diff_row(
 /// 卡历史档案：读 `registry.json`（每次解卡自动追加，`engine::registry_append`）
 /// 展示 UID / 日期 / 已知密钥，并可按 UID 快捷查找对应 dump 载入编辑器。
 ///
+/// 在 `dumpfiles/` 里找与卡号 `uid` 同源的转储文件。
+///
+/// 读卡落盘的文件名是 `{uid}_{时间戳}.mfd`（`paths::dump_file_name`），编辑器
+/// 「写入此转储」的副本是 `{uid}_…_edit_{时间戳}.mfd`——两者的**首个下划线段**
+/// 都是卡号，故按 `stem.split_once('_')` 前缀匹配（旧实现用全等比较，stem 带
+/// 时间戳后缀永远匹配不上，「编辑转储」按钮因此从未出现过）。
+///
+/// 非 hex 卡号一律跳过：`dump_file_name` 对非 hex 卡号兜底成 `card_…`，多个
+/// 不同卡号会落到同一个兜底文件上，前缀匹配会张冠李戴。
+pub fn registry_dump_for(dump_dir: &std::path::Path, uid: &str) -> Option<String> {
+    if uid.len() < 6 || !uid.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    nfc_core::dumpfiles::list(dump_dir).into_iter().find(|f| {
+        f.trim_end_matches(".mfd")
+            .split_once('_')
+            .is_some_and(|(uid_part, _)| uid_part.eq_ignore_ascii_case(uid))
+    })
+}
+
 /// registry 是**旁路可查表**：读失败（不存在/损坏）只显示空表提示，不报错弹窗。
 fn card_registry(ui: &mut Ui, app: &mut NfcApp) -> bool {
     let path = app.paths.registry_file();
@@ -1517,17 +1537,8 @@ fn card_registry(ui: &mut Ui, app: &mut NfcApp) -> bool {
                                     .size(12.0)
                                     .color(paint.color(paint.uid)),
                             );
-                            // 卡号 → dumpfiles 里按 UID 前缀匹配的 dump 文件
-                            let dump = if r.uid.len() >= 6 {
-                                nfc_core::dumpfiles::list(&app.paths.dumpfiles_dir())
-                                    .into_iter()
-                                    .find(|f| {
-                                        let stem = f.trim_end_matches(".mfd");
-                                        stem.eq_ignore_ascii_case(&r.uid)
-                                    })
-                            } else {
-                                None
-                            };
+                            // 卡号 → dumpfiles 里按卡号前缀匹配的 dump 文件
+                            let dump = registry_dump_for(&app.paths.dumpfiles_dir(), &r.uid);
                             match dump {
                                 Some(f) => {
                                     if ui
