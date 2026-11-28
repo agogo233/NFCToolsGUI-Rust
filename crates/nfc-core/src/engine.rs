@@ -3802,8 +3802,7 @@ mod tests {
                 "A",
                 "u",
                 &src.display().to_string(),
-                &p.temp_mfd().display().to_string(),
-                "f"
+                &p.temp_mfd().display().to_string()
             ]
             .into_iter()
             .map(String::from)
