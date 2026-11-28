@@ -177,6 +177,7 @@
     "log_msg_write_aborted_dump_unreadable": "写卡已中止：无法读取转储文件 0 块",
     "log_msg_cancel_kept_temp": "已取消；本次读到的卡数据仍保留在临时文件",
     "log_msg_editor_origin_detached": "当前转储文件已被删除：编辑器内容保留，已解除来源关联（保存请另存为新名）",
+    "log_msg_editor_snapshot_removed": "写入快照副本已清理（原转储不受影响）",
     "log_msh_save_failed": "保存失败",
     "html_phw_title": "手机/手环操作区",
     "html_phw_guidance": "① 解卡 → ② 读卡号 → ③ 写 UID 位 → ④ App 模拟 A 卡 → ⑤ 写数据扇区",

@@ -169,6 +169,12 @@ pub struct NfcApp {
     /// dirty 确认通过后待执行的编辑器载入参数（`open-dump-editor` 的
     /// 原始载荷）：确认框是异步的，载荷先挂起、批准后再执行载入。
     pub pending_editor_load: Option<String>,
+    /// 编辑器「写入此转储」刚生成的快照副本（`<原 stem>_edit_<时间戳>.mfd`）。
+    ///
+    /// 取消确认窗时**删除**该副本（不留垃圾进历史面板）；批准写卡时
+    /// 保留（用户可从历史面板复查 / 删除）。只指向本应用生成的副本，
+    /// 用户自己放进 `dumpfiles/` 的转储永不清理。
+    pub editor_snapshot_path: Option<std::path::PathBuf>,
     /// 本次会话写卡已成功（左栏「写卡」组状态点=完成）。取消任务/失败不置位；
     /// 重新读卡（新卡快照）时重置——写的是新卡，旧完成态不再成立。
     pub write_done: bool,
@@ -224,6 +230,7 @@ impl NfcApp {
             card_snapshot: None,
             scroll_to_editor: false,
             pending_editor_load: None,
+            editor_snapshot_path: None,
             write_done: false,
             mfcuk_progress: None,
             resize_drag: None,
@@ -651,8 +658,20 @@ impl NfcApp {
         if !ok {
             // 取消：挂起的编辑器载入一并放弃（只可能是 DropEditorEdits 置的）。
             self.pending_editor_load = None;
+            // 取消「写入此转储」：刚为写卡生成的快照副本一并删除，不留垃圾进
+            // 历史面板；只清理本应用生成的副本，用户自己的转储永不动。
+            if let Some(snap) = self.editor_snapshot_path.take() {
+                let _ = std::fs::remove_file(&snap);
+                let msg = t("log_msg_editor_snapshot_removed");
+                self.state
+                    .apply(nfc_core::state::Event::Log(format!("\n{msg}\n")));
+                self.push_event(EventKind::Success, &msg);
+            }
             return false;
         }
+        // 批准：快照副本按既有语义保留（历史面板可复查 / 删除），追踪字段
+        // 一并清掉——否则之后取消**另一个**确认窗会误删这份已批准的副本。
+        self.editor_snapshot_path = None;
         match m.kind {
             dialogs_ui::ConfirmKind::CloseWhileRunning => {
                 // 关窗前先停掉正在跑的任务：确认即退出，若不 kill，mfoc 等
@@ -1254,6 +1273,8 @@ impl NfcApp {
         let copy = nfc_core::paths::Paths::edited_copy_name(&name, &nfc_core::paths::timestamp());
         let path = self.paths.dumpfiles_dir().join(&copy);
         if self.write_editor_to(&path, false) {
+            // 记住快照副本：确认窗被取消时按 `on_confirm_result` 的清理语义删除。
+            self.editor_snapshot_path = Some(path.clone());
             // 写卡是覆盖性危险操作：统一挂 B6 随机码门槛。
             self.confirm = Some(
                 dialogs_ui::ConfirmModal::new(
@@ -1438,6 +1459,32 @@ impl NfcApp {
         }
     }
 
+    /// P2 预检（docs/02 §6）：写卡 / CUID 写共用的一道源文件门禁——
+    /// 裸名要过 `is_plain_name` 防线，随后按 `dump_file_failure` 拒绝
+    /// 缺失 / 空 / 非 64 字节倍数的文件。失败直接出错误事件（不弹确认窗），
+    /// 返回是否可继续。
+    fn precheck_dump_file(&mut self, dump: &str) -> bool {
+        let plain = nfc_core::dumpfiles::is_plain_name(dump);
+        let abs = std::path::Path::new(dump).is_absolute();
+        if !plain && !abs {
+            self.push_event(EventKind::Error, "非法的转储文件名");
+            return false;
+        }
+        let resolved = if plain {
+            self.paths.dumpfiles_dir().join(dump)
+        } else {
+            std::path::PathBuf::from(dump)
+        };
+        if let Some(reason) = nfc_core::tasks::card_write::dump_file_failure(&resolved) {
+            let msg = format!("{}: {}", t(reason.i18n_key()), resolved.display());
+            self.state
+                .apply(nfc_core::state::Event::Log(format!("\n{msg}\n")));
+            self.push_event(EventKind::Error, &msg);
+            return false;
+        }
+        true
+    }
+
     /// 派发一个动作。
     pub fn exec(&mut self, name: &'static str, arg: Option<String>) {
         match name {
@@ -1524,42 +1571,20 @@ impl NfcApp {
                     if !self.precheck_gate("write-IC") {
                         return;
                     }
-                    // 两种载荷：`dumpfiles/` 下的裸名（历史面板），或完整路径
-                    // （读盘引导条、编辑器「写入此转储」刚另存的副本）。裸名要过
-                    // `is_plain_name` 防线；完整路径不参与 join（engine 的
-                    // `prepare_write` → `resolve_dump_id` 对绝对路径原样使用），
-                    // 故无需该校验。
-                    let plain = nfc_core::dumpfiles::is_plain_name(&dump);
-                    let abs = std::path::Path::new(&dump).is_absolute();
-                    if !plain && !abs {
-                        self.push_event(EventKind::Error, "非法的转储文件名");
-                    } else {
-                        // P2 预检（docs/02 §6）：源文件缺失 / 空 / 非 64 字节倍数
-                        // 时立即报错，不让用户白走 B6 随机码 + 备份读卡。
-                        let resolved = if plain {
-                            self.paths.dumpfiles_dir().join(&dump)
-                        } else {
-                            std::path::PathBuf::from(&dump)
-                        };
-                        if let Some(reason) =
-                            nfc_core::tasks::card_write::dump_file_failure(&resolved)
-                        {
-                            let msg = format!("{}: {}", t(reason.i18n_key()), resolved.display());
-                            self.state
-                                .apply(nfc_core::state::Event::Log(format!("\n{msg}\n")));
-                            self.push_event(EventKind::Error, &msg);
-                            return;
-                        }
-                        // 写卡是覆盖性危险操作：统一挂 B6 随机码门槛。
-                        self.confirm = Some(
-                            dialogs_ui::ConfirmModal::new(
-                                dialogs_ui::ConfirmKind::WriteDump { dump },
-                                &dialogs_ui::danger_title(),
-                                t("dialog_msg_confirm_write_dump"),
-                            )
-                            .with_code(dialogs_ui::random_code()),
-                        );
+                    // P2 预检（docs/02 §6）：源文件缺失 / 空 / 非 64 字节倍数
+                    // 时立即报错，不让用户白走 B6 随机码 + 备份读卡。
+                    if !self.precheck_dump_file(&dump) {
+                        return;
                     }
+                    // 写卡是覆盖性危险操作：统一挂 B6 随机码门槛。
+                    self.confirm = Some(
+                        dialogs_ui::ConfirmModal::new(
+                            dialogs_ui::ConfirmKind::WriteDump { dump },
+                            &dialogs_ui::danger_title(),
+                            t("dialog_msg_confirm_write_dump"),
+                        )
+                        .with_code(dialogs_ui::random_code()),
+                    );
                 }
                 None => {
                     if !self.precheck_gate("write-IC") {
@@ -1761,6 +1786,12 @@ impl NfcApp {
                 }
                 match arg {
                     Some(dump) => {
+                        // 与写卡同一道 P2 预检（docs/02 §6）：源文件缺失 / 空 /
+                        // 非 64 字节倍数时不弹确认框——CUID 写会覆盖整卡，
+                        // 用坏文件白走一趟 B6 随机码是旧缺陷。
+                        if !self.precheck_dump_file(&dump) {
+                            return;
+                        }
                         self.confirm = Some(
                             dialogs_ui::ConfirmModal::new(
                                 dialogs_ui::ConfirmKind::CuidWrite { dump },
